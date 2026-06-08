@@ -6,7 +6,8 @@ on:
       - "build-*"
 
 permissions:
-  contents: read
+  contents: write
+  actions: read
 
 jobs:
   build:
@@ -56,3 +57,12 @@ jobs:
           path: ai-codex-server-${{ env.TAG_NAME }}.tar
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish image to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/build-')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG_NAME }}
+          name: ${{ env.TAG_NAME }}
+          generate_release_notes: true
+          files: ai-codex-server-${{ env.TAG_NAME }}.tar
