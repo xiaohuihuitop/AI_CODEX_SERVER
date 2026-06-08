@@ -79,6 +79,18 @@ function targetKey(projectName, threadName) {
   return `${String(projectName || '').trim()}\u0000${String(threadName || '').trim()}`;
 }
 
+/**
+ * 从 Codex 会话 cwd 提取项目目录名。
+ *
+ * @param {string} cwd Codex 会话记录的工作目录。
+ * @returns {string} 项目目录名。
+ */
+function projectNameFromCwd(cwd) {
+  const value = String(cwd || '').trim();
+  if (!value) return '';
+  return value.includes('\\') ? path.win32.basename(value) : path.basename(value);
+}
+
 class CodexSessionReader {
   /**
    * 创建 Codex 会话读取器。
@@ -200,7 +212,7 @@ class CodexSessionReader {
       const indexed = byId.get(id) || { id, name: '', updatedAt: '' };
       const meta = readJsonl(file).find(item => item.type === 'session_meta') || {};
       const cwd = String((meta.payload && meta.payload.cwd) || '').trim();
-      const projectName = cwd ? path.basename(cwd) : '';
+      const projectName = projectNameFromCwd(cwd);
       const threadName = indexed.name || '未命名线程';
       const opened = wanted.get(targetKey(projectName, threadName));
       if (!opened) continue;
@@ -278,7 +290,7 @@ class CodexSessionReader {
       available: true,
       threadId,
       threadName: indexed.name || '未命名线程',
-      projectName: cwd ? path.basename(cwd) : '',
+      projectName: projectNameFromCwd(cwd),
       cwd,
       sessionFile: path.basename(file),
     };
@@ -355,5 +367,6 @@ class CodexSessionReader {
 module.exports = {
   CodexSessionReader,
   isThreadId,
+  projectNameFromCwd,
   threadIdFromSessionFile,
 };

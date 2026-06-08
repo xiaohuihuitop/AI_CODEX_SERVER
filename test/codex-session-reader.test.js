@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { CodexSessionReader, threadIdFromSessionFile } = require('../src/codex-session-reader');
+const { CodexSessionReader, projectNameFromCwd, threadIdFromSessionFile } = require('../src/codex-session-reader');
 
 const fixtureRoot = path.join(__dirname, 'fixtures');
 
@@ -10,6 +10,11 @@ test('从会话文件名提取 threadId', () => {
     threadIdFromSessionFile('2026-06-08T10-00-00-000Z-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl'),
     'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
   );
+});
+
+test('跨平台提取 Codex 会话项目名', () => {
+  assert.equal(projectNameFromCwd('C:\\Users\\admin\\Desktop\\demo'), 'demo');
+  assert.equal(projectNameFromCwd('/home/admin/demo'), 'demo');
 });
 
 test('列出线程并合并 index 标题', () => {
