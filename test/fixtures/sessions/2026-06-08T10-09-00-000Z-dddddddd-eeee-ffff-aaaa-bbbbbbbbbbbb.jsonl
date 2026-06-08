@@ -1,0 +1,2 @@
+{"timestamp":"2026-06-08T10:09:00.000Z","type":"session_meta","payload":{"cwd":"C:\\Users\\admin\\Desktop\\other-demo"}}
+{"timestamp":"2026-06-08T10:09:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"同名但项目不同"}}

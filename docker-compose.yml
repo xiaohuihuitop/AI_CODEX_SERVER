@@ -1,0 +1,29 @@
+services:
+  relay:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 8787
+      CODEX_CLOUD_TOKENS: ${CODEX_CLOUD_TOKENS}
+    expose:
+      - "8787"
+    mem_limit: 512m
+    cpus: "0.5"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - relay
+
+volumes:
+  caddy_data:
+  caddy_config:

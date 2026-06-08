@@ -1,0 +1,3 @@
+{"timestamp":"2026-06-08T10:10:00.000Z","type":"event_msg","payload":{"type":"user_message","message":"测试缺少完成事件"}}
+{"timestamp":"2026-06-08T10:10:01.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-2"}}
+{"timestamp":"2026-06-08T10:10:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"最终回复"}]}}

@@ -1,0 +1,524 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Codex Windows Bridge</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f8;
+      --panel: #ffffff;
+      --text: #111827;
+      --muted: #5b6472;
+      --line: #d9dde3;
+      --accent: #1f6feb;
+      --danger: #b42318;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 12px 14px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 16px minmax(0, 0.9fr) minmax(0, 1.1fr) 44px;
+      gap: 8px;
+      align-items: center;
+    }
+
+    select {
+      min-width: 0;
+      width: 100%;
+      height: 38px;
+      border: 1px solid #c7ccd3;
+      border-radius: 6px;
+      background: #fff;
+      padding: 0 10px;
+      color: var(--text);
+      font: inherit;
+    }
+
+    main {
+      padding: 12px;
+      padding-bottom: 96px;
+    }
+
+    .message {
+      max-width: min(92%, 760px);
+      margin: 10px 0;
+      padding: 10px 12px;
+      border-radius: 8px;
+      line-height: 1.45;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    .message > :first-child {
+      margin-top: 0;
+    }
+
+    .message > :last-child {
+      margin-bottom: 0;
+    }
+
+    .message p,
+    .message ul,
+    .message ol,
+    .message blockquote,
+    .message pre,
+    .message table {
+      margin: 0.55em 0;
+    }
+
+    .message ul,
+    .message ol {
+      padding-left: 1.4em;
+    }
+
+    .message blockquote {
+      border-left: 3px solid var(--line);
+      padding-left: 10px;
+      color: var(--muted);
+    }
+
+    .message pre {
+      overflow-x: auto;
+      padding: 10px;
+      border-radius: 6px;
+      background: #0f172a;
+      color: #e5e7eb;
+      white-space: pre;
+    }
+
+    .message code {
+      border-radius: 4px;
+      padding: 1px 4px;
+      background: rgba(15, 23, 42, 0.08);
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    .message pre code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+    }
+
+    .message table {
+      width: 100%;
+      border-collapse: collapse;
+      display: block;
+      overflow-x: auto;
+    }
+
+    .message th,
+    .message td {
+      border: 1px solid var(--line);
+      padding: 6px 8px;
+      text-align: left;
+    }
+
+    .message a {
+      color: inherit;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .user {
+      margin-left: auto;
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .assistant {
+      margin-right: auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+
+    form {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 48px 48px;
+      gap: 8px;
+      padding: 10px;
+      padding-bottom: max(10px, env(safe-area-inset-bottom));
+      background: var(--panel);
+      border-top: 1px solid var(--line);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 42px;
+      max-height: 120px;
+      resize: none;
+      border: 1px solid #c7ccd3;
+      border-radius: 6px;
+      padding: 10px;
+      color: var(--text);
+      font: inherit;
+      line-height: 1.35;
+    }
+
+    button {
+      min-width: 0;
+      height: 38px;
+      border: 0;
+      border-radius: 6px;
+      background: #111827;
+      color: #fff;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+
+    #stop {
+      background: var(--danger);
+    }
+
+    .notice {
+      min-height: 32px;
+      font-size: 12px;
+      color: var(--muted);
+      padding: 8px 14px;
+      background: var(--panel);
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .thread-status {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      border: 1px solid #c7ccd3;
+      background: #9ca3af;
+    }
+
+    .thread-status--running {
+      border-color: #15803d;
+      background: #22c55e;
+      box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span id="threadStatus" class="thread-status" title="当前对话空闲"></span>
+    <select id="projects" aria-label="选择 Codex 文件夹"></select>
+    <select id="threads" aria-label="选择 Codex 线程"></select>
+    <button id="refresh" type="button" title="刷新线程">刷</button>
+  </header>
+  <div class="notice" id="notice">正在连接本机服务...</div>
+  <main id="messages"></main>
+  <form id="composer">
+    <textarea id="text" placeholder="发消息给电脑 Codex"></textarea>
+    <button id="send" type="submit">发</button>
+    <button id="stop" type="button">停</button>
+  </form>
+  <script src="/markdown.js?v=1"></script>
+  <script>
+    const tokenFromUrl = new URLSearchParams(location.search).get('token') || '';
+    if (tokenFromUrl) localStorage.setItem('codexBridge.token', tokenFromUrl);
+    const token = tokenFromUrl || localStorage.getItem('codexBridge.token') || '';
+    const projectsEl = document.getElementById('projects');
+    const threadsEl = document.getElementById('threads');
+    const threadStatusEl = document.getElementById('threadStatus');
+    const messagesEl = document.getElementById('messages');
+    const noticeEl = document.getElementById('notice');
+    const textEl = document.getElementById('text');
+    const sendButton = document.getElementById('send');
+    const stopButton = document.getElementById('stop');
+    let selectedThreadId = localStorage.getItem('codexBridge.threadId') || '';
+    let selectedProjectName = localStorage.getItem('codexBridge.projectName') || '';
+    let threadRows = [];
+    let pollTimer = null;
+    let threadStatusTimer = null;
+    let threadListRequest = null;
+
+    /**
+     * 调用本机桥接 API。
+     *
+     * @param {string} apiPath API 路径。
+     * @param {RequestInit} options 请求选项。
+     * @returns {Promise<Response>} fetch 响应。
+     */
+    function api(apiPath, options = {}) {
+      const headers = { ...(options.headers || {}), 'x-mobile-typer-token': token };
+      return fetch(apiPath, { ...options, headers, cache: 'no-store' });
+    }
+
+    /**
+     * 更新顶部状态文本。
+     *
+     * @param {string} text 状态文本。
+     * @returns {void}
+     */
+    function notice(text) {
+      noticeEl.textContent = text;
+    }
+
+    /**
+     * 追加消息气泡。
+     *
+     * @param {'user'|'assistant'} role 消息角色。
+     * @param {string} text 消息文本。
+     * @returns {HTMLDivElement} 消息元素。
+     */
+    function message(role, text) {
+      const div = document.createElement('div');
+      div.className = `message ${role}`;
+      div.innerHTML = CodexMarkdown.renderMarkdownToHtml(text);
+      messagesEl.appendChild(div);
+      window.scrollTo(0, document.body.scrollHeight);
+      return div;
+    }
+
+    /**
+     * 切换运行态按钮状态。
+     *
+     * @param {boolean} running 是否正在等待回复。
+     * @returns {void}
+     */
+    function setRunning(running) {
+      sendButton.disabled = running;
+      stopButton.disabled = !running;
+    }
+
+    /**
+     * 按项目名分组线程。
+     *
+     * @param {Array<{id: string, name: string, projectName?: string}>} rows 线程列表。
+     * @returns {Map<string, Array<object>>} 项目分组。
+     */
+    function groupThreads(rows) {
+      const groups = new Map();
+      for (const row of rows || []) {
+        const projectName = row.projectName || '未命名文件夹';
+        if (!groups.has(projectName)) groups.set(projectName, []);
+        groups.get(projectName).push(row);
+      }
+      return groups;
+    }
+
+    /**
+     * 更新当前线程运行状态指示点。
+     *
+     * @returns {void}
+     */
+    function updateThreadStatus() {
+      const row = threadRows.find(item => item.id === selectedThreadId);
+      const running = !!row?.active || row?.status === 'running';
+      threadStatusEl.classList.toggle('thread-status--running', running);
+      threadStatusEl.title = running ? '当前对话正在工作' : '当前对话空闲';
+      threadStatusEl.setAttribute('aria-label', threadStatusEl.title);
+    }
+
+    /**
+     * 渲染当前项目下的线程选择。
+     *
+     * @returns {void}
+     */
+    function renderThreadOptions() {
+      const groups = groupThreads(threadRows);
+      const rows = groups.get(selectedProjectName) || [];
+      threadsEl.innerHTML = '';
+      for (const item of rows) {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = item.name || item.id;
+        threadsEl.appendChild(option);
+      }
+      if (!rows.some(item => item.id === selectedThreadId)) selectedThreadId = rows[0]?.id || '';
+      threadsEl.value = selectedThreadId;
+      if (selectedThreadId) localStorage.setItem('codexBridge.threadId', selectedThreadId);
+      updateThreadStatus();
+    }
+
+    /**
+     * 读取 Codex Desktop 当前打开线程列表，并复用正在进行中的请求。
+     *
+     * @param {string} errorMessage 读取失败时的错误文本。
+     * @returns {Promise<Array<object>>} 线程列表。
+     */
+    async function fetchThreadRows(errorMessage) {
+      if (threadListRequest) return threadListRequest;
+      threadListRequest = (async () => {
+        const res = await api(`/codex/threads?limit=120&token=${encodeURIComponent(token)}`);
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.message || errorMessage);
+        return data.threads || [];
+      })();
+      try {
+        return await threadListRequest;
+      } finally {
+        threadListRequest = null;
+      }
+    }
+
+    /**
+     * 加载 Codex 线程列表。
+     *
+     * @returns {Promise<void>}
+     */
+    async function loadThreads() {
+      threadRows = await fetchThreadRows('读取线程失败');
+      const groups = groupThreads(threadRows);
+      projectsEl.innerHTML = '';
+      for (const projectName of groups.keys()) {
+        const option = document.createElement('option');
+        option.value = projectName;
+        option.textContent = projectName;
+        projectsEl.appendChild(option);
+      }
+      const selectedRow = threadRows.find(item => item.id === selectedThreadId);
+      if (selectedRow) selectedProjectName = selectedRow.projectName || '未命名文件夹';
+      if (!groups.has(selectedProjectName)) selectedProjectName = [...groups.keys()][0] || '';
+      projectsEl.value = selectedProjectName;
+      if (selectedProjectName) localStorage.setItem('codexBridge.projectName', selectedProjectName);
+      renderThreadOptions();
+      updateThreadStatus();
+    }
+
+    /**
+     * 刷新当前打开线程的运行状态。
+     *
+     * @returns {Promise<void>}
+     */
+    async function refreshThreadStatuses() {
+      threadRows = await fetchThreadRows('读取线程状态失败');
+      updateThreadStatus();
+    }
+
+    /**
+     * 加载当前线程历史。
+     *
+     * @returns {Promise<void>}
+     */
+    async function loadHistory() {
+      if (!selectedThreadId) {
+        messagesEl.innerHTML = '';
+        notice('没有可用 Codex 线程');
+        return;
+      }
+      messagesEl.innerHTML = '';
+      const res = await api(`/codex/history?thread=${encodeURIComponent(selectedThreadId)}&limit=120&token=${encodeURIComponent(token)}`);
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.message || '读取历史失败');
+      for (const row of data.messages || []) message(row.role, row.text || '');
+      notice(data.available ? '已同步本机 Codex 线程' : '这个线程暂时没有可加载的本机记录');
+    }
+
+    /**
+     * 轮询 Codex 回复状态。
+     *
+     * @param {{threadId?: string, since?: string}} watch 轮询参数。
+     * @returns {Promise<void>}
+     */
+    async function pollStatus(watch) {
+      const params = new URLSearchParams({ token, thread: watch.threadId || selectedThreadId, since: watch.since || '' });
+      const res = await api(`/codex/status?${params}`);
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.message || '读取状态失败');
+      if (data.status === 'complete' || data.status === 'error') {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        setRunning(false);
+        await loadHistory();
+      } else {
+        notice(data.preview || 'Codex 正在回复...');
+      }
+    }
+
+    document.getElementById('refresh').addEventListener('click', async () => {
+      try {
+        await loadThreads();
+        await loadHistory();
+      } catch (error) {
+        notice(error.message);
+      }
+    });
+
+    threadsEl.addEventListener('change', async () => {
+      try {
+        selectedThreadId = threadsEl.value;
+        localStorage.setItem('codexBridge.threadId', selectedThreadId);
+        updateThreadStatus();
+        await loadHistory();
+      } catch (error) {
+        notice(error.message);
+      }
+    });
+
+    projectsEl.addEventListener('change', async () => {
+      try {
+        selectedProjectName = projectsEl.value;
+        localStorage.setItem('codexBridge.projectName', selectedProjectName);
+        selectedThreadId = '';
+        renderThreadOptions();
+        await loadHistory();
+      } catch (error) {
+        notice(error.message);
+      }
+    });
+
+    document.getElementById('composer').addEventListener('submit', async event => {
+      event.preventDefault();
+      const text = textEl.value;
+      if (!text.trim()) return;
+      textEl.value = '';
+      message('user', text);
+      const pending = message('assistant', '已发送，等待 Codex 回复...');
+      setRunning(true);
+      try {
+        const res = await api('/send', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text, threadId: selectedThreadId }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.message || '发送失败');
+        if (pollTimer) clearInterval(pollTimer);
+        pollTimer = setInterval(() => pollStatus(data.watch || {}).catch(error => notice(error.message)), 1400);
+      } catch (error) {
+        pending.textContent = error.message;
+        setRunning(false);
+      }
+    });
+
+    stopButton.addEventListener('click', async () => {
+      try {
+        const res = await api('/codex/stop', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.message || '停止失败');
+        notice(data.message || '已发送停止指令');
+      } catch (error) {
+        notice(error.message);
+      }
+    });
+
+    setRunning(false);
+    loadThreads().then(loadHistory).catch(error => notice(error.message));
+    threadStatusTimer = setInterval(() => refreshThreadStatuses().catch(error => notice(error.message)), 3000);
+  </script>
+</body>
+</html>

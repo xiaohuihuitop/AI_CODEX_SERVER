@@ -1,0 +1,2 @@
+{"timestamp":"2026-06-08T10:08:00.000Z","type":"session_meta","payload":{"cwd":"C:\\Users\\admin\\Desktop\\demo"}}
+{"timestamp":"2026-06-08T10:08:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"这个线程没有在桌面端打开"}}

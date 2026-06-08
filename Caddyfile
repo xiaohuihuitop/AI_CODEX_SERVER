@@ -1,0 +1,3 @@
+:80 {
+  reverse_proxy relay:8787
+}

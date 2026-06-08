@@ -1,0 +1,53 @@
+name: Build Docker Image
+
+on:
+  push:
+    tags:
+      - "build-*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build image artifact
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Run syntax check
+        run: npm run check
+
+      - name: Set image metadata
+        shell: bash
+        run: |
+          echo "TAG_NAME=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          echo "IMAGE_NAME=ai-codex-server:${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+
+      - name: Build Docker image
+        run: docker build -t "${IMAGE_NAME}" .
+
+      - name: Save Docker image
+        run: docker save "${IMAGE_NAME}" -o "ai-codex-server-${TAG_NAME}.tar"
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-codex-server-${{ env.TAG_NAME }}
+          path: ai-codex-server-${{ env.TAG_NAME }}.tar
+          if-no-files-found: error
+          retention-days: 30
