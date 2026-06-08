@@ -38,11 +38,16 @@ jobs:
           echo "TAG_NAME=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
           echo "IMAGE_NAME=ai-codex-server:${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
 
-      - name: Build Docker image
-        run: docker build -t "${IMAGE_NAME}" .
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-      - name: Save Docker image
-        run: docker save "${IMAGE_NAME}" -o "ai-codex-server-${TAG_NAME}.tar"
+      - name: Build Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: ${{ env.IMAGE_NAME }}
+          outputs: type=docker,dest=ai-codex-server-${{ env.TAG_NAME }}.tar
+          provenance: false
 
       - name: Upload image artifact
         uses: actions/upload-artifact@v4
