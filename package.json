@@ -9,7 +9,9 @@
     "start:cloud": "node cloud-server.js",
     "start:agent": "node desktop-agent.js",
     "start:manager": "node desktop-manager-server.js",
-    "check": "node -e \"const fs=require('fs');const cp=require('child_process');const files=['server.js','cloud-server.js','desktop-agent.js','desktop-manager-server.js',...fs.readdirSync('src').filter(f=>f.endsWith('.js')).map(f=>'src/'+f)];for(const file of files)cp.execFileSync(process.execPath,['--check',file],{stdio:'inherit'});\"",
+    "start:manager:gui": "electron electron/main.js",
+    "start:manager:gui:legacy": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-desktop-manager-gui.ps1",
+    "check": "node -e \"const fs=require('fs');const cp=require('child_process');const list=d=>fs.existsSync(d)?fs.readdirSync(d).filter(f=>f.endsWith('.js')).map(f=>d+'/'+f):[];const files=['server.js','cloud-server.js','desktop-agent.js','desktop-manager-server.js',...list('src'),...list('electron')];for(const file of files)cp.execFileSync(process.execPath,['--check',file],{stdio:'inherit'});\"",
     "test": "node --test"
   },
   "engines": {
@@ -17,5 +19,8 @@
   },
   "dependencies": {
     "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "electron": "^42.3.3"
   }
 }

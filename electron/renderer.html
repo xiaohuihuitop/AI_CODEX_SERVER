@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Desktop 管理器</title>
+  <link rel="stylesheet" href="./renderer.css">
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div>
+        <p class="eyebrow">Windows Desktop Agent</p>
+        <h1>Codex Desktop 管理器</h1>
+      </div>
+      <div class="top-actions">
+        <button id="refreshButton" class="button secondary" type="button">刷新</button>
+      </div>
+    </header>
+
+    <section class="status-grid" aria-label="状态">
+      <article class="status-card" id="cloudCard">
+        <span class="status-dot"></span>
+        <div>
+          <h2>云端服务器</h2>
+          <p id="cloudStatus">检测中</p>
+          <small id="cloudDetail"></small>
+        </div>
+      </article>
+      <article class="status-card" id="agentCard">
+        <span class="status-dot"></span>
+        <div>
+          <h2>Windows Agent</h2>
+          <p id="agentStatus">检测中</p>
+          <small id="agentDetail"></small>
+        </div>
+      </article>
+      <article class="status-card" id="codexCard">
+        <span class="status-dot"></span>
+        <div>
+          <h2>Codex Desktop</h2>
+          <p id="codexStatus">检测中</p>
+          <small id="codexDetail"></small>
+        </div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">
+        <h2>连接配置</h2>
+        <span id="saveState">未保存变更会在点击保存后生效</span>
+      </div>
+      <form id="configForm" class="config-form">
+        <label>
+          <span>云端服务器地址</span>
+          <input id="serverUrl" name="serverUrl" type="url" placeholder="http://www.xiaohuihuitop.top:8008" autocomplete="off">
+        </label>
+        <div class="form-row">
+          <label>
+            <span>固定 Token</span>
+            <input id="token" name="token" type="text" autocomplete="off">
+          </label>
+          <label>
+            <span>设备名称</span>
+            <input id="deviceName" name="deviceName" type="text" autocomplete="off">
+          </label>
+        </div>
+        <label class="checkbox-line">
+          <input id="autoStart" name="autoStart" type="checkbox">
+          <span>开机自启</span>
+        </label>
+        <div class="action-row">
+          <button class="button primary" type="submit">保存配置</button>
+          <button id="startButton" class="button success" type="button">启动 Agent</button>
+          <button id="stopButton" class="button danger" type="button">停止 Agent</button>
+          <button id="openMobileButton" class="button secondary" type="button">打开手机页</button>
+        </div>
+      </form>
+    </section>
+
+    <section class="details-grid">
+      <article class="panel">
+        <div class="panel-title">
+          <h2>手机访问地址</h2>
+          <button id="copyMobileButton" class="text-button" type="button">复制</button>
+        </div>
+        <pre id="mobileUrl" class="code-box"></pre>
+      </article>
+      <article class="panel">
+        <div class="panel-title">
+          <h2>Agent 环境变量</h2>
+        </div>
+        <pre id="agentEnv" class="code-box"></pre>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-title">
+        <h2>运行日志</h2>
+        <span id="lastUpdated"></span>
+      </div>
+      <pre id="agentLog" class="log-box"></pre>
+    </section>
+  </main>
+  <script src="./renderer.js"></script>
+</body>
+</html>
