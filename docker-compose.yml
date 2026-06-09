@@ -2,11 +2,12 @@ services:
   relay:
     image: ai-codex-server:latest
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       NODE_ENV: production
       PORT: 8787
-      CODEX_CLOUD_TOKENS: ${CODEX_CLOUD_TOKENS}
     ports:
       - "${CODEX_CLOUD_HTTP_PORT:-8008}:8787"
     mem_limit: 512m
-    cpus: "0.5"
+    cpus: 0.5
