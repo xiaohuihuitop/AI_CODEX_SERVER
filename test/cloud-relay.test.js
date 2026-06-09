@@ -70,6 +70,27 @@ test('云端 relay 没有在线 Agent 时返回 503', async () => {
   await close(server);
 });
 
+test('云端 relay 允许不带 token 加载公开静态脚本', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['asset-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+  });
+  const port = await listen(server);
+
+  const script = await fetch(`http://127.0.0.1:${port}/markdown.js?v=1`);
+  const scriptText = await script.text();
+  const home = await fetch(`http://127.0.0.1:${port}/`);
+  const api = await fetch(`http://127.0.0.1:${port}/codex/health`);
+
+  assert.equal(script.status, 200);
+  assert.match(scriptText, /CodexMarkdown/);
+  assert.equal(home.status, 401);
+  assert.equal(api.status, 401);
+
+  await close(server);
+});
+
 test('云端 relay 拒绝错误 token 的 Agent 连接', async () => {
   const server = createCloudRelayServer({
     tokens: ['right-token'],

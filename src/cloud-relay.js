@@ -6,6 +6,7 @@ const { readBody, sendJson, sendOptions, serveStatic } = require('./http-utils')
 const MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30000;
 const ALLOWED_ACTIONS = new Set(['threads', 'history', 'status', 'send', 'stop']);
+const PUBLIC_ASSET_EXTENSIONS = new Set(['.css', '.ico', '.js', '.json', '.png', '.svg', '.webmanifest']);
 
 function tokenFromRequest(req) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -88,6 +89,19 @@ function sendRelayError(res, error) {
   });
 }
 
+/**
+ * 判断请求是否为无需 token 的静态资源。
+ *
+ * @param {import('node:http').IncomingMessage} req HTTP 请求对象。
+ * @returns {boolean} 是否为公开静态资源。
+ */
+function isPublicAssetRequest(req) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+  const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+  const ext = path.extname(url.pathname).toLowerCase();
+  return PUBLIC_ASSET_EXTENSIONS.has(ext);
+}
+
 function createCloudRelayServer(options = {}) {
   const tokens = new Set(options.tokens || String(process.env.CODEX_CLOUD_TOKENS || process.env.CODEX_CLOUD_TOKEN || '').split(',').map(item => item.trim()).filter(Boolean));
   const publicDir = options.publicDir || path.join(__dirname, '..', 'public');
@@ -95,6 +109,7 @@ function createCloudRelayServer(options = {}) {
   const state = createRelayState();
   const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') return sendOptions(res);
+    if (isPublicAssetRequest(req)) return serveStatic(req, res, publicDir);
     const token = tokenFromRequest(req);
     if (!tokens.has(token)) {
       return sendJson(res, 401, { ok: false, code: 'UNAUTHORIZED', message: '访问令牌不正确。' });
