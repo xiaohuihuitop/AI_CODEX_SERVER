@@ -223,7 +223,8 @@ async function waitForCodexDesktopDebug(options = {}) {
  * @returns {Promise<{ok: boolean, appUserModelId: string, executablePath: string, previousPid: number|null, launchedPid: number|null, debugPort: number, codex: object}>} 重启结果。
  */
 async function restartCodexDesktopWithDebug(options = {}) {
-  if (process.platform !== 'win32') {
+  const platform = options.platform || process.platform;
+  if (platform !== 'win32') {
     throw Object.assign(new Error('当前功能仅支持 Windows。'), { code: 'WINDOWS_ONLY', status: 400 });
   }
   const debugPort = options.debugPort || DEFAULT_DEBUG_PORT;

@@ -10,6 +10,7 @@ test('重启 Codex Desktop 时使用调试端口启动主进程', async () => {
   const killed = [];
   const launches = [];
   const result = await restartCodexDesktopWithDebug({
+    platform: 'win32',
     debugPort: 9229,
     waitTimeoutMs: 1,
     processFinder: () => ({
@@ -51,6 +52,7 @@ test('重启 Codex Desktop 时未运行也会通过应用入口启动', async ()
   const killed = [];
   const launches = [];
   const result = await restartCodexDesktopWithDebug({
+    platform: 'win32',
     debugPort: 9333,
     waitTimeoutMs: 1,
     processFinder: () => null,
@@ -79,6 +81,7 @@ test('重启 Codex Desktop 时未运行也会通过应用入口启动', async ()
 test('重启 Codex Desktop 时未安装应用会给出明确错误', async () => {
   await assert.rejects(
     () => restartCodexDesktopWithDebug({
+      platform: 'win32',
       processFinder: () => null,
       packageFinder: () => null,
       processKiller: () => {},
