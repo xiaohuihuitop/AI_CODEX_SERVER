@@ -12,7 +12,8 @@
     "start:manager:gui": "electron electron/main.js",
     "start:manager:gui:legacy": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-desktop-manager-gui.ps1",
     "check": "node -e \"const fs=require('fs');const cp=require('child_process');const list=d=>fs.existsSync(d)?fs.readdirSync(d).filter(f=>f.endsWith('.js')).map(f=>d+'/'+f):[];const files=['server.js','cloud-server.js','desktop-agent.js','desktop-manager-server.js',...list('src'),...list('electron')];for(const file of files)cp.execFileSync(process.execPath,['--check',file],{stdio:'inherit'});\"",
-    "test": "node --test"
+    "test": "node --test",
+    "build:manager:win": "electron-builder --win dir"
   },
   "engines": {
     "node": ">=20"
@@ -21,6 +22,30 @@
     "ws": "^8.21.0"
   },
   "devDependencies": {
-    "electron": "^42.3.3"
+    "electron": "^42.3.3",
+    "electron-builder": "^26.15.2"
+  },
+  "main": "electron/main.js",
+  "productName": "Codex Desktop 管理器",
+  "build": {
+    "appId": "top.xiaohuihui.codex-desktop-manager",
+    "productName": "Codex Desktop 管理器",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "desktop-agent.js",
+      "scripts/win-codex-control.ps1",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "target": [
+        "dir"
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
   }
 }

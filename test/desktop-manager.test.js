@@ -217,3 +217,20 @@ test('桌面 Agent 管理器可以识别并接管已有 Agent 进程', () => {
   assert.deepEqual(manager.stop(), { running: false, pid: 4321 });
   assert.deepEqual(killed, [4321]);
 });
+
+test('桌面 Agent 管理器支持自定义子进程入口参数', () => {
+  const { DesktopAgentProcess } = require('../src/desktop-agent-process');
+  const calls = [];
+  const manager = new DesktopAgentProcess({
+    cwd: 'C:\\repo',
+    nodePath: 'manager.exe',
+    childArgs: ['--codex-manager-agent-child'],
+    childEnv: { CODEX_MANAGER_AGENT_CHILD: '1' },
+    processFinder: () => null,
+    spawnImpl: (...args) => calls.push(args),
+  });
+
+  assert.equal(manager.nodePath, 'manager.exe');
+  assert.deepEqual(manager.childArgs, ['--codex-manager-agent-child']);
+  assert.deepEqual(manager.childEnv, { CODEX_MANAGER_AGENT_CHILD: '1' });
+});

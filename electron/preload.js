@@ -5,5 +5,6 @@ contextBridge.exposeInMainWorld('codexManager', {
   saveConfig: config => ipcRenderer.invoke('manager:save-config', config),
   startAgent: () => ipcRenderer.invoke('manager:start-agent'),
   stopAgent: () => ipcRenderer.invoke('manager:stop-agent'),
+  restartCodex: () => ipcRenderer.invoke('manager:restart-codex'),
   openMobile: () => ipcRenderer.invoke('manager:open-mobile'),
 });

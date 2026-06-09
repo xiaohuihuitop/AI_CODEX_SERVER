@@ -7,16 +7,19 @@ const MAX_LOG_LINES = 30;
 /**
  * AI:查找当前项目启动的 Agent 进程，避免管理器重启后重复启动。
  *
- * @param {string} agentScriptPath Agent 入口脚本绝对路径。
+ * @param {string} processMatchText 进程命令行匹配文本。
+ * @param {string} processNamePattern 进程名称正则。
  * @returns {{pid: number, commandLine: string}|null} 已运行进程快照。
  */
-function findExistingAgentSnapshot(agentScriptPath) {
+function findExistingAgentSnapshot(processMatchText, processNamePattern = '^node(\\.exe)?$') {
   if (process.platform !== 'win32') return null;
-  const target = String(agentScriptPath || '').replace(/'/g, "''");
+  const target = String(processMatchText || '').replace(/'/g, "''");
+  const namePattern = String(processNamePattern || '').replace(/'/g, "''");
   const script = [
     `$target = '${target}';`,
+    `$namePattern = '${namePattern}';`,
     'Get-CimInstance Win32_Process |',
-    "Where-Object { $_.Name -match '^node(\\.exe)?$' -and $_.CommandLine -and $_.CommandLine.Contains($target) } |",
+    'Where-Object { $_.Name -match $namePattern -and $_.CommandLine -and $_.CommandLine.Contains($target) } |',
     'Sort-Object ProcessId |',
     'Select-Object -First 1 ProcessId,CommandLine |',
     'ConvertTo-Json -Compress',
@@ -58,6 +61,10 @@ class DesktopAgentProcess {
     this.cwd = options.cwd || path.join(__dirname, '..');
     this.nodePath = options.nodePath || process.execPath;
     this.agentScriptPath = options.agentScriptPath || path.join(this.cwd, 'desktop-agent.js');
+    this.childArgs = options.childArgs || [this.agentScriptPath];
+    this.childEnv = options.childEnv || {};
+    this.processMatchText = options.processMatchText || this.agentScriptPath;
+    this.processNamePattern = options.processNamePattern || '^node(\\.exe)?$';
     this.processFinder = options.processFinder || findExistingAgentSnapshot;
     this.killProcess = options.killProcess || process.kill;
     this.child = null;
@@ -85,7 +92,7 @@ class DesktopAgentProcess {
     if (this.child && this.child.exitCode === null && !this.child.killed) {
       return { pid: this.child.pid, external: false };
     }
-    const existing = this.processFinder(this.agentScriptPath);
+    const existing = this.processFinder(this.processMatchText, this.processNamePattern);
     if (!existing) return null;
     return { pid: existing.pid, external: true };
   }
@@ -110,9 +117,9 @@ class DesktopAgentProcess {
     this.exitCode = null;
     this.signalCode = null;
 
-    const child = spawn(this.nodePath, [this.agentScriptPath], {
+    const child = spawn(this.nodePath, this.childArgs, {
       cwd: this.cwd,
-      env: { ...process.env, ...buildAgentEnv(config) },
+      env: { ...process.env, ...this.childEnv, ...buildAgentEnv(config) },
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });

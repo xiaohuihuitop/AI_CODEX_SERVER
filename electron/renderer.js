@@ -12,6 +12,7 @@ const elements = {
   configForm: document.getElementById('configForm'),
   startButton: document.getElementById('startButton'),
   stopButton: document.getElementById('stopButton'),
+  restartCodexButton: document.getElementById('restartCodexButton'),
   refreshButton: document.getElementById('refreshButton'),
   openMobileButton: document.getElementById('openMobileButton'),
   copyMobileButton: document.getElementById('copyMobileButton'),
@@ -44,6 +45,7 @@ function setBusy(value) {
   [
     elements.startButton,
     elements.stopButton,
+    elements.restartCodexButton,
     elements.refreshButton,
     elements.openMobileButton,
     elements.copyMobileButton,
@@ -120,6 +122,10 @@ elements.startButton.addEventListener('click', () => {
 
 elements.stopButton.addEventListener('click', () => {
   runAction(() => window.codexManager.stopAgent());
+});
+
+elements.restartCodexButton.addEventListener('click', () => {
+  runAction(() => window.codexManager.restartCodex());
 });
 
 elements.refreshButton.addEventListener('click', refresh);

@@ -1,5 +1,11 @@
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('node:path');
+
+if (process.argv.includes('--codex-manager-agent-child') || process.env.CODEX_MANAGER_AGENT_CHILD === '1') {
+  require('../desktop-agent');
+  return;
+}
+
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const {
   buildAgentEnv,
   buildMobileUrl,
@@ -13,10 +19,29 @@ const {
   saveConfig,
 } = require('../src/desktop-manager-server');
 const { createDesktopAgentProcess } = require('../src/desktop-agent-process');
+const { restartCodexDesktopWithDebug } = require('../src/codex-desktop-process');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const CONFIG_PATH = getDefaultConfigPath();
-const agentController = createDesktopAgentProcess({ cwd: PROJECT_ROOT });
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function createAgentController() {
+  if (!app.isPackaged) return createDesktopAgentProcess({ cwd: PROJECT_ROOT });
+  const exeName = path.basename(process.execPath);
+  return createDesktopAgentProcess({
+    cwd: path.dirname(process.execPath),
+    nodePath: process.execPath,
+    childArgs: ['--codex-manager-agent-child'],
+    childEnv: { CODEX_MANAGER_AGENT_CHILD: '1' },
+    processMatchText: '--codex-manager-agent-child',
+    processNamePattern: `^${escapeRegExp(exeName)}$`,
+  });
+}
+
+const agentController = createAgentController();
 
 let config = loadConfig(CONFIG_PATH);
 let mainWindow = null;
@@ -88,6 +113,11 @@ ipcMain.handle('manager:open-mobile', async () => {
     throw new Error('请先填写云端服务器地址和固定 Token。');
   }
   await shell.openExternal(buildMobileUrl(normalized));
+  return getState();
+});
+
+ipcMain.handle('manager:restart-codex', async () => {
+  await restartCodexDesktopWithDebug();
   return getState();
 });
 

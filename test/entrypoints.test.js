@@ -35,10 +35,13 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(gui, /\$AgentScriptPath/);
   assert.match(electronMain, /BrowserWindow/);
   assert.match(electronMain, /manager:start-agent/);
+  assert.match(electronMain, /manager:restart-codex/);
   assert.match(electronMain, /createDesktopAgentProcess/);
   assert.match(electronPreload, /contextBridge/);
+  assert.match(electronPreload, /restartCodex/);
   assert.match(electronHtml, /Codex Desktop 管理器/);
   assert.match(electronHtml, /启动 Agent/);
+  assert.match(electronHtml, /启动\/重启 Codex/);
   assert.equal(pkg.scripts['start:manager:gui'], 'electron electron/main.js');
   assert.equal(pkg.scripts['start:manager:gui:legacy'], 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-desktop-manager-gui.ps1');
 });

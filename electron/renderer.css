@@ -214,6 +214,10 @@ input:focus {
   background: var(--danger);
 }
 
+.button.warning {
+  background: #9a5b00;
+}
+
 .button.secondary {
   background: #e5eaf0;
   color: var(--text);
