@@ -223,6 +223,18 @@ test('手机端显示线程运行状态指示点', () => {
   assert.match(html, /setInterval\(\(\) => refreshThreadStatuses/);
 });
 
+test('手机端运行中展开处理过程，完成后折叠', () => {
+  const html = fs.readFileSync(indexPath, 'utf8');
+
+  assert.match(html, /className = 'process-card'/);
+  assert.match(html, /function renderProcessPanel/);
+  assert.match(html, /processSteps\(status\)/);
+  assert.match(html, /details\.open = status\.status !== 'complete'/);
+  assert.match(html, /处理过程已折叠/);
+  assert.match(html, /renderProcessPanel\(data\)/);
+  assert.match(html, /await loadHistory\(data\)/);
+});
+
 test('手机端线程列表请求复用同一个进行中的请求', () => {
   const html = fs.readFileSync(indexPath, 'utf8');
   const loadFunction = html.match(/async function loadThreads\(\) \{([\s\S]*?)\n    \}/)?.[1] || '';

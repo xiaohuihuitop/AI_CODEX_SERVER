@@ -150,6 +150,51 @@
       border: 1px solid var(--line);
     }
 
+    .process-card {
+      max-width: min(92%, 760px);
+      margin: 10px 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--muted);
+      overflow: hidden;
+    }
+
+    .process-card details {
+      padding: 0;
+    }
+
+    .process-card summary {
+      cursor: pointer;
+      padding: 9px 12px;
+      font-size: 13px;
+      color: var(--text);
+      background: #f9fafb;
+      user-select: none;
+    }
+
+    .process-step {
+      padding: 9px 12px;
+      border-top: 1px solid #edf0f3;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .process-step strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .process-step :first-child {
+      margin-top: 0;
+    }
+
+    .process-step :last-child {
+      margin-bottom: 0;
+    }
+
     form {
       position: fixed;
       left: 0;
@@ -294,6 +339,56 @@
     }
 
     /**
+     * 提取可显示的处理过程步骤。
+     *
+     * @param {object} status Codex 状态数据。
+     * @returns {Array<object>} 过程步骤。
+     */
+    function processSteps(status) {
+      return (status?.steps || []).filter(step => {
+        return step?.text && step.kind !== 'final' && step.kind !== 'complete';
+      });
+    }
+
+    /**
+     * 渲染处理过程面板，运行中展开，完成后折叠。
+     *
+     * @param {object} status Codex 状态数据。
+     * @returns {void}
+     */
+    function renderProcessPanel(status) {
+      document.querySelectorAll('.process-card').forEach(item => item.remove());
+      const steps = processSteps(status);
+      if (!steps.length) return;
+
+      const card = document.createElement('section');
+      card.className = 'process-card';
+      const details = document.createElement('details');
+      details.open = status.status !== 'complete';
+      const summary = document.createElement('summary');
+      summary.textContent = status.status === 'complete' ? `处理过程已折叠（${steps.length}）` : `处理过程（${steps.length}）`;
+      details.appendChild(summary);
+
+      for (const step of steps) {
+        const row = document.createElement('div');
+        row.className = 'process-step';
+        const label = document.createElement('strong');
+        label.textContent = step.label || '过程';
+        row.appendChild(label);
+        const body = document.createElement('div');
+        body.innerHTML = CodexMarkdown.renderMarkdownToHtml(step.text || '');
+        row.appendChild(body);
+        details.appendChild(row);
+      }
+
+      card.appendChild(details);
+      const lastAssistant = [...messagesEl.querySelectorAll('.message.assistant')].at(-1);
+      if (status.status === 'complete' && lastAssistant) messagesEl.insertBefore(card, lastAssistant);
+      else messagesEl.appendChild(card);
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+
+    /**
      * 切换运行态按钮状态。
      *
      * @param {boolean} running 是否正在等待回复。
@@ -414,7 +509,7 @@
      *
      * @returns {Promise<void>}
      */
-    async function loadHistory() {
+    async function loadHistory(statusData = null) {
       if (!selectedThreadId) {
         messagesEl.innerHTML = '';
         notice('没有可用 Codex 线程');
@@ -425,7 +520,25 @@
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.message || '读取历史失败');
       for (const row of data.messages || []) message(row.role, row.text || '');
+      if (data.available) {
+        const snapshot = statusData || await fetchStatus({ threadId: selectedThreadId });
+        renderProcessPanel(snapshot);
+      }
       notice(data.available ? '已同步本机 Codex 线程' : '这个线程暂时没有可加载的本机记录');
+    }
+
+    /**
+     * 读取当前线程状态。
+     *
+     * @param {{threadId?: string, since?: string}} watch 状态查询参数。
+     * @returns {Promise<object>} 状态数据。
+     */
+    async function fetchStatus(watch = {}) {
+      const params = new URLSearchParams({ token, thread: watch.threadId || selectedThreadId, since: watch.since || '' });
+      const res = await api(`/codex/status?${params}`);
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.message || '读取状态失败');
+      return data;
     }
 
     /**
@@ -435,15 +548,13 @@
      * @returns {Promise<void>}
      */
     async function pollStatus(watch) {
-      const params = new URLSearchParams({ token, thread: watch.threadId || selectedThreadId, since: watch.since || '' });
-      const res = await api(`/codex/status?${params}`);
-      const data = await res.json();
-      if (!res.ok || !data.ok) throw new Error(data.message || '读取状态失败');
+      const data = await fetchStatus(watch);
+      renderProcessPanel(data);
       if (data.status === 'complete' || data.status === 'error') {
         clearInterval(pollTimer);
         pollTimer = null;
         setRunning(false);
-        await loadHistory();
+        await loadHistory(data);
       } else {
         notice(data.preview || 'Codex 正在回复...');
       }

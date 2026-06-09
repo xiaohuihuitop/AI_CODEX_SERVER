@@ -69,6 +69,23 @@ function messageText(content) {
 }
 
 /**
+ * 提取 Codex 公开过程摘要文本。
+ *
+ * @param {object} payload Codex 响应 payload。
+ * @returns {string} 过程摘要文本。
+ */
+function reasoningText(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  if (typeof payload.text === 'string') return stripCodexUiDirectives(payload.text);
+  if (!Array.isArray(payload.summary)) return '';
+  return stripCodexUiDirectives(payload.summary
+    .map(item => item && (item.text || item.summary || ''))
+    .filter(Boolean)
+    .join('\n')
+    .trim());
+}
+
+/**
  * 读取完整 JSONL 文件。
  *
  * @param {string} file JSONL 文件路径。
@@ -341,6 +358,10 @@ class CodexSessionReader {
         startedAt = item.timestamp || startedAt;
         steps.push({ kind: 'start', label: '开始', text: '开始处理这条消息', time: item.timestamp || '' });
       }
+      if ((item.type === 'event_msg' && payload.type === 'agent_reasoning') || (item.type === 'response_item' && payload.type === 'reasoning')) {
+        const text = reasoningText(payload);
+        if (text) steps.push({ kind: 'reasoning', label: '思考', text, time: item.timestamp || '' });
+      }
       if (item.type === 'response_item' && payload.type === 'message' && payload.role === 'assistant') {
         const text = messageText(payload.content);
         if (text) {
@@ -381,6 +402,7 @@ class CodexSessionReader {
 module.exports = {
   CodexSessionReader,
   isThreadId,
+  reasoningText,
   stripCodexUiDirectives,
   projectNameFromCwd,
   threadIdFromSessionFile,

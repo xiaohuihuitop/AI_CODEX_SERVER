@@ -4,6 +4,7 @@ const path = require('node:path');
 const {
   CodexSessionReader,
   projectNameFromCwd,
+  reasoningText,
   stripCodexUiDirectives,
   threadIdFromSessionFile,
 } = require('../src/codex-session-reader');
@@ -26,6 +27,17 @@ test('过滤 Codex Desktop UI 指令行', () => {
   ].join('\n');
 
   assert.equal(stripCodexUiDirectives(text), '已推送到 GitHub。\n\n保留正文。');
+});
+
+test('提取 Codex 公开过程摘要', () => {
+  assert.equal(reasoningText({ text: '正在检查项目结构' }), '正在检查项目结构');
+  assert.equal(reasoningText({
+    summary: [
+      { type: 'summary_text', text: '读取文件' },
+      { type: 'summary_text', text: '准备修改' },
+    ],
+    encrypted_content: 'hidden',
+  }), '读取文件\n准备修改');
 });
 
 test('跨平台提取 Codex 会话项目名', () => {
@@ -100,6 +112,18 @@ test('打开线程列表包含运行状态', () => {
 
   assert.deepEqual(threads.map(item => item.status), ['complete', 'running']);
   assert.deepEqual(threads.map(item => item.active), [false, true]);
+});
+
+test('运行状态包含公开过程步骤', () => {
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const status = reader.parseStatus({ threadId: 'ffffffff-aaaa-bbbb-cccc-dddddddddddd' });
+  const reasoningSteps = status.steps.filter(item => item.kind === 'reasoning');
+
+  assert.equal(status.status, 'running');
+  assert.deepEqual(reasoningSteps.map(item => item.text), ['正在检查项目结构', '准备修改手机端显示逻辑']);
 });
 
 test('打开线程列表只扫描一次会话目录', () => {

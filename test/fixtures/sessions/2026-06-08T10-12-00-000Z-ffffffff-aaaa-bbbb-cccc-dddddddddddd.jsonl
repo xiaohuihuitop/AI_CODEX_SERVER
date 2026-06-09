@@ -1,3 +1,5 @@
 {"timestamp":"2026-06-08T10:12:00.000Z","type":"session_meta","payload":{"cwd":"C:\\Users\\admin\\Desktop\\demo"}}
 {"timestamp":"2026-06-08T10:12:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"运行中的线程"}}
 {"timestamp":"2026-06-08T10:12:02.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-running"}}
+{"timestamp":"2026-06-08T10:12:03.000Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"正在检查项目结构"}}
+{"timestamp":"2026-06-08T10:12:04.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"准备修改手机端显示逻辑"}],"content":null,"encrypted_content":"hidden"}}
