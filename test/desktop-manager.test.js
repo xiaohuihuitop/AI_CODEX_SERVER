@@ -39,6 +39,17 @@ test('桌面管理器默认配置使用固定随机 token', () => {
   assert.equal(config.autoStart, false);
 });
 
+test('桌面管理器支持 HTTP 端口形式的群晖地址', () => {
+  const config = normalizeManagerConfig({
+    serverUrl: 'http://192.168.1.20:8008/',
+    token: 'abc123',
+    deviceName: 'synology-pc',
+  });
+
+  assert.equal(buildMobileUrl(config), 'http://192.168.1.20:8008/?token=abc123');
+  assert.equal(buildAgentEnv(config).CODEX_CLOUD_URL, 'http://192.168.1.20:8008');
+});
+
 test('桌面管理器 token 生成不使用短 token', () => {
   const token = generateDeviceToken();
 

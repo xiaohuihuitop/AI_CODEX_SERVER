@@ -37,7 +37,8 @@ jobs:
         shell: bash
         run: |
           echo "TAG_NAME=${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
-          echo "IMAGE_NAME=ai-codex-server:${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          echo "IMAGE_TAG=ai-codex-server:${GITHUB_REF_NAME}" >> "$GITHUB_ENV"
+          echo "IMAGE_LATEST=ai-codex-server:latest" >> "$GITHUB_ENV"
 
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -46,7 +47,9 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          tags: ${{ env.IMAGE_NAME }}
+          tags: |
+            ${{ env.IMAGE_TAG }}
+            ${{ env.IMAGE_LATEST }}
           outputs: type=docker,dest=ai-codex-server-${{ env.TAG_NAME }}.tar
           provenance: false
 
@@ -65,4 +68,7 @@ jobs:
           tag_name: ${{ env.TAG_NAME }}
           name: ${{ env.TAG_NAME }}
           generate_release_notes: true
-          files: ai-codex-server-${{ env.TAG_NAME }}.tar
+          files: |
+            ai-codex-server-${{ env.TAG_NAME }}.tar
+            docker-compose.yml
+            .env.example

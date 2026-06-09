@@ -28,7 +28,7 @@ function renderHtml(config) {
     <h1>Codex Desktop Manager</h1>
     <form method="post" action="/config">
       <label>云端服务器地址</label>
-      <input name="serverUrl" value="${config.serverUrl}" placeholder="https://codex.example.com">
+      <input name="serverUrl" value="${config.serverUrl}" placeholder="http://群晖IP:8008">
       <div class="row">
         <div>
           <label>固定 Token</label>
