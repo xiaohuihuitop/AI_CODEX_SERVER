@@ -39,19 +39,33 @@ function safeJson(line) {
 }
 
 /**
+ * 过滤 Codex Desktop 只用于客户端 UI 的指令行。
+ *
+ * @param {string} text 原始回复文本。
+ * @returns {string} 手机端可显示文本。
+ */
+function stripCodexUiDirectives(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .filter(line => !/^::[a-z][a-z-]*\{.*\}\s*$/i.test(line.trim()))
+    .join('\n')
+    .trim();
+}
+
+/**
  * 提取 Codex message content 中的文本。
  *
  * @param {unknown} content Codex 消息 content 字段。
  * @returns {string} 规范化文本。
  */
 function messageText(content) {
-  if (typeof content === 'string') return content.trim();
+  if (typeof content === 'string') return stripCodexUiDirectives(content);
   if (!Array.isArray(content)) return '';
-  return content
+  return stripCodexUiDirectives(content
     .map(item => item && (item.text || item.message || ''))
     .filter(Boolean)
     .join('\n')
-    .trim();
+    .trim());
 }
 
 /**
@@ -343,7 +357,7 @@ class CodexSessionReader {
         active = false;
         completed = true;
         completedAt = item.timestamp || completedAt;
-        final = String(payload.last_agent_message || '').trim() || final;
+        final = stripCodexUiDirectives(payload.last_agent_message) || final;
         steps.push({ kind: 'complete', label: '完成', text: '回复完成', time: item.timestamp || '' });
       }
     }
@@ -367,6 +381,7 @@ class CodexSessionReader {
 module.exports = {
   CodexSessionReader,
   isThreadId,
+  stripCodexUiDirectives,
   projectNameFromCwd,
   threadIdFromSessionFile,
 };

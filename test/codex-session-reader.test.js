@@ -1,7 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const { CodexSessionReader, projectNameFromCwd, threadIdFromSessionFile } = require('../src/codex-session-reader');
+const {
+  CodexSessionReader,
+  projectNameFromCwd,
+  stripCodexUiDirectives,
+  threadIdFromSessionFile,
+} = require('../src/codex-session-reader');
 
 const fixtureRoot = path.join(__dirname, 'fixtures');
 
@@ -10,6 +15,17 @@ test('从会话文件名提取 threadId', () => {
     threadIdFromSessionFile('2026-06-08T10-00-00-000Z-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl'),
     'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
   );
+});
+
+test('过滤 Codex Desktop UI 指令行', () => {
+  const text = [
+    '已推送到 GitHub。',
+    '',
+    '::git-push{cwd="C:\\Users\\admin\\Desktop\\demo" branch="master"}',
+    '保留正文。',
+  ].join('\n');
+
+  assert.equal(stripCodexUiDirectives(text), '已推送到 GitHub。\n\n保留正文。');
 });
 
 test('跨平台提取 Codex 会话项目名', () => {
