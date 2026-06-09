@@ -41,6 +41,9 @@
       "package.json",
       "node_modules/**/*"
     ],
+    "asarUnpack": [
+      "scripts/*.ps1"
+    ],
     "win": {
       "target": [
         "dir"

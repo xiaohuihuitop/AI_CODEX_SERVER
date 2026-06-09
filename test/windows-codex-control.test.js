@@ -126,6 +126,30 @@ test('关闭 CDP socket 时不等待远端关闭帧', () => {
   assert.equal(closeFunction.includes('CloseAsync('), false);
 });
 
+test('打包后控制脚本路径指向 app.asar.unpacked 真实文件', () => {
+  const { WindowsCodexController, resolveAsarUnpackedPath } = require('../src/windows-codex-controller');
+  const packedPath = [
+    'C:',
+    'app',
+    'resources',
+    'app.asar',
+    'scripts',
+    'win-codex-control.ps1',
+  ].join(path.sep);
+  const expected = [
+    'C:',
+    'app',
+    'resources',
+    'app.asar.unpacked',
+    'scripts',
+    'win-codex-control.ps1',
+  ].join(path.sep);
+  const controller = new WindowsCodexController({ scriptPath: packedPath });
+
+  assert.equal(resolveAsarUnpackedPath(packedPath), expected);
+  assert.equal(controller.scriptPath, expected);
+});
+
 test('脚本支持读取 Codex Desktop 当前打开线程', () => {
   const script = fs.readFileSync(scriptPath, 'utf8');
 

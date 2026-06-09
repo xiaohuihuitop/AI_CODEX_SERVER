@@ -4,6 +4,10 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const crypto = require('node:crypto');
 
+function resolveAsarUnpackedPath(filePath) {
+  return String(filePath).replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
+}
+
 class WindowsCodexController {
   /**
    * 创建 Windows Codex Desktop 控制器。
@@ -11,7 +15,7 @@ class WindowsCodexController {
    * @param {{scriptPath?: string}} options 控制脚本配置。
    */
   constructor(options = {}) {
-    this.scriptPath = options.scriptPath || path.join(__dirname, '..', 'scripts', 'win-codex-control.ps1');
+    this.scriptPath = resolveAsarUnpackedPath(options.scriptPath || path.join(__dirname, '..', 'scripts', 'win-codex-control.ps1'));
   }
 
   /**
@@ -92,4 +96,5 @@ class WindowsCodexController {
 
 module.exports = {
   WindowsCodexController,
+  resolveAsarUnpackedPath,
 };

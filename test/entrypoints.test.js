@@ -44,4 +44,5 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(electronHtml, /启动\/重启 Codex/);
   assert.equal(pkg.scripts['start:manager:gui'], 'electron electron/main.js');
   assert.equal(pkg.scripts['start:manager:gui:legacy'], 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-desktop-manager-gui.ps1');
+  assert.deepEqual(pkg.build.asarUnpack, ['scripts/*.ps1']);
 });
