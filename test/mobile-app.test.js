@@ -87,3 +87,28 @@ test('uni-app Android 手机端轮询刷新不强制推动阅读位置', () => {
   assert.match(index, /await loadHistory\(data, \{ scrollToBottom: shouldScroll \}\)/);
   assert.match(index, /manualRefresh\(\)[\s\S]*refreshAll\(\{ scrollToBottom: false \}\)/);
 });
+
+test('uni-app Android 手机端使用弹出二级对话列表选择线程', () => {
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+
+  assert.doesNotMatch(index, /<picker/);
+  assert.match(index, /class="thread-selector"/);
+  assert.match(index, /class="thread-popup"/);
+  assert.match(index, /const threadPopupOpen = ref\(false\)/);
+  assert.match(index, /@click="toggleThreadPopup"/);
+  assert.match(index, /const projectGroups = computed/);
+  assert.match(index, /v-for="project in projectGroups"/);
+  assert.match(index, /v-for="thread in project\.threads"/);
+  assert.match(index, /threadDotClassFor\(thread\)/);
+  assert.match(index, /function threadDotClassFor\(thread\)/);
+  assert.match(index, /return active \|\| status === 'running' \? 'dot-blue' : 'dot-green';/);
+  assert.match(index, /async function selectThread\(projectName, thread\)/);
+  assert.match(index, /threadPopupOpen\.value = false;/);
+  assert.match(index, /thread-row-active/);
+  const popupListStyle = index.match(/\.popup-list\s*\{([\s\S]*?)\n\}/)?.[1] || '';
+  assert.match(popupListStyle, /height:\s*52vh;/);
+  assert.doesNotMatch(popupListStyle, /height:\s*0;/);
+  assert.match(index, /import \{ onBackPress, onShow \} from '@dcloudio\/uni-app';/);
+  assert.match(index, /onBackPress\(\(\) => \{[\s\S]*threadPopupOpen\.value = false;[\s\S]*return true;/);
+  assert.match(index, /if \(!threadPopupOpen\.value\) return false;/);
+});

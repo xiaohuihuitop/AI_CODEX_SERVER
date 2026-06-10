@@ -16,16 +16,41 @@
       </view>
 
       <view class="selectors">
-        <picker :range="projectNames" :value="projectIndex" :disabled="!projectNames.length" @change="onProjectChange">
-          <view class="select-control">{{ selectedProjectName || '选择文件夹' }}</view>
-        </picker>
-        <picker :range="threadNames" :value="threadIndex" :disabled="!threadOptions.length" @change="onThreadChange">
-          <view class="select-control">{{ selectedThreadName || '选择对话' }}</view>
-        </picker>
+        <button class="thread-selector" :disabled="!threadRows.length" @click="toggleThreadPopup">
+          <text class="thread-selector-title">{{ selectedThreadName || '选择对话' }}</text>
+          <text class="thread-selector-subtitle">{{ selectedProjectName || '未选择文件夹' }}</text>
+        </button>
         <button class="refresh-button" :disabled="loading" @click="manualRefresh">刷新</button>
       </view>
 
       <view class="notice">{{ notice }}</view>
+    </view>
+
+    <view v-if="threadPopupOpen" class="popup-mask" @click="closeThreadPopup"></view>
+    <view v-if="threadPopupOpen" class="thread-popup">
+      <view class="popup-header">
+        <view>
+          <text class="popup-title">选择对话</text>
+          <text class="popup-subtitle">按文件夹分组显示当前打开的对话</text>
+        </view>
+        <button class="popup-close" @click="closeThreadPopup">关闭</button>
+      </view>
+      <scroll-view class="popup-list" scroll-y>
+        <view v-if="!projectGroups.length" class="popup-empty">暂无可选对话</view>
+        <view v-for="project in projectGroups" :key="project.name" class="project-group">
+          <view class="project-title">{{ project.name }}</view>
+          <button
+            v-for="thread in project.threads"
+            :key="thread.id"
+            class="thread-row"
+            :class="thread.id === selectedThreadId ? 'thread-row-active' : ''"
+            @click="selectThread(project.name, thread)"
+          >
+            <view class="dot" :class="threadDotClassFor(thread)"></view>
+            <text class="thread-row-name">{{ thread.name || thread.id }}</text>
+          </button>
+        </view>
+      </scroll-view>
     </view>
 
     <scroll-view class="messages" scroll-y :scroll-into-view="scrollTarget">
@@ -73,7 +98,7 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+import { onBackPress, onShow } from '@dcloudio/uni-app';
 import { getHealth, getHistory, getStatus, getThreads, sendMessage, stopCodex } from '../../utils/api';
 import { loadConfig, loadSelection, saveSelection } from '../../utils/config';
 import { renderMarkdownToHtml } from '../../utils/markdown';
@@ -94,6 +119,7 @@ const followBottom = ref(false);
 const processOpen = ref(false);
 const loading = ref(false);
 const sending = ref(false);
+const threadPopupOpen = ref(false);
 const scrollTarget = ref('');
 let threadListRequest = null;
 let connectionTimer = null;
@@ -122,12 +148,13 @@ function groupThreads(rows) {
 
 const groupedThreads = computed(() => groupThreads(threadRows.value));
 const projectNames = computed(() => groupedThreads.value.names);
-const projectIndex = computed(() => Math.max(0, projectNames.value.indexOf(selectedProjectName.value)));
 const threadOptions = computed(() => groupedThreads.value.groups[selectedProjectName.value] || []);
-const threadNames = computed(() => threadOptions.value.map(row => row.name || row.id));
-const threadIndex = computed(() => Math.max(0, threadOptions.value.findIndex(row => row.id === selectedThreadId.value)));
 const selectedThread = computed(() => threadOptions.value.find(row => row.id === selectedThreadId.value) || null);
 const selectedThreadName = computed(() => (selectedThread.value && selectedThread.value.name) || selectedThreadId.value);
+const projectGroups = computed(() => projectNames.value.map(name => ({
+  name,
+  threads: groupedThreads.value.groups[name] || [],
+})));
 const processSteps = computed(() => {
   const steps = (currentThreadStatus.value && currentThreadStatus.value.steps) || [];
   return steps.filter(step => step && step.text && step.kind !== 'final' && step.kind !== 'complete');
@@ -181,6 +208,24 @@ function renderMarkdown(text) {
  */
 function openSettings() {
   uni.navigateTo({ url: '/pages/settings/settings' });
+}
+
+/**
+ * AI:切换对话选择弹出列表。
+ *
+ * @returns {void}
+ */
+function toggleThreadPopup() {
+  threadPopupOpen.value = !threadPopupOpen.value;
+}
+
+/**
+ * AI:关闭对话选择弹出列表。
+ *
+ * @returns {void}
+ */
+function closeThreadPopup() {
+  threadPopupOpen.value = false;
 }
 
 /**
@@ -354,15 +399,16 @@ async function manualRefresh() {
 }
 
 /**
- * AI:切换项目后加载该项目第一个对话。
+ * AI:切换到指定对话。
  *
- * @param {{detail: {value: number}}} event picker 事件。
+ * @param {string} projectName 项目目录名。
+ * @param {object} thread 对话对象。
  * @returns {Promise<void>}
  */
-async function onProjectChange(event) {
-  selectedProjectName.value = projectNames.value[Number(event.detail.value)] || '';
-  const rows = groupedThreads.value.groups[selectedProjectName.value] || [];
-  selectedThreadId.value = rows[0] ? rows[0].id : '';
+async function selectThread(projectName, thread) {
+  selectedProjectName.value = projectName || '';
+  selectedThreadId.value = thread ? thread.id : '';
+  threadPopupOpen.value = false;
   currentThreadStatus.value = null;
   pendingWatch.value = null;
   historyReloadedForCompletion.value = false;
@@ -372,20 +418,20 @@ async function onProjectChange(event) {
 }
 
 /**
- * AI:切换对话后加载该对话历史。
+ * AI:返回对话在侧边列表中的状态点样式。
  *
- * @param {{detail: {value: number}}} event picker 事件。
- * @returns {Promise<void>}
+ * @param {object} thread 对话对象。
+ * @returns {string} 状态样式类名。
  */
-async function onThreadChange(event) {
-  const row = threadOptions.value[Number(event.detail.value)];
-  selectedThreadId.value = row ? row.id : '';
-  currentThreadStatus.value = null;
-  pendingWatch.value = null;
-  historyReloadedForCompletion.value = false;
-  processOpen.value = false;
-  persistSelection();
-  await loadHistory(null, { scrollToBottom: true });
+function threadDotClassFor(thread) {
+  const isSelected = thread && thread.id === selectedThreadId.value;
+  const status = isSelected && currentThreadStatus.value
+    ? currentThreadStatus.value.status
+    : thread && thread.status;
+  const active = isSelected && currentThreadStatus.value
+    ? Boolean(currentThreadStatus.value.active)
+    : Boolean(thread && thread.active);
+  return active || status === 'running' ? 'dot-blue' : 'dot-green';
 }
 
 /**
@@ -497,6 +543,12 @@ onShow(() => {
     refreshAll({ scrollToBottom: true });
   }
 });
+
+onBackPress(() => {
+  if (!threadPopupOpen.value) return false;
+  threadPopupOpen.value = false;
+  return true;
+});
 </script>
 
 <style scoped>
@@ -584,13 +636,16 @@ onShow(() => {
 
 .selectors {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr) 58px;
+  grid-template-columns: minmax(0, 1fr) 58px;
   height: 38px;
   margin-top: 8px;
 }
 
 .settings-button,
 .refresh-button,
+.thread-selector,
+.popup-close,
+.thread-row,
 .send-button,
 .stop-button {
   display: flex;
@@ -620,19 +675,38 @@ onShow(() => {
   font-size: 13px;
 }
 
-.select-control {
+.thread-selector {
+  flex-direction: column;
+  align-items: flex-start;
   height: 38px;
   min-width: 0;
   border: 1px solid #dfe3ea;
   border-radius: 7px;
   background: #ffffff;
-  padding: 0 10px;
+  padding: 4px 10px;
   color: #111827;
-  font-size: 13px;
-  line-height: 38px;
+}
+
+.thread-selector-title,
+.thread-selector-subtitle {
+  display: block;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.thread-selector-title {
+  color: #111827;
+  font-size: 13px;
+  line-height: 15px;
+}
+
+.thread-selector-subtitle {
+  color: #6b7280;
+  font-size: 11px;
+  line-height: 13px;
+  font-weight: 400;
 }
 
 .notice {
@@ -641,6 +715,119 @@ onShow(() => {
   color: #6b7280;
   font-size: 12px;
   line-height: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popup-mask {
+  position: fixed;
+  z-index: 20;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: rgba(17, 24, 39, 0.34);
+}
+
+.thread-popup {
+  position: fixed;
+  z-index: 21;
+  top: 100px;
+  right: 12px;
+  left: 12px;
+  background: #f8fafc;
+  border: 1px solid #dfe3ea;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 58px;
+  padding: calc(10px + env(safe-area-inset-top)) 12px 10px;
+  border-bottom: 1px solid #dfe3ea;
+  background: #ffffff;
+}
+
+.popup-title,
+.popup-subtitle {
+  display: block;
+}
+
+.popup-title {
+  color: #111827;
+  font-size: 16px;
+  line-height: 20px;
+  font-weight: 700;
+}
+
+.popup-subtitle {
+  margin-top: 2px;
+  color: #6b7280;
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.popup-close {
+  width: 54px;
+  height: 32px;
+  flex: 0 0 54px;
+  background: #111827;
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.popup-list {
+  height: 52vh;
+  max-height: 460px;
+  padding: 10px 10px 20px;
+}
+
+.popup-empty {
+  padding: 14px 8px;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.project-group {
+  margin-bottom: 12px;
+}
+
+.project-title {
+  padding: 6px 4px;
+  color: #4b5563;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 700;
+}
+
+.thread-row {
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 40px;
+  margin-top: 6px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  padding: 0 9px;
+  color: #111827;
+}
+
+.thread-row-active {
+  border-color: #111827;
+  background: #f3f4f6;
+}
+
+.thread-row-name {
+  min-width: 0;
+  flex: 1;
+  margin-left: 8px;
+  color: #111827;
+  font-size: 13px;
+  line-height: 16px;
+  text-align: left;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
