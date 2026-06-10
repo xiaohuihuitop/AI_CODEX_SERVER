@@ -39,14 +39,30 @@ function safeJson(line) {
 }
 
 /**
- * 过滤 Codex Desktop 只用于客户端 UI 的指令行。
+ * AI:过滤 Codex Desktop 只用于客户端 UI 的指令行和浏览器上下文。
  *
- * @param {string} text 原始回复文本。
+ * @param {string} text 原始消息文本。
  * @returns {string} 手机端可显示文本。
  */
 function stripCodexUiDirectives(text) {
-  return String(text || '')
-    .split(/\r?\n/)
+  const lines = [];
+  let inBrowserContext = false;
+
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (/^#\s+In app browser:\s*$/i.test(trimmed)) {
+      inBrowserContext = true;
+      continue;
+    }
+    if (/^##\s+My request for Codex:\s*$/i.test(trimmed)) {
+      inBrowserContext = false;
+      continue;
+    }
+    if (inBrowserContext) continue;
+    lines.push(line);
+  }
+
+  return lines
     .filter(line => !/^::[a-z][a-z-]*\{.*\}\s*$/i.test(line.trim()))
     .join('\n')
     .trim();
@@ -285,7 +301,7 @@ class CodexSessionReader {
     for (const item of readJsonl(file)) {
       const payload = item.payload || {};
       if (item.type === 'event_msg' && payload.type === 'user_message') {
-        const text = String(payload.message || '').trim();
+        const text = stripCodexUiDirectives(payload.message);
         if (text) messages.push({ role: 'user', label: '你', text, timestamp: item.timestamp || '' });
       }
       if (item.type === 'response_item' && payload.type === 'message' && payload.role === 'assistant' && payload.phase === 'final_answer') {

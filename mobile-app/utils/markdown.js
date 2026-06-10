@@ -1,4 +1,8 @@
-const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
+const SAFE_PROTOCOLS = {
+  'http:': true,
+  'https:': true,
+  'mailto:': true,
+};
 
 /**
  * AI:转义 HTML 文本，避免 Markdown 原文注入页面。
@@ -8,11 +12,11 @@ const SAFE_PROTOCOLS = new Set(['http:', 'https:', 'mailto:']);
  */
 export function escapeHtml(value) {
   return String(value || '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 /**
@@ -24,13 +28,9 @@ export function escapeHtml(value) {
 function safeHref(href) {
   const value = String(href || '').trim();
   if (!value) return '';
-  if (value.startsWith('#') || value.startsWith('/')) return value;
-  try {
-    const url = new URL(value);
-    return SAFE_PROTOCOLS.has(url.protocol) ? value : '';
-  } catch {
-    return '';
-  }
+  if (value.charAt(0) === '#' || value.charAt(0) === '/') return value;
+  const match = value.match(/^([A-Za-z][A-Za-z0-9+.-]*):/);
+  return match && SAFE_PROTOCOLS[`${match[1].toLowerCase()}:`] ? value : '';
 }
 
 /**
@@ -101,7 +101,7 @@ export function renderMarkdownToHtml(markdown) {
     if (fence) {
       const code = [];
       index += 1;
-      while (index < lines.length && !lines[index].trim().startsWith('```')) {
+      while (index < lines.length && lines[index].trim().indexOf('```') !== 0) {
         code.push(lines[index]);
         index += 1;
       }
@@ -148,11 +148,11 @@ export function renderMarkdownToHtml(markdown) {
       continue;
     }
 
-    if (trimmed.includes('|') && index + 1 < lines.length && isTableSeparator(lines[index + 1])) {
+    if (trimmed.indexOf('|') !== -1 && index + 1 < lines.length && isTableSeparator(lines[index + 1])) {
       const headers = splitTableRow(trimmed);
       const rows = [];
       index += 2;
-      while (index < lines.length && lines[index].trim().includes('|')) {
+      while (index < lines.length && lines[index].trim().indexOf('|') !== -1) {
         rows.push(splitTableRow(lines[index]));
         index += 1;
       }
@@ -167,7 +167,7 @@ export function renderMarkdownToHtml(markdown) {
 
     const paragraph = [trimmed];
     index += 1;
-    while (index < lines.length && lines[index].trim() && !/^(#{1,6})\s+/.test(lines[index].trim()) && !/^([-*+]|\d+\.)\s+/.test(lines[index].trim()) && !/^>\s?/.test(lines[index].trim()) && !lines[index].trim().startsWith('```')) {
+    while (index < lines.length && lines[index].trim() && !/^(#{1,6})\s+/.test(lines[index].trim()) && !/^([-*+]|\d+\.)\s+/.test(lines[index].trim()) && !/^>\s?/.test(lines[index].trim()) && lines[index].trim().indexOf('```') !== 0) {
       paragraph.push(lines[index].trim());
       index += 1;
     }

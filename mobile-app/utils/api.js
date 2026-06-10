@@ -7,7 +7,7 @@
  */
 function buildUrl(serverUrl, apiPath) {
   const base = String(serverUrl || '').trim().replace(/\/+$/, '');
-  const path = apiPath.startsWith('/') ? apiPath : `/${apiPath}`;
+  const path = apiPath.charAt(0) === '/' ? apiPath : `/${apiPath}`;
   return `${base}${path}`;
 }
 

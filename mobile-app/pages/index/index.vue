@@ -1,35 +1,37 @@
 <template>
   <view class="page">
-    <view class="topbar">
-      <view class="status-row">
-        <view class="status-item">
-          <view class="dot" :class="connectionDotClass"></view>
-          <text class="status-text">{{ connectionText }}</text>
+    <view class="control-panel">
+      <view class="topbar">
+        <view class="status-row">
+          <view class="status-item">
+            <view class="dot" :class="connectionDotClass"></view>
+            <text class="status-text">{{ connectionText }}</text>
+          </view>
+          <view class="status-item">
+            <view class="dot" :class="threadDotClass"></view>
+            <text class="status-text">{{ threadText }}</text>
+          </view>
         </view>
-        <view class="status-item">
-          <view class="dot" :class="threadDotClass"></view>
-          <text class="status-text">{{ threadText }}</text>
-        </view>
+        <button class="settings-button" @click="openSettings">设置</button>
       </view>
-      <button class="settings-button" @click="openSettings">设置</button>
-    </view>
 
-    <view class="selectors">
-      <picker :range="projectNames" :value="projectIndex" :disabled="!projectNames.length" @change="onProjectChange">
-        <view class="select-control">{{ selectedProjectName || '选择文件夹' }}</view>
-      </picker>
-      <picker :range="threadNames" :value="threadIndex" :disabled="!threadOptions.length" @change="onThreadChange">
-        <view class="select-control">{{ selectedThreadName || '选择对话' }}</view>
-      </picker>
-      <button class="refresh-button" :disabled="loading" @click="manualRefresh">刷新</button>
-    </view>
+      <view class="selectors">
+        <picker :range="projectNames" :value="projectIndex" :disabled="!projectNames.length" @change="onProjectChange">
+          <view class="select-control">{{ selectedProjectName || '选择文件夹' }}</view>
+        </picker>
+        <picker :range="threadNames" :value="threadIndex" :disabled="!threadOptions.length" @change="onThreadChange">
+          <view class="select-control">{{ selectedThreadName || '选择对话' }}</view>
+        </picker>
+        <button class="refresh-button" :disabled="loading" @click="manualRefresh">刷新</button>
+      </view>
 
-    <view class="notice">{{ notice }}</view>
+      <view class="notice">{{ notice }}</view>
+    </view>
 
     <scroll-view class="messages" scroll-y :scroll-into-view="scrollTarget">
       <view
-        v-for="(row, index) in messages"
-        :key="row.id || `${row.role}-${index}`"
+        v-for="(row, index) in messagesBeforeProcess"
+        :key="row.id || `before-${row.role}-${index}`"
         class="message"
         :class="row.role === 'user' ? 'message-user' : 'message-assistant'"
       >
@@ -47,6 +49,15 @@
             <rich-text class="markdown muted-markdown" :nodes="renderMarkdown(step.text || '')" />
           </view>
         </view>
+      </view>
+
+      <view
+        v-for="(row, index) in messagesAfterProcess"
+        :key="row.id || `after-${row.role}-${index}`"
+        class="message"
+        :class="row.role === 'user' ? 'message-user' : 'message-assistant'"
+      >
+        <rich-text class="markdown" :nodes="renderMarkdown(row.text || '')" />
       </view>
 
       <view id="bottomAnchor" class="bottom-anchor"></view>
@@ -93,39 +104,65 @@ let pollTimer = null;
  * AI:按项目分组当前打开的 Codex 对话。
  *
  * @param {Array<object>} rows 对话列表。
- * @returns {Map<string, Array<object>>} 项目分组。
+ * @returns {{groups: object, names: string[]}} 项目分组。
  */
 function groupThreads(rows) {
-  const groups = new Map();
+  const groups = {};
+  const names = [];
   for (const row of rows || []) {
     const projectName = row.projectName || '未命名文件夹';
-    if (!groups.has(projectName)) groups.set(projectName, []);
-    groups.get(projectName).push(row);
+    if (!Object.prototype.hasOwnProperty.call(groups, projectName)) {
+      groups[projectName] = [];
+      names.push(projectName);
+    }
+    groups[projectName].push(row);
   }
-  return groups;
+  return { groups, names };
 }
 
 const groupedThreads = computed(() => groupThreads(threadRows.value));
-const projectNames = computed(() => [...groupedThreads.value.keys()]);
+const projectNames = computed(() => groupedThreads.value.names);
 const projectIndex = computed(() => Math.max(0, projectNames.value.indexOf(selectedProjectName.value)));
-const threadOptions = computed(() => groupedThreads.value.get(selectedProjectName.value) || []);
+const threadOptions = computed(() => groupedThreads.value.groups[selectedProjectName.value] || []);
 const threadNames = computed(() => threadOptions.value.map(row => row.name || row.id));
 const threadIndex = computed(() => Math.max(0, threadOptions.value.findIndex(row => row.id === selectedThreadId.value)));
 const selectedThread = computed(() => threadOptions.value.find(row => row.id === selectedThreadId.value) || null);
-const selectedThreadName = computed(() => selectedThread.value?.name || selectedThreadId.value);
+const selectedThreadName = computed(() => (selectedThread.value && selectedThread.value.name) || selectedThreadId.value);
 const processSteps = computed(() => {
-  return (currentThreadStatus.value?.steps || []).filter(step => step?.text && step.kind !== 'final' && step.kind !== 'complete');
+  const steps = (currentThreadStatus.value && currentThreadStatus.value.steps) || [];
+  return steps.filter(step => step && step.text && step.kind !== 'final' && step.kind !== 'complete');
 });
 const running = computed(() => {
-  const status = currentThreadStatus.value?.status || selectedThread.value?.status;
-  return Boolean(currentThreadStatus.value?.active) || Boolean(selectedThread.value?.active) || status === 'running' || pendingWatch.value?.threadId === selectedThreadId.value;
+  const status = (currentThreadStatus.value && currentThreadStatus.value.status) || (selectedThread.value && selectedThread.value.status);
+  const activeStatus = Boolean(currentThreadStatus.value && currentThreadStatus.value.active) || Boolean(selectedThread.value && selectedThread.value.active);
+  const pendingThreadId = pendingWatch.value && pendingWatch.value.threadId;
+  return activeStatus || status === 'running' || pendingThreadId === selectedThreadId.value;
 });
-const complete = computed(() => !running.value && (currentThreadStatus.value?.status === 'complete' || selectedThread.value?.status === 'complete'));
+const complete = computed(() => {
+  const currentStatus = currentThreadStatus.value && currentThreadStatus.value.status;
+  const selectedStatus = selectedThread.value && selectedThread.value.status;
+  return !running.value && (currentStatus === 'complete' || selectedStatus === 'complete');
+});
 const canStop = computed(() => running.value && !sending.value);
 const connectionDotClass = computed(() => connectionState.value.online ? 'dot-green' : connectionState.value.offline ? 'dot-red' : 'dot-gray');
 const threadDotClass = computed(() => running.value ? 'dot-blue' : complete.value ? 'dot-green' : 'dot-gray');
 const connectionText = computed(() => connectionState.value.online ? 'Agent 在线' : connectionState.value.message || '连接未知');
 const threadText = computed(() => running.value ? '对话进行中' : complete.value ? '对话已完成' : '对话空闲');
+const processInsertIndex = computed(() => {
+  if (!complete.value || !processSteps.value.length) return -1;
+  for (let index = messages.value.length - 1; index >= 0; index -= 1) {
+    if (messages.value[index] && messages.value[index].role === 'assistant') return index;
+  }
+  return -1;
+});
+const messagesBeforeProcess = computed(() => {
+  const index = processInsertIndex.value;
+  return index === -1 ? messages.value : messages.value.slice(0, index);
+});
+const messagesAfterProcess = computed(() => {
+  const index = processInsertIndex.value;
+  return index === -1 ? [] : messages.value.slice(index);
+});
 
 /**
  * AI:渲染 Markdown 消息。
@@ -144,6 +181,15 @@ function renderMarkdown(text) {
  */
 function openSettings() {
   uni.navigateTo({ url: '/pages/settings/settings' });
+}
+
+/**
+ * AI:切换处理过程展开状态。
+ *
+ * @returns {void}
+ */
+function toggleProcess() {
+  processOpen.value = !processOpen.value;
 }
 
 /**
@@ -177,9 +223,9 @@ function persistSelection() {
 function ensureSelection() {
   const selectedRow = threadRows.value.find(row => row.id === selectedThreadId.value);
   if (selectedRow) selectedProjectName.value = selectedRow.projectName || '未命名文件夹';
-  if (!groupedThreads.value.has(selectedProjectName.value)) selectedProjectName.value = projectNames.value[0] || '';
-  const rows = groupedThreads.value.get(selectedProjectName.value) || [];
-  if (!rows.some(row => row.id === selectedThreadId.value)) selectedThreadId.value = rows[0]?.id || '';
+  if (!Object.prototype.hasOwnProperty.call(groupedThreads.value.groups, selectedProjectName.value)) selectedProjectName.value = projectNames.value[0] || '';
+  const rows = groupedThreads.value.groups[selectedProjectName.value] || [];
+  if (!rows.some(row => row.id === selectedThreadId.value)) selectedThreadId.value = rows[0] ? rows[0].id : '';
   persistSelection();
 }
 
@@ -237,11 +283,22 @@ async function loadThreads() {
  * AI:根据状态数据更新处理过程展开状态。
  *
  * @param {object} status 状态数据。
+ * @param {{autoOpenProcess?: boolean}} options 展开选项。
  * @returns {void}
  */
-function applyThreadStatus(status) {
+function applyThreadStatus(status, options = {}) {
+  const previousStatus = currentThreadStatus.value && currentThreadStatus.value.status;
   currentThreadStatus.value = status;
-  if ((status?.steps || []).length) processOpen.value = status.status !== 'complete';
+  const steps = (status && status.steps) || [];
+  if (!steps.length) {
+    processOpen.value = false;
+    return;
+  }
+  if (status.status === 'complete' || status.status === 'error') {
+    if (previousStatus !== 'complete' && previousStatus !== 'error') processOpen.value = false;
+    return;
+  }
+  if (options.autoOpenProcess || followBottom.value) processOpen.value = true;
 }
 
 /**
@@ -255,6 +312,7 @@ async function loadHistory(statusData = null, options = {}) {
   if (!selectedThreadId.value) {
     messages.value = [];
     currentThreadStatus.value = null;
+    processOpen.value = false;
     notice.value = '没有可用 Codex 对话';
     return;
   }
@@ -262,7 +320,7 @@ async function loadHistory(statusData = null, options = {}) {
   messages.value = data.messages || [];
   if (data.available) {
     const snapshot = statusData || await getStatus(config.value, { threadId: selectedThreadId.value });
-    applyThreadStatus(snapshot);
+    applyThreadStatus(snapshot, { autoOpenProcess: Boolean(options.scrollToBottom) });
   }
   notice.value = data.available ? '已同步电脑端 Codex 对话' : '这个对话暂时没有可加载的本机记录';
   if (options.scrollToBottom) await scrollToBottom();
@@ -303,11 +361,12 @@ async function manualRefresh() {
  */
 async function onProjectChange(event) {
   selectedProjectName.value = projectNames.value[Number(event.detail.value)] || '';
-  const rows = groupedThreads.value.get(selectedProjectName.value) || [];
-  selectedThreadId.value = rows[0]?.id || '';
+  const rows = groupedThreads.value.groups[selectedProjectName.value] || [];
+  selectedThreadId.value = rows[0] ? rows[0].id : '';
   currentThreadStatus.value = null;
   pendingWatch.value = null;
   historyReloadedForCompletion.value = false;
+  processOpen.value = false;
   persistSelection();
   await loadHistory(null, { scrollToBottom: true });
 }
@@ -320,10 +379,11 @@ async function onProjectChange(event) {
  */
 async function onThreadChange(event) {
   const row = threadOptions.value[Number(event.detail.value)];
-  selectedThreadId.value = row?.id || '';
+  selectedThreadId.value = row ? row.id : '';
   currentThreadStatus.value = null;
   pendingWatch.value = null;
   historyReloadedForCompletion.value = false;
+  processOpen.value = false;
   persistSelection();
   await loadHistory(null, { scrollToBottom: true });
 }
@@ -337,12 +397,12 @@ async function onThreadChange(event) {
 async function pollStatus(watch = pendingWatch.value || {}) {
   const requestedThreadId = watch.threadId || selectedThreadId.value;
   if (!requestedThreadId) return;
-  const data = await getStatus(config.value, { ...watch, threadId: requestedThreadId });
+  const data = await getStatus(config.value, Object.assign({}, watch, { threadId: requestedThreadId }));
   if (requestedThreadId !== selectedThreadId.value || data.threadId !== selectedThreadId.value) return;
-  applyThreadStatus(data);
+  applyThreadStatus(data, { autoOpenProcess: followBottom.value });
   if (data.status === 'complete' || data.status === 'error') {
     const shouldScroll = followBottom.value;
-    if (pendingWatch.value?.threadId === data.threadId) pendingWatch.value = null;
+    if (pendingWatch.value && pendingWatch.value.threadId === data.threadId) pendingWatch.value = null;
     followBottom.value = false;
     if (!historyReloadedForCompletion.value) {
       historyReloadedForCompletion.value = true;
@@ -366,11 +426,10 @@ async function send() {
   sending.value = true;
   followBottom.value = true;
   historyReloadedForCompletion.value = false;
-  messages.value = [
-    ...messages.value,
+  messages.value = messages.value.concat([
     { role: 'user', text },
     { role: 'assistant', text: '已发送，等待 Codex 回复...' },
-  ];
+  ]);
   await scrollToBottom();
   try {
     const data = await sendMessage(config.value, { threadId: selectedThreadId.value, text });
@@ -442,33 +501,51 @@ onShow(() => {
 
 <style scoped>
 .page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
   min-height: 100vh;
-  background: #f5f6f8;
+  overflow: hidden;
+  background: #f4f5f7;
   color: #111827;
-  padding-bottom: calc(146px + env(safe-area-inset-bottom));
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.control-panel {
+  flex: 0 0 auto;
+  padding: 10px 12px 8px;
+  background: #f4f5f7;
+  border-bottom: 1px solid #dde1e7;
+}
+
+.topbar,
+.selectors {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 10px 12px;
-  background: #ffffff;
-  border-bottom: 1px solid #e5e7eb;
+  height: 36px;
 }
 
 .status-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   min-width: 0;
   flex: 1;
-  gap: 10px;
+  gap: 8px;
 }
 
 .status-item {
   display: flex;
   align-items: center;
+  height: 36px;
   min-width: 0;
+  border: 1px solid #dfe3ea;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 0 8px;
   gap: 6px;
 }
 
@@ -499,113 +576,140 @@ onShow(() => {
 .status-text {
   color: #4b5563;
   font-size: 12px;
+  line-height: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.settings-button {
-  width: 54px;
-  height: 34px;
-  background: #111827;
-  color: #ffffff;
-  font-size: 13px;
 }
 
 .selectors {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr) 58px;
-  gap: 8px;
-  padding: 10px 12px;
-  background: #ffffff;
-  border-bottom: 1px solid #e5e7eb;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.12fr) 58px;
+  height: 38px;
+  margin-top: 8px;
 }
 
-.select-control {
-  height: 36px;
-  min-width: 0;
-  border: 1px solid #d1d5db;
-  border-radius: 6px;
-  background: #ffffff;
-  padding: 0 9px;
-  color: #111827;
-  font-size: 13px;
-  line-height: 36px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.settings-button,
+.refresh-button,
+.send-button,
+.stop-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  border: 0;
+  border-radius: 7px;
+  padding: 0;
+  line-height: 1;
+  font-weight: 600;
 }
 
-.refresh-button {
+.settings-button {
+  width: 58px;
   height: 36px;
+  flex: 0 0 58px;
   background: #111827;
   color: #ffffff;
   font-size: 13px;
 }
 
+.refresh-button {
+  height: 38px;
+  background: #111827;
+  color: #ffffff;
+  font-size: 13px;
+}
+
+.select-control {
+  height: 38px;
+  min-width: 0;
+  border: 1px solid #dfe3ea;
+  border-radius: 7px;
+  background: #ffffff;
+  padding: 0 10px;
+  color: #111827;
+  font-size: 13px;
+  line-height: 38px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .notice {
-  min-height: 28px;
-  padding: 7px 12px;
+  height: 24px;
+  margin-top: 7px;
   color: #6b7280;
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 24px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .messages {
-  height: calc(100vh - 250px);
-  padding: 8px 12px 16px;
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 0;
+  padding: 10px 12px 14px;
 }
 
 .message {
-  max-width: 92%;
+  max-width: 94%;
   margin: 8px 0;
   padding: 10px 12px;
   border-radius: 8px;
-  line-height: 1.45;
+  line-height: 1.58;
   font-size: 14px;
+  font-weight: 400;
 }
 
 .message-user {
   margin-left: auto;
-  background: #1f6feb;
+  background: #1f2937;
   color: #ffffff;
 }
 
 .message-assistant {
   margin-right: auto;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #dfe3ea;
   background: #ffffff;
   color: #111827;
 }
 
 .markdown {
+  color: inherit;
+  font-size: 14px;
+  line-height: 1.58;
   word-break: break-word;
 }
 
 .process-card {
-  max-width: 92%;
-  margin: 8px 0;
-  border: 1px solid #e5e7eb;
+  max-width: 94%;
+  margin: 10px 0;
+  border: 1px solid #dfe3ea;
   border-radius: 8px;
   background: #ffffff;
   overflow: hidden;
 }
 
 .process-title {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
   align-items: center;
-  padding: 9px 12px;
+  min-height: 40px;
+  padding: 0 12px;
   color: #111827;
   font-size: 13px;
 }
 
 .process-action {
   color: #1f6feb;
+  text-align: right;
+  font-weight: 600;
 }
 
 .process-body {
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid #eef1f5;
 }
 
 .process-step {
@@ -622,7 +726,7 @@ onShow(() => {
   margin-bottom: 6px;
   color: #374151;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .muted-markdown {
@@ -635,15 +739,12 @@ onShow(() => {
 }
 
 .composer {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 58px 58px;
   gap: 8px;
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-  border-top: 1px solid #e5e7eb;
+  border-top: 1px solid #dde1e7;
   background: #ffffff;
 }
 

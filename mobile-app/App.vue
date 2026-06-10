@@ -21,8 +21,18 @@ input {
 }
 
 button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  border: 0;
   border-radius: 6px;
+  padding: 0;
   font-size: 15px;
   line-height: 1;
+}
+
+button::after {
+  border: 0;
 }
 </style>

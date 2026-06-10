@@ -4,6 +4,7 @@
   "description": "通过云端服务器控制 Windows Codex Desktop",
   "versionName": "0.1.0",
   "versionCode": 100,
+  "vueVersion": "3",
   "transformPx": false,
   "app-plus": {
     "usingComponents": true,

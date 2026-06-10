@@ -1,4 +1,6 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const test = require('node:test');
 const { renderMarkdownToHtml } = require('../public/markdown');
 
@@ -32,4 +34,13 @@ test('Markdown 渲染会转义原始 HTML 并拒绝危险链接', () => {
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assert.equal(html.includes('href="javascript:'), false);
   assert.match(html, /<strong>ok<\/strong>/);
+});
+
+test('网页端 Markdown 渲染器避免旧 Android WebView 不兼容 API', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'markdown.js'), 'utf8');
+
+  assert.doesNotMatch(source, /\.replaceAll\s*\(/);
+  assert.doesNotMatch(source, /new\s+URL\s*\(/);
+  assert.doesNotMatch(source, /new\s+Set\s*\(/);
+  assert.doesNotMatch(source, /\.(startsWith|includes)\s*\(/);
 });

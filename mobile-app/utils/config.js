@@ -13,7 +13,7 @@ const SELECTION_KEY = 'codexMobile.selection';
  */
 export function loadConfig() {
   const stored = uni.getStorageSync(CONFIG_KEY);
-  if (!stored || typeof stored !== 'object') return { ...DEFAULT_CONFIG };
+  if (!stored || typeof stored !== 'object') return Object.assign({}, DEFAULT_CONFIG);
   return {
     serverUrl: typeof stored.serverUrl === 'string' && stored.serverUrl.trim() ? stored.serverUrl.trim() : DEFAULT_CONFIG.serverUrl,
     token: typeof stored.token === 'string' && stored.token.trim() ? stored.token.trim() : DEFAULT_CONFIG.token,

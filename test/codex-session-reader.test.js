@@ -29,6 +29,19 @@ test('过滤 Codex Desktop UI 指令行', () => {
   assert.equal(stripCodexUiDirectives(text), '已推送到 GitHub。\n\n保留正文。');
 });
 
+test('过滤 in-app browser 上下文并保留真实请求', () => {
+  const text = [
+    '# In app browser:',
+    '- The user has the in-app browser open.',
+    '- Current URL: http://127.0.0.1:5175/#/pages/settings/settings',
+    '',
+    '## My request for Codex:',
+    'app端的ui修一下吧。',
+  ].join('\n');
+
+  assert.equal(stripCodexUiDirectives(text), 'app端的ui修一下吧。');
+});
+
 test('提取 Codex 公开过程摘要', () => {
   assert.equal(reasoningText({ text: '正在检查项目结构' }), '正在检查项目结构');
   assert.equal(reasoningText({

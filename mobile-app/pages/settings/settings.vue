@@ -69,8 +69,10 @@ async function testConnection() {
 <style scoped>
 .settings-page {
   min-height: 100vh;
-  padding: 18px;
-  background: #f5f6f8;
+  padding: 18px 16px;
+  background: #f4f5f7;
+  color: #111827;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 .field {
@@ -81,34 +83,46 @@ async function testConnection() {
   display: block;
   margin-bottom: 8px;
   color: #4b5563;
-  font-size: 14px;
+  font-size: 13px;
+  line-height: 1;
+  font-weight: 600;
 }
 
 .input {
-  height: 44px;
+  height: 46px;
   width: 100%;
-  border: 1px solid #d9dde3;
+  border: 1px solid #dfe3ea;
   border-radius: 8px;
   background: #ffffff;
   padding: 0 12px;
   color: #111827;
   font-size: 15px;
+  line-height: 46px;
 }
 
 .primary,
 .secondary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
-  height: 44px;
+  height: 46px;
   margin-top: 12px;
+  border-radius: 8px;
+  padding: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
 }
 
 .primary {
+  border: 0;
   background: #111827;
   color: #ffffff;
 }
 
 .secondary {
-  border: 1px solid #d9dde3;
+  border: 1px solid #dfe3ea;
   background: #ffffff;
   color: #111827;
 }
@@ -117,6 +131,10 @@ async function testConnection() {
   margin-top: 16px;
   color: #6b7280;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.55;
+}
+
+button[disabled] {
+  opacity: 0.55;
 }
 </style>
