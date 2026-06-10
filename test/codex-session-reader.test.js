@@ -42,6 +42,18 @@ test('过滤 in-app browser 上下文并保留真实请求', () => {
   assert.equal(stripCodexUiDirectives(text), 'app端的ui修一下吧。');
 });
 
+test('过滤裸露的 in-app browser 上下文', () => {
+  const text = [
+    'In app browser:',
+    '- The user has the in-app browser open.',
+    '- Current URL: http://127.0.0.1:14854/?token=test-token',
+    '',
+    '还是有错误不知道哪里来的。',
+  ].join('\n');
+
+  assert.equal(stripCodexUiDirectives(text), '还是有错误不知道哪里来的。');
+});
+
 test('提取 Codex 公开过程摘要', () => {
   assert.equal(reasoningText({ text: '正在检查项目结构' }), '正在检查项目结构');
   assert.equal(reasoningText({
@@ -134,9 +146,41 @@ test('运行状态包含公开过程步骤', () => {
   });
   const status = reader.parseStatus({ threadId: 'ffffffff-aaaa-bbbb-cccc-dddddddddddd' });
   const reasoningSteps = status.steps.filter(item => item.kind === 'reasoning');
+  const commentarySteps = status.steps.filter(item => item.kind === 'commentary');
+  const toolSteps = status.steps.filter(item => item.kind === 'tools');
 
   assert.equal(status.status, 'running');
+  assert.deepEqual(commentarySteps.map(item => item.text), ['我会检查当前任务上下文。']);
+  assert.equal(commentarySteps.length, 1);
+  assert.deepEqual(toolSteps.map(item => item.text), ['已运行 3 条命令']);
   assert.deepEqual(reasoningSteps.map(item => item.text), ['正在检查项目结构', '准备修改手机端显示逻辑']);
+  assert.deepEqual(reasoningSteps.map(item => item.turnId), ['turn-running', 'turn-running']);
+  assert.equal(status.turns.length, 1);
+  assert.equal(status.turns[0].turnId, 'turn-running');
+  assert.deepEqual(status.turns[0].steps.filter(item => item.kind === 'commentary').map(item => item.text), ['我会检查当前任务上下文。']);
+  assert.equal(status.turns[0].steps.filter(item => item.kind === 'commentary').length, 1);
+  assert.deepEqual(status.turns[0].steps.filter(item => item.kind === 'tools').map(item => item.text), ['已运行 3 条命令']);
+  assert.deepEqual(status.turns[0].steps.filter(item => item.kind === 'reasoning').map(item => item.text), ['正在检查项目结构', '准备修改手机端显示逻辑']);
+});
+
+test('指定 since 后仍保留当前轮次的公开过程归属', () => {
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const status = reader.parseStatus({
+    threadId: 'ffffffff-aaaa-bbbb-cccc-dddddddddddd',
+    since: '2026-06-08T10:12:03.500Z',
+  });
+
+  assert.equal(status.status, 'running');
+  assert.equal(status.turns.length, 1);
+  assert.equal(status.turns[0].turnId, 'turn-running');
+  assert.deepEqual(status.turns[0].steps.filter(item => item.kind === 'commentary').map(item => item.text), ['我会检查当前任务上下文。']);
+  assert.deepEqual(status.turns[0].steps.filter(item => item.kind === 'tools').map(item => item.text), ['已运行 3 条命令']);
+  assert.deepEqual(status.turns[0].steps.filter(item => item.kind === 'reasoning').map(item => item.text), ['正在检查项目结构', '准备修改手机端显示逻辑']);
+  assert.deepEqual(status.steps.filter(item => item.kind === 'reasoning').map(item => item.text), ['准备修改手机端显示逻辑']);
+  assert.deepEqual(status.steps.filter(item => item.kind === 'tools').map(item => item.text), []);
 });
 
 test('打开线程列表只扫描一次会话目录', () => {
@@ -175,6 +219,7 @@ test('解析线程历史', () => {
   assert.deepEqual(history.messages.map(item => item.role), ['user', 'assistant']);
   assert.equal(history.messages[0].text, '你好 Codex');
   assert.equal(history.messages[1].text, '你好，我在 Windows 上。');
+  assert.equal(history.messages[1].turnId, 'turn-1');
 });
 
 test('解析线程历史时保留 task_complete 中的最终回复', () => {
@@ -187,6 +232,7 @@ test('解析线程历史时保留 task_complete 中的最终回复', () => {
   assert.equal(history.available, true);
   assert.deepEqual(history.messages.map(item => item.role), ['user', 'assistant']);
   assert.equal(history.messages[1].text, '这是完成事件里的最终回复。');
+  assert.equal(history.messages[1].turnId, 'turn-complete-only');
 });
 
 test('解析线程控制目标元数据', () => {

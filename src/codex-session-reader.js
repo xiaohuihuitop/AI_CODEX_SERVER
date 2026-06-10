@@ -50,15 +50,23 @@ function stripCodexUiDirectives(text) {
 
   for (const line of String(text || '').split(/\r?\n/)) {
     const trimmed = line.trim();
-    if (/^#\s+In app browser:\s*$/i.test(trimmed)) {
+    const isBrowserHeader = /^(?:#+\s*)?In app browser:\s*$/i.test(trimmed);
+    const isRequestHeader = /^(?:#+\s*)?My request for Codex:\s*$/i.test(trimmed);
+    const isBrowserMeta = /^[-*]\s*(?:The user has the in-app browser open\.?|Current URL:.*)$/i.test(trimmed);
+
+    if (isBrowserHeader) {
       inBrowserContext = true;
       continue;
     }
-    if (/^##\s+My request for Codex:\s*$/i.test(trimmed)) {
+    if (isRequestHeader) {
       inBrowserContext = false;
       continue;
     }
-    if (inBrowserContext) continue;
+    if (inBrowserContext) {
+      if (!trimmed || isBrowserMeta) continue;
+      inBrowserContext = false;
+    }
+    if (isBrowserMeta) continue;
     lines.push(line);
   }
 
@@ -99,6 +107,28 @@ function reasoningText(payload) {
     .filter(Boolean)
     .join('\n')
     .trim());
+}
+
+/**
+ * 提取 Codex commentary 阶段的公开过程文本。
+ *
+ * @param {object} payload Codex 响应 payload。
+ * @returns {string} 过程文本。
+ */
+function commentaryText(payload) {
+  if (!payload || typeof payload !== 'object') return '';
+  if (typeof payload.message === 'string') return stripCodexUiDirectives(payload.message);
+  return messageText(payload.content);
+}
+
+/**
+ * 生成工具调用数量文本。
+ *
+ * @param {number} count 已运行命令数量。
+ * @returns {string} 手机端显示文本。
+ */
+function commandCountText(count) {
+  return `已运行 ${count} 条命令`;
 }
 
 /**
@@ -298,21 +328,26 @@ class CodexSessionReader {
       return { ok: true, available: false, threadId, sessionFile: '', messages: [] };
     }
     const messages = [];
+    let currentTurnId = '';
     for (const item of readJsonl(file)) {
       const payload = item.payload || {};
       if (item.type === 'event_msg' && payload.type === 'user_message') {
         const text = stripCodexUiDirectives(payload.message);
         if (text) messages.push({ role: 'user', label: '你', text, timestamp: item.timestamp || '' });
       }
+      if (item.type === 'event_msg' && payload.type === 'task_started') {
+        currentTurnId = String(payload.turn_id || payload.turnId || currentTurnId || '').trim();
+      }
       if (item.type === 'response_item' && payload.type === 'message' && payload.role === 'assistant' && payload.phase === 'final_answer') {
         const text = messageText(payload.content);
-        if (text) messages.push({ role: 'assistant', label: 'Codex', text, timestamp: item.timestamp || '' });
+        if (text) messages.push({ role: 'assistant', label: 'Codex', text, timestamp: item.timestamp || '', turnId: currentTurnId });
       }
       if (item.type === 'event_msg' && payload.type === 'task_complete') {
+        currentTurnId = String(payload.turn_id || payload.turnId || currentTurnId || '').trim();
         const text = stripCodexUiDirectives(payload.last_agent_message);
         const last = messages[messages.length - 1];
         if (text && !(last && last.role === 'assistant' && last.text === text)) {
-          messages.push({ role: 'assistant', label: 'Codex', text, timestamp: item.timestamp || '' });
+          messages.push({ role: 'assistant', label: 'Codex', text, timestamp: item.timestamp || '', turnId: currentTurnId });
         }
       }
     }
@@ -363,7 +398,7 @@ class CodexSessionReader {
       ? this.findFileByThreadId(threadId)
       : this.sessionFiles().sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0]);
     if (!file) {
-      return { ok: true, available: false, active: false, status: 'missing', threadId, sessionFile: '', preview: '', final: '', steps: [] };
+      return { ok: true, available: false, active: false, status: 'missing', threadId, sessionFile: '', preview: '', final: '', steps: [], turns: [] };
     }
 
     let active = false;
@@ -372,40 +407,172 @@ class CodexSessionReader {
     let completedAt = '';
     let final = '';
     const steps = [];
+    const turnsById = new Map();
+    const seenProcessSteps = new Set();
+    const recentCommentarySteps = new Map();
+    const commandCountsByTurn = {};
+    let currentTurnId = '';
+    let latestTurnId = '';
+    const included = item => Number.isNaN(sinceMs) || Date.parse(item.timestamp || '') >= sinceMs;
+    const ensureTurn = turnId => {
+      if (!turnId) return null;
+      if (!turnsById.has(turnId)) {
+        turnsById.set(turnId, {
+          turnId,
+          status: 'running',
+          steps: [],
+          final: '',
+          startedAt: '',
+          completedAt: '',
+        });
+      }
+      latestTurnId = turnId || latestTurnId;
+      return turnsById.get(turnId);
+    };
+    const pushOrReplace = (rows, enriched, replace) => {
+      if (!replace) {
+        rows.push(enriched);
+        return;
+      }
+      const index = rows.findIndex(row => row.turnId === enriched.turnId && row.kind === enriched.kind);
+      if (index === -1) {
+        rows.push(enriched);
+      } else {
+        rows[index] = enriched;
+      }
+    };
+    const addStep = (step, options = {}) => {
+      const enriched = Object.assign({ turnId: currentTurnId }, step);
+      const dedupeKey = enriched.kind === 'commentary'
+        ? `${enriched.turnId}\u0000${enriched.kind}\u0000${enriched.time}\u0000${enriched.text}`
+        : '';
+      if (dedupeKey && seenProcessSteps.has(dedupeKey)) return;
+      if (dedupeKey) seenProcessSteps.add(dedupeKey);
+      if (enriched.kind === 'commentary') {
+        const recentKey = `${enriched.turnId}\u0000${enriched.kind}\u0000${enriched.text}`;
+        const currentMs = Date.parse(enriched.time || '');
+        const previousMs = recentCommentarySteps.get(recentKey);
+        if (!Number.isNaN(currentMs) && previousMs !== undefined && Math.abs(currentMs - previousMs) <= 1500) return;
+        if (!Number.isNaN(currentMs)) recentCommentarySteps.set(recentKey, currentMs);
+      }
+      if (options.visible !== false) pushOrReplace(steps, enriched, options.replace);
+      if (!enriched.turnId) return;
+      const turn = ensureTurn(enriched.turnId);
+      pushOrReplace(turn.steps, enriched, options.replace);
+      if (enriched.kind === 'start') turn.startedAt = enriched.time || turn.startedAt;
+      if (enriched.kind === 'final') turn.final = enriched.text || turn.final;
+      if (enriched.kind === 'complete') {
+        turn.status = 'complete';
+        turn.completedAt = enriched.time || turn.completedAt;
+      }
+    };
     for (const item of readJsonl(file)) {
-      if (!Number.isNaN(sinceMs) && Date.parse(item.timestamp || '') < sinceMs) continue;
       const payload = item.payload || {};
+      const visible = included(item);
+      if (item.type === 'turn_context') {
+        currentTurnId = String(payload.turn_id || payload.turnId || currentTurnId || '').trim();
+        ensureTurn(currentTurnId);
+      }
       if (item.type === 'event_msg' && payload.type === 'task_started') {
-        active = true;
-        completed = false;
-        startedAt = item.timestamp || startedAt;
-        steps.push({ kind: 'start', label: '开始', text: '开始处理这条消息', time: item.timestamp || '' });
+        currentTurnId = String(payload.turn_id || payload.turnId || currentTurnId || '').trim();
+        if (visible) {
+          active = true;
+          completed = false;
+          startedAt = item.timestamp || startedAt;
+        }
+        addStep({ kind: 'start', label: '开始', text: '开始处理这条消息', time: item.timestamp || '' }, { visible });
       }
       if ((item.type === 'event_msg' && payload.type === 'agent_reasoning') || (item.type === 'response_item' && payload.type === 'reasoning')) {
         const text = reasoningText(payload);
-        if (text) steps.push({ kind: 'reasoning', label: '思考', text, time: item.timestamp || '' });
+        if (text) {
+          if (visible) {
+            active = true;
+            completed = false;
+            startedAt = startedAt || item.timestamp || '';
+          }
+          addStep({ kind: 'reasoning', label: '思考', text, time: item.timestamp || '' }, { visible });
+        }
+      }
+      if (item.type === 'event_msg' && payload.type === 'agent_message') {
+        const text = commentaryText(payload);
+        if (text) {
+          if (visible) {
+            if (payload.phase === 'final_answer') {
+              final = text;
+              active = false;
+              completed = true;
+              completedAt = item.timestamp || completedAt;
+            } else {
+              active = true;
+              completed = false;
+              startedAt = startedAt || item.timestamp || '';
+            }
+          }
+          addStep({
+            kind: payload.phase === 'final_answer' ? 'final' : 'commentary',
+            label: payload.phase === 'final_answer' ? '回复' : '过程',
+            text,
+            time: item.timestamp || '',
+          }, { visible });
+        }
       }
       if (item.type === 'response_item' && payload.type === 'message' && payload.role === 'assistant') {
         const text = messageText(payload.content);
         if (text) {
-          if (payload.phase === 'final_answer') {
-            final = text;
-            active = false;
-            completed = true;
-            completedAt = item.timestamp || completedAt;
+          if (visible) {
+            if (payload.phase === 'final_answer') {
+              final = text;
+              active = false;
+              completed = true;
+              completedAt = item.timestamp || completedAt;
+            } else {
+              active = true;
+              completed = false;
+            }
           }
-          steps.push({ kind: payload.phase === 'final_answer' ? 'final' : 'assistant', label: '回复', text, time: item.timestamp || '' });
+          addStep({
+            kind: payload.phase === 'final_answer' ? 'final' : payload.phase === 'commentary' ? 'commentary' : 'assistant',
+            label: payload.phase === 'commentary' ? '过程' : '回复',
+            text,
+            time: item.timestamp || '',
+          }, { visible });
+        }
+      }
+      if (item.type === 'response_item' && payload.type === 'function_call') {
+        if (currentTurnId) {
+          commandCountsByTurn[currentTurnId] = (commandCountsByTurn[currentTurnId] || 0) + 1;
+          if (visible) {
+            active = true;
+            completed = false;
+            startedAt = startedAt || item.timestamp || '';
+          }
+          addStep({
+            kind: 'tools',
+            label: '命令',
+            text: commandCountText(commandCountsByTurn[currentTurnId]),
+            time: item.timestamp || '',
+          }, { visible, replace: true });
         }
       }
       if (item.type === 'event_msg' && payload.type === 'task_complete') {
-        active = false;
-        completed = true;
-        completedAt = item.timestamp || completedAt;
-        final = stripCodexUiDirectives(payload.last_agent_message) || final;
-        steps.push({ kind: 'complete', label: '完成', text: '回复完成', time: item.timestamp || '' });
+        currentTurnId = String(payload.turn_id || payload.turnId || currentTurnId || '').trim();
+        if (visible) {
+          active = false;
+          completed = true;
+          completedAt = item.timestamp || completedAt;
+          final = stripCodexUiDirectives(payload.last_agent_message) || final;
+        }
+        addStep({ kind: 'complete', label: '完成', text: '回复完成', time: item.timestamp || '' }, { visible });
       }
     }
     const parsedThreadId = threadIdFromSessionFile(file);
+    const turns = Array.from(turnsById.values()).map(turn => {
+      const hasComplete = turn.steps.some(step => step.kind === 'complete' || step.kind === 'final');
+      return Object.assign({}, turn, {
+        status: hasComplete ? 'complete' : active && turn.turnId === latestTurnId ? 'running' : 'idle',
+        steps: turn.steps.slice(-30),
+      });
+    });
     return {
       ok: true,
       available: true,
@@ -418,6 +585,7 @@ class CodexSessionReader {
       preview: final || (active ? 'Codex 正在回复...' : '暂无可显示回复。'),
       final: completed ? final : '',
       steps: steps.slice(-30),
+      turns: turns.slice(-10),
     };
   }
 }

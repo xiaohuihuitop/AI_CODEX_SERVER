@@ -16,12 +16,13 @@ function buildUrl(serverUrl, apiPath) {
  *
  * @param {{serverUrl: string, token: string}} config 连接配置。
  * @param {string} apiPath API 路径。
- * @param {{method?: string, data?: object}} options 请求选项。
+ * @param {{method?: string, data?: object, registerTask?: Function}} options 请求选项。
  * @returns {Promise<object>} JSON 响应。
  */
 export function requestJson(config, apiPath, options = {}) {
   return new Promise((resolve, reject) => {
-    uni.request({
+    let task = null;
+    task = uni.request({
       url: buildUrl(config.serverUrl, apiPath),
       method: options.method || 'GET',
       data: options.data,
@@ -40,7 +41,11 @@ export function requestJson(config, apiPath, options = {}) {
       fail(error) {
         reject(new Error(error.errMsg || '网络请求失败'));
       },
+      complete() {
+        if (typeof options.unregisterTask === 'function') options.unregisterTask(task);
+      },
     });
+    if (typeof options.registerTask === 'function') options.registerTask(task);
   });
 }
 
@@ -50,8 +55,8 @@ export function requestJson(config, apiPath, options = {}) {
  * @param {{serverUrl: string, token: string}} config 连接配置。
  * @returns {Promise<object>} 状态响应。
  */
-export function getHealth(config) {
-  return requestJson(config, '/codex/health');
+export function getHealth(config, options = {}) {
+  return requestJson(config, '/codex/health', options);
 }
 
 /**
@@ -60,8 +65,8 @@ export function getHealth(config) {
  * @param {{serverUrl: string, token: string}} config 连接配置。
  * @returns {Promise<object>} 对话列表响应。
  */
-export function getThreads(config) {
-  return requestJson(config, '/codex/threads?limit=120');
+export function getThreads(config, options = {}) {
+  return requestJson(config, '/codex/threads?limit=120', options);
 }
 
 /**
@@ -71,8 +76,8 @@ export function getThreads(config) {
  * @param {string} threadId 对话 ID。
  * @returns {Promise<object>} 历史响应。
  */
-export function getHistory(config, threadId) {
-  return requestJson(config, `/codex/history?thread=${encodeURIComponent(threadId)}&limit=120`);
+export function getHistory(config, threadId, options = {}) {
+  return requestJson(config, `/codex/history?thread=${encodeURIComponent(threadId)}&limit=120`, options);
 }
 
 /**
@@ -82,12 +87,12 @@ export function getHistory(config, threadId) {
  * @param {{threadId: string, since?: string}} watch 状态查询参数。
  * @returns {Promise<object>} 状态响应。
  */
-export function getStatus(config, watch) {
+export function getStatus(config, watch, options = {}) {
   const params = [
     `thread=${encodeURIComponent(watch.threadId || '')}`,
     `since=${encodeURIComponent(watch.since || '')}`,
   ].join('&');
-  return requestJson(config, `/codex/status?${params}`);
+  return requestJson(config, `/codex/status?${params}`, options);
 }
 
 /**
@@ -97,13 +102,15 @@ export function getStatus(config, watch) {
  * @param {{threadId: string, text: string}} payload 消息负载。
  * @returns {Promise<object>} 发送响应。
  */
-export function sendMessage(config, payload) {
+export function sendMessage(config, payload, options = {}) {
   return requestJson(config, '/send', {
     method: 'POST',
     data: {
       threadId: payload.threadId,
       text: payload.text,
     },
+    registerTask: options.registerTask,
+    unregisterTask: options.unregisterTask,
   });
 }
 
@@ -113,6 +120,10 @@ export function sendMessage(config, payload) {
  * @param {{serverUrl: string, token: string}} config 连接配置。
  * @returns {Promise<object>} 停止响应。
  */
-export function stopCodex(config) {
-  return requestJson(config, '/codex/stop', { method: 'POST' });
+export function stopCodex(config, options = {}) {
+  return requestJson(config, '/codex/stop', {
+    method: 'POST',
+    registerTask: options.registerTask,
+    unregisterTask: options.unregisterTask,
+  });
 }

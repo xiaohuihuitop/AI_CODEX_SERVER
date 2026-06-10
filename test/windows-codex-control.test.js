@@ -210,7 +210,10 @@ test('手机端消息使用本地 Markdown 渲染器', () => {
   const messageFunction = html.match(/function message\(role, text, options = \{\}\) \{([\s\S]*?)\n    \}/)?.[1] || '';
 
   assert.match(html, /<script src="\/markdown\.js(?:\?v=\d+)?"><\/script>/);
-  assert.match(messageFunction, /CodexMarkdown\.renderMarkdownToHtml/);
+  assert.match(html, /function stripCodexUiDirectives\(text\)/);
+  assert.match(html, /function renderCleanMarkdown\(text\)/);
+  assert.match(html, /CodexMarkdown\.renderMarkdownToHtml\(stripCodexUiDirectives\(text\)\)/);
+  assert.match(messageFunction, /renderCleanMarkdown\(text\)/);
   assert.equal(messageFunction.includes('div.textContent = text'), false);
 });
 
@@ -220,7 +223,7 @@ test('手机端自动刷新保留滚动位置', () => {
   assert.match(html, /id="refresh"[^>]+title="重新读取对话列表和当前对话历史"[^>]*>刷新<\/button>/);
   assert.match(html, /function captureScroll/);
   assert.match(html, /function restoreScroll/);
-  assert.match(html, /message\(row\.role, row\.text \|\| '', \{ scrollToBottom: false \}\)/);
+  assert.match(html, /message\(row\.role, row\.text \|\| '', \{ scrollToBottom: false, turnId: row\.turnId \|\| '' \}\)/);
   assert.match(html, /await loadHistory\(data, \{ preserveScroll: true \}\)/);
   assert.match(html, /await loadHistory\(null, \{ preserveScroll: true \}\)/);
 });
@@ -254,8 +257,13 @@ test('手机端运行中展开处理过程，完成后折叠', () => {
 
   assert.match(html, /className = 'process-card'/);
   assert.match(html, /function renderProcessPanel/);
-  assert.match(html, /processSteps\(status\)/);
-  assert.match(html, /details\.open = status\.status !== 'complete'/);
+  assert.match(html, /function processTurns\(status\)/);
+  assert.match(html, /details\.open = turn\.status === 'running'/);
+  assert.match(html, /function formatElapsedTime\(startedAt, completedAt\)/);
+  assert.match(html, /function processSummaryText\(turn\)/);
+  assert.match(html, /processSummaryText\(turn\)/);
+  assert.match(html, /findAssistantMessageByTurn\(turn\.turnId\)/);
+  assert.match(html, /bindPendingAssistantTurn\(data\)/);
   assert.match(html, /处理过程已折叠/);
   assert.match(html, /renderProcessPanel\(data\)/);
   assert.match(html, /await loadHistory\(data, \{ preserveScroll: true \}\)/);
@@ -263,6 +271,12 @@ test('手机端运行中展开处理过程，完成后折叠', () => {
   assert.match(html, /setInterval\(\(\) => pollStatus\(\)/);
   assert.match(html, /if \(!requestedThreadId\) return/);
   assert.match(html, /data\.threadId !== selectedThreadId/);
+});
+
+test('网页端线程选择控件使用底部直线样式', () => {
+  const html = fs.readFileSync(indexPath, 'utf8');
+
+  assert.match(html, /select\s*\{[\s\S]*border-bottom:\s*1px solid #9ca3af;[\s\S]*border-radius:\s*0;[\s\S]*background:\s*transparent;/);
 });
 
 test('手机端线程列表请求复用同一个进行中的请求', () => {

@@ -5,6 +5,44 @@ const SAFE_PROTOCOLS = {
 };
 
 /**
+ * AI:过滤 Codex Desktop 注入的浏览器上下文和客户端指令。
+ *
+ * @param {string} text 原始消息文本。
+ * @returns {string} 可展示文本。
+ */
+export function stripCodexUiDirectives(text) {
+  const lines = [];
+  let inBrowserContext = false;
+
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const trimmed = line.trim();
+    const isBrowserHeader = /^(?:#+\s*)?In app browser:\s*$/i.test(trimmed);
+    const isRequestHeader = /^(?:#+\s*)?My request for Codex:\s*$/i.test(trimmed);
+    const isBrowserMeta = /^[-*]\s*(?:The user has the in-app browser open\.?|Current URL:.*)$/i.test(trimmed);
+
+    if (isBrowserHeader) {
+      inBrowserContext = true;
+      continue;
+    }
+    if (isRequestHeader) {
+      inBrowserContext = false;
+      continue;
+    }
+    if (inBrowserContext) {
+      if (!trimmed || isBrowserMeta) continue;
+      inBrowserContext = false;
+    }
+    if (isBrowserMeta) continue;
+    lines.push(line);
+  }
+
+  return lines
+    .filter(line => !/^::[a-z][a-z-]*\{.*\}\s*$/i.test(line.trim()))
+    .join('\n')
+    .trim();
+}
+
+/**
  * AI:转义 HTML 文本，避免 Markdown 原文注入页面。
  *
  * @param {string} value 原始文本。
@@ -84,7 +122,7 @@ function splitTableRow(line) {
  * @returns {string} HTML 字符串。
  */
 export function renderMarkdownToHtml(markdown) {
-  const lines = String(markdown || '').replace(/\r\n?/g, '\n').split('\n');
+  const lines = stripCodexUiDirectives(markdown).replace(/\r\n?/g, '\n').split('\n');
   const html = [];
   let index = 0;
 

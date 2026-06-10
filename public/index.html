@@ -44,10 +44,11 @@
       min-width: 0;
       width: 100%;
       height: 38px;
-      border: 1px solid #c7ccd3;
-      border-radius: 6px;
-      background: #fff;
-      padding: 0 10px;
+      border: 0;
+      border-bottom: 1px solid #9ca3af;
+      border-radius: 0;
+      background: transparent;
+      padding: 0;
       color: var(--text);
       font: inherit;
     }
@@ -376,6 +377,54 @@
     }
 
     /**
+     * AI:过滤 Codex Desktop 注入的浏览器上下文和客户端指令。
+     *
+     * @param {string} text 原始消息文本。
+     * @returns {string} 可展示文本。
+     */
+    function stripCodexUiDirectives(text) {
+      const lines = [];
+      let inBrowserContext = false;
+
+      for (const line of String(text || '').split(/\r?\n/)) {
+        const trimmed = line.trim();
+        const isBrowserHeader = /^(?:#+\s*)?In app browser:\s*$/i.test(trimmed);
+        const isRequestHeader = /^(?:#+\s*)?My request for Codex:\s*$/i.test(trimmed);
+        const isBrowserMeta = /^[-*]\s*(?:The user has the in-app browser open\.?|Current URL:.*)$/i.test(trimmed);
+
+        if (isBrowserHeader) {
+          inBrowserContext = true;
+          continue;
+        }
+        if (isRequestHeader) {
+          inBrowserContext = false;
+          continue;
+        }
+        if (inBrowserContext) {
+          if (!trimmed || isBrowserMeta) continue;
+          inBrowserContext = false;
+        }
+        if (isBrowserMeta) continue;
+        lines.push(line);
+      }
+
+      return lines
+        .filter(line => !/^::[a-z][a-z-]*\{.*\}\s*$/i.test(line.trim()))
+        .join('\n')
+        .trim();
+    }
+
+    /**
+     * AI:把 Markdown 文本清洗后渲染为 HTML。
+     *
+     * @param {string} text Markdown 文本。
+     * @returns {string} HTML 字符串。
+     */
+    function renderCleanMarkdown(text) {
+      return CodexMarkdown.renderMarkdownToHtml(stripCodexUiDirectives(text));
+    }
+
+    /**
      * 更新手机端到云端 Agent 的连接状态。
      *
      * @param {{online?: boolean, offline?: boolean, message?: string}} state 连接状态。
@@ -420,26 +469,128 @@
     function message(role, text, options = {}) {
       const div = document.createElement('div');
       div.className = `message ${role}`;
-      div.innerHTML = CodexMarkdown.renderMarkdownToHtml(text);
+      if (options.turnId) div.dataset.turnId = options.turnId;
+      if (options.pending) div.dataset.pending = 'true';
+      div.innerHTML = renderCleanMarkdown(text);
       messagesEl.appendChild(div);
       if (options.scrollToBottom !== false) scrollToBottom();
       return div;
     }
 
     /**
-     * 提取可显示的处理过程步骤。
+     * 提取每轮可显示的处理过程。
      *
      * @param {object} status Codex 状态数据。
-     * @returns {Array<object>} 过程步骤。
+     * @returns {Array<object>} 过程轮次。
      */
-    function processSteps(status) {
-      return (status?.steps || []).filter(step => {
-        return step?.text && step.kind !== 'final' && step.kind !== 'complete';
-      });
+    function processTurns(status) {
+      return (status?.turns || [])
+        .map(turn => ({
+          turnId: turn?.turnId || '',
+          status: turn?.status || '',
+          steps: (turn?.steps || []).filter(step => step?.text && step.kind !== 'final' && step.kind !== 'complete'),
+          durationText: formatElapsedTime(turn?.startedAt || '', turn?.completedAt || ''),
+        }))
+        .filter(turn => turn.turnId && turn.steps.length);
     }
 
     /**
-     * 渲染处理过程面板，运行中展开，完成后折叠。
+     * AI:格式化当前轮次已处理时间。
+     *
+     * @param {string} startedAt 开始时间。
+     * @param {string} completedAt 完成时间。
+     * @returns {string} 已处理时间文本。
+     */
+    function formatElapsedTime(startedAt, completedAt) {
+      const start = Date.parse(startedAt || '');
+      if (Number.isNaN(start)) return '';
+      const end = Date.parse(completedAt || '') || Date.now();
+      const totalSeconds = Math.max(0, Math.floor((end - start) / 1000));
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      if (minutes > 0) return `已处理 ${minutes}m ${seconds}s`;
+      return `已处理 ${seconds}s`;
+    }
+
+    /**
+     * AI:生成处理过程标题。
+     *
+     * @param {object} turn 当前轮次。
+     * @returns {string} 标题文本。
+     */
+    function processSummaryText(turn) {
+      const count = turn?.steps?.length || 0;
+      const prefix = turn.status === 'running' ? '处理过程' : '处理过程已折叠';
+      const duration = turn.durationText ? ` · ${turn.durationText}` : '';
+      return `${prefix}${duration}（${count}）`;
+    }
+
+    /**
+     * AI:把发送后的临时回复绑定到当前运行轮次。
+     *
+     * @param {object} status Codex 状态数据。
+     * @returns {void}
+     */
+    function bindPendingAssistantTurn(status) {
+      const turns = processTurns(status);
+      let runningTurn = null;
+      for (const turn of turns) {
+        if (turn.status === 'running') runningTurn = turn;
+      }
+      if (!runningTurn && status?.active && turns.length) runningTurn = turns[turns.length - 1];
+      if (!runningTurn) return;
+      const pendingRows = messagesEl.querySelectorAll('.message.assistant[data-pending="true"]');
+      const pending = pendingRows[pendingRows.length - 1];
+      if (pending) pending.dataset.turnId = runningTurn.turnId;
+    }
+
+    /**
+     * AI:查找指定轮次对应的最终回复元素。
+     *
+     * @param {string} turnId 轮次 ID。
+     * @returns {Element|null} 最终回复元素。
+     */
+    function findAssistantMessageByTurn(turnId) {
+      for (const item of messagesEl.querySelectorAll('.message.assistant')) {
+        if (item.dataset.turnId === turnId) return item;
+      }
+      return null;
+    }
+
+    /**
+     * AI:创建单轮处理过程面板。
+     *
+     * @param {object} turn 处理轮次。
+     * @returns {HTMLElement} 处理过程面板。
+     */
+    function createProcessCard(turn) {
+      const card = document.createElement('section');
+      card.className = 'process-card';
+      card.dataset.turnId = turn.turnId;
+      const details = document.createElement('details');
+      details.open = turn.status === 'running';
+      const summary = document.createElement('summary');
+      summary.textContent = processSummaryText(turn);
+      details.appendChild(summary);
+
+      for (const step of turn.steps) {
+        const row = document.createElement('div');
+        row.className = 'process-step';
+        const label = document.createElement('strong');
+        label.textContent = step.label || '过程';
+        row.appendChild(label);
+        const body = document.createElement('div');
+        body.innerHTML = renderCleanMarkdown(step.text || '');
+        row.appendChild(body);
+        details.appendChild(row);
+      }
+
+      card.appendChild(details);
+      return card;
+    }
+
+    /**
+     * 渲染处理过程面板，按轮次运行中展开，完成后折叠。
      *
      * @param {object} status Codex 状态数据。
      * @returns {void}
@@ -447,36 +598,18 @@
     function renderProcessPanel(status, options = {}) {
       const scroll = options.preserveScroll === false ? null : captureScroll();
       document.querySelectorAll('.process-card').forEach(item => item.remove());
-      const steps = processSteps(status);
-      if (!steps.length) {
+      const turns = processTurns(status);
+      if (!turns.length) {
         restoreScroll(scroll);
         return;
       }
 
-      const card = document.createElement('section');
-      card.className = 'process-card';
-      const details = document.createElement('details');
-      details.open = status.status !== 'complete';
-      const summary = document.createElement('summary');
-      summary.textContent = status.status === 'complete' ? `处理过程已折叠（${steps.length}）` : `处理过程（${steps.length}）`;
-      details.appendChild(summary);
-
-      for (const step of steps) {
-        const row = document.createElement('div');
-        row.className = 'process-step';
-        const label = document.createElement('strong');
-        label.textContent = step.label || '过程';
-        row.appendChild(label);
-        const body = document.createElement('div');
-        body.innerHTML = CodexMarkdown.renderMarkdownToHtml(step.text || '');
-        row.appendChild(body);
-        details.appendChild(row);
+      for (const turn of turns) {
+        const card = createProcessCard(turn);
+        const assistant = findAssistantMessageByTurn(turn.turnId);
+        if (assistant) messagesEl.insertBefore(card, assistant);
+        else messagesEl.appendChild(card);
       }
-
-      card.appendChild(details);
-      const lastAssistant = [...messagesEl.querySelectorAll('.message.assistant')].at(-1);
-      if (status.status === 'complete' && lastAssistant) messagesEl.insertBefore(card, lastAssistant);
-      else messagesEl.appendChild(card);
       if (options.scrollToBottom) scrollToBottom();
       else restoreScroll(scroll);
     }
@@ -625,10 +758,11 @@
       const res = await api(`/codex/history?thread=${encodeURIComponent(selectedThreadId)}&limit=120&token=${encodeURIComponent(token)}`);
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.message || '读取历史失败');
-      for (const row of data.messages || []) message(row.role, row.text || '', { scrollToBottom: false });
+      for (const row of data.messages || []) message(row.role, row.text || '', { scrollToBottom: false, turnId: row.turnId || '' });
       if (data.available) {
         const snapshot = statusData || await fetchStatus({ threadId: selectedThreadId });
         currentThreadStatus = snapshot;
+        bindPendingAssistantTurn(snapshot);
         updateThreadStatus(snapshot);
         renderProcessPanel(snapshot, { preserveScroll: false });
       }
@@ -663,6 +797,7 @@
       const data = await fetchStatus({ ...watch, threadId: requestedThreadId });
       if (requestedThreadId !== selectedThreadId || data.threadId !== selectedThreadId) return;
       currentThreadStatus = data;
+      bindPendingAssistantTurn(data);
       updateThreadStatus(data);
       renderProcessPanel(data);
       if (data.status === 'complete' || data.status === 'error') {
@@ -721,7 +856,7 @@
       if (!text.trim()) return;
       textEl.value = '';
       message('user', text);
-      const pending = message('assistant', '已发送，等待 Codex 回复...');
+      const pending = message('assistant', '已发送，等待 Codex 回复...', { pending: true });
       setRunning(true);
       historyReloadedForCompletion = false;
       try {

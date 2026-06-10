@@ -1,5 +1,11 @@
 {"timestamp":"2026-06-08T10:12:00.000Z","type":"session_meta","payload":{"cwd":"C:\\Users\\admin\\Desktop\\demo"}}
 {"timestamp":"2026-06-08T10:12:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"运行中的线程"}}
 {"timestamp":"2026-06-08T10:12:02.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-running"}}
+{"timestamp":"2026-06-08T10:12:02.050Z","type":"turn_context","payload":{"turn_id":"turn-running"}}
+{"timestamp":"2026-06-08T10:12:02.100Z","type":"event_msg","payload":{"type":"agent_message","message":"我会检查当前任务上下文。","phase":"commentary"}}
+{"timestamp":"2026-06-08T10:12:02.100Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"我会检查当前任务上下文。"}],"phase":"commentary"}}
+{"timestamp":"2026-06-08T10:12:02.200Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"Get-ChildItem\"}","call_id":"call_1"}}
+{"timestamp":"2026-06-08T10:12:02.300Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"rg test\"}","call_id":"call_2"}}
+{"timestamp":"2026-06-08T10:12:02.400Z","type":"response_item","payload":{"type":"function_call","name":"shell_command","arguments":"{\"command\":\"npm test\"}","call_id":"call_3"}}
 {"timestamp":"2026-06-08T10:12:03.000Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"正在检查项目结构"}}
 {"timestamp":"2026-06-08T10:12:04.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"准备修改手机端显示逻辑"}],"content":null,"encrypted_content":"hidden"}}

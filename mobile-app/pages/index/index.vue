@@ -54,35 +54,27 @@
     </view>
 
     <scroll-view class="messages" scroll-y :scroll-into-view="scrollTarget">
-      <view
-        v-for="(row, index) in messagesBeforeProcess"
-        :key="row.id || `before-${row.role}-${index}`"
-        class="message"
-        :class="row.role === 'user' ? 'message-user' : 'message-assistant'"
-      >
-        <rich-text class="markdown" :nodes="renderMarkdown(row.text || '')" />
-      </view>
-
-      <view v-if="processSteps.length" class="process-card">
-        <view class="process-title" @click="toggleProcess">
-          <text>{{ processOpen ? `处理过程（${processSteps.length}）` : `处理过程已折叠（${processSteps.length}）` }}</text>
-          <text class="process-action">{{ processOpen ? '收起' : '展开' }}</text>
+      <view v-for="item in timelineItems" :key="item.key">
+        <view
+          v-if="item.type === 'message'"
+          class="message"
+          :class="item.row.role === 'user' ? 'message-user' : 'message-assistant'"
+        >
+          <rich-text class="markdown" :nodes="renderMarkdown(item.row.text || '')" />
         </view>
-        <view v-if="processOpen" class="process-body">
-          <view v-for="(step, index) in processSteps" :key="`${step.kind || 'step'}-${index}`" class="process-step">
-            <text class="process-label">{{ step.label || '过程' }}</text>
-            <rich-text class="markdown muted-markdown" :nodes="renderMarkdown(step.text || '')" />
+
+        <view v-else-if="item.type === 'process'" class="process-card">
+          <view class="process-title" @click="toggleProcess(item.turn.turnId)">
+            <text>{{ processTitle(item.turn, processOpenState[item.turn.turnId]) }}</text>
+            <text class="process-action">{{ processOpenState[item.turn.turnId] ? '收起' : '展开' }}</text>
+          </view>
+          <view v-if="processOpenState[item.turn.turnId]" class="process-body">
+            <view v-for="(step, index) in item.turn.steps" :key="`${item.turn.turnId}-${step.kind || 'step'}-${index}`" class="process-step">
+              <text class="process-label">{{ step.label || '过程' }}</text>
+              <rich-text class="markdown muted-markdown" :nodes="renderMarkdown(step.text || '')" />
+            </view>
           </view>
         </view>
-      </view>
-
-      <view
-        v-for="(row, index) in messagesAfterProcess"
-        :key="row.id || `after-${row.role}-${index}`"
-        class="message"
-        :class="row.role === 'user' ? 'message-user' : 'message-assistant'"
-      >
-        <rich-text class="markdown" :nodes="renderMarkdown(row.text || '')" />
       </view>
 
       <view id="bottomAnchor" class="bottom-anchor"></view>
@@ -98,7 +90,7 @@
 
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
-import { onBackPress, onShow } from '@dcloudio/uni-app';
+import { onBackPress, onHide, onShow, onUnload } from '@dcloudio/uni-app';
 import { getHealth, getHistory, getStatus, getThreads, sendMessage, stopCodex } from '../../utils/api';
 import { loadConfig, loadSelection, saveSelection } from '../../utils/config';
 import { renderMarkdownToHtml } from '../../utils/markdown';
@@ -116,7 +108,7 @@ const currentThreadStatus = ref(null);
 const pendingWatch = ref(null);
 const historyReloadedForCompletion = ref(false);
 const followBottom = ref(false);
-const processOpen = ref(false);
+const processOpenState = ref({});
 const loading = ref(false);
 const sending = ref(false);
 const threadPopupOpen = ref(false);
@@ -125,6 +117,11 @@ let threadListRequest = null;
 let connectionTimer = null;
 let threadTimer = null;
 let pollTimer = null;
+let mountedOnce = false;
+let pageActive = false;
+let timersStarted = false;
+let lifecycleToken = 0;
+let requestTasks = [];
 
 /**
  * AI:按项目分组当前打开的 Codex 对话。
@@ -155,10 +152,15 @@ const projectGroups = computed(() => projectNames.value.map(name => ({
   name,
   threads: groupedThreads.value.groups[name] || [],
 })));
-const processSteps = computed(() => {
-  const steps = (currentThreadStatus.value && currentThreadStatus.value.steps) || [];
-  return steps.filter(step => step && step.text && step.kind !== 'final' && step.kind !== 'complete');
-});
+const processTurns = computed(() => ((currentThreadStatus.value && currentThreadStatus.value.turns) || [])
+  .map(turn => ({
+    turnId: turn.turnId || '',
+    status: turn.status || '',
+    steps: ((turn.steps || []).filter(step => step && step.text && step.kind !== 'final' && step.kind !== 'complete')),
+    final: turn.final || '',
+    durationText: formatElapsedTime(turn.startedAt, turn.completedAt),
+  }))
+  .filter(turn => turn.turnId && turn.steps.length));
 const running = computed(() => {
   const status = (currentThreadStatus.value && currentThreadStatus.value.status) || (selectedThread.value && selectedThread.value.status);
   const activeStatus = Boolean(currentThreadStatus.value && currentThreadStatus.value.active) || Boolean(selectedThread.value && selectedThread.value.active);
@@ -175,20 +177,32 @@ const connectionDotClass = computed(() => connectionState.value.online ? 'dot-gr
 const threadDotClass = computed(() => running.value ? 'dot-blue' : complete.value ? 'dot-green' : 'dot-gray');
 const connectionText = computed(() => connectionState.value.online ? 'Agent 在线' : connectionState.value.message || '连接未知');
 const threadText = computed(() => running.value ? '对话进行中' : complete.value ? '对话已完成' : '对话空闲');
-const processInsertIndex = computed(() => {
-  if (!complete.value || !processSteps.value.length) return -1;
-  for (let index = messages.value.length - 1; index >= 0; index -= 1) {
-    if (messages.value[index] && messages.value[index].role === 'assistant') return index;
+const timelineItems = computed(() => {
+  const items = [];
+  const pendingTurns = [];
+  const turnsById = {};
+  for (const turn of processTurns.value) {
+    pendingTurns.push(turn);
+    turnsById[turn.turnId] = turn;
   }
-  return -1;
-});
-const messagesBeforeProcess = computed(() => {
-  const index = processInsertIndex.value;
-  return index === -1 ? messages.value : messages.value.slice(0, index);
-});
-const messagesAfterProcess = computed(() => {
-  const index = processInsertIndex.value;
-  return index === -1 ? [] : messages.value.slice(index);
+  for (let index = 0; index < messages.value.length; index += 1) {
+    const row = messages.value[index];
+    const exactTurn = row && row.role === 'assistant' && row.turnId ? turnsById[row.turnId] : null;
+    if (exactTurn) {
+      items.push({ type: 'process', key: `process-${exactTurn.turnId}`, turn: exactTurn });
+      for (let pendingIndex = 0; pendingIndex < pendingTurns.length; pendingIndex += 1) {
+        if (pendingTurns[pendingIndex].turnId === exactTurn.turnId) {
+          pendingTurns.splice(pendingIndex, 1);
+          break;
+        }
+      }
+    }
+    items.push({ type: 'message', key: row.id || `message-${row.role}-${index}`, row });
+  }
+  for (const turn of pendingTurns) {
+    items.push({ type: 'process', key: `process-${turn.turnId}`, turn });
+  }
+  return items;
 });
 
 /**
@@ -199,6 +213,144 @@ const messagesAfterProcess = computed(() => {
  */
 function renderMarkdown(text) {
   return renderMarkdownToHtml(text);
+}
+
+/**
+ * AI:格式化 Codex 当前轮次已处理时间。
+ *
+ * @param {string} startedAt 开始时间。
+ * @param {string} completedAt 完成时间。
+ * @returns {string} 已处理时间文本。
+ */
+function formatElapsedTime(startedAt, completedAt) {
+  const start = Date.parse(startedAt || '');
+  if (Number.isNaN(start)) return '';
+  const end = Date.parse(completedAt || '') || Date.now();
+  const totalSeconds = Math.max(0, Math.floor((end - start) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes > 0) return `已处理 ${minutes}m ${seconds}s`;
+  return `已处理 ${seconds}s`;
+}
+
+/**
+ * AI:生成处理过程标题。
+ *
+ * @param {object} turn 当前轮次。
+ * @param {boolean} open 是否展开。
+ * @returns {string} 标题文本。
+ */
+function processTitle(turn, open) {
+  const count = turn && turn.steps ? turn.steps.length : 0;
+  const prefix = open ? '处理过程' : '处理过程已折叠';
+  const duration = turn && turn.durationText ? ` · ${turn.durationText}` : '';
+  return `${prefix}${duration}（${count}）`;
+}
+
+/**
+ * AI:判断当前页面实例是否仍可安全更新。
+ *
+ * @returns {boolean} 页面仍处于可更新状态时返回 true。
+ */
+function canUpdatePage() {
+  return pageActive;
+}
+
+/**
+ * AI:获取当前页面生命周期令牌，用于阻止旧异步请求回写新页面实例。
+ *
+ * @returns {number} 生命周期令牌。
+ */
+function currentLifecycleToken() {
+  return lifecycleToken;
+}
+
+/**
+ * AI:判断指定异步任务是否仍属于当前页面实例。
+ *
+ * @param {number} token 异步任务启动时记录的生命周期令牌。
+ * @returns {boolean} 仍可安全更新时返回 true。
+ */
+function canUpdateTask(token) {
+  return canUpdatePage() && token === lifecycleToken;
+}
+
+/**
+ * AI:登记当前页面发出的原生请求，页面销毁时统一取消。
+ *
+ * @param {object} task uni.request 返回的任务对象。
+ * @returns {void}
+ */
+function registerRequestTask(task) {
+  if (!task || typeof task.abort !== 'function') return;
+  requestTasks.push(task);
+}
+
+/**
+ * AI:请求结束后从页面任务列表中移除。
+ *
+ * @param {object} task uni.request 返回的任务对象。
+ * @returns {void}
+ */
+function unregisterRequestTask(task) {
+  const next = [];
+  for (const item of requestTasks) {
+    if (item !== task) next.push(item);
+  }
+  requestTasks = next;
+}
+
+/**
+ * AI:取消当前页面还未结束的原生请求。
+ *
+ * @returns {void}
+ */
+function abortRequestTasks() {
+  const tasks = requestTasks.slice();
+  requestTasks = [];
+  for (const task of tasks) {
+    try {
+      task.abort();
+    } catch (error) {
+      // AI:页面退出时只需要终止请求，不把取消请求再写回已销毁页面。
+    }
+  }
+}
+
+/**
+ * AI:激活当前页面实例并刷新生命周期令牌。
+ *
+ * @returns {void}
+ */
+function activatePage() {
+  if (pageActive) return;
+  pageActive = true;
+  lifecycleToken += 1;
+}
+
+/**
+ * AI:停用当前页面实例并废弃未完成异步任务。
+ *
+ * @returns {void}
+ */
+function deactivatePage() {
+  if (!pageActive && !timersStarted) return;
+  pageActive = false;
+  lifecycleToken += 1;
+  threadListRequest = null;
+  stopTimers();
+  abortRequestTasks();
+}
+
+/**
+ * AI:只在页面可更新时写入提示文本，避免页面销毁后异步回写。
+ *
+ * @param {string} text 提示文本。
+ * @returns {void}
+ */
+function setNotice(text) {
+  if (!canUpdatePage()) return;
+  notice.value = text;
 }
 
 /**
@@ -229,12 +381,83 @@ function closeThreadPopup() {
 }
 
 /**
- * AI:切换处理过程展开状态。
+ * AI:切换指定轮次的处理过程展开状态。
  *
+ * @param {string} turnId 轮次 ID。
  * @returns {void}
  */
-function toggleProcess() {
-  processOpen.value = !processOpen.value;
+function toggleProcess(turnId) {
+  if (!turnId) return;
+  processOpenState.value = Object.assign({}, processOpenState.value, {
+    [turnId]: !processOpenState.value[turnId],
+  });
+}
+
+/**
+ * AI:提取每轮处理过程的状态索引。
+ *
+ * @param {object|null} status 状态数据。
+ * @returns {object} 以 turnId 为键的状态索引。
+ */
+function turnStatusById(status) {
+  const rows = (status && status.turns) || [];
+  const result = {};
+  for (const turn of rows) {
+    if (turn && turn.turnId) result[turn.turnId] = turn.status || '';
+  }
+  return result;
+}
+
+/**
+ * AI:按轮次状态同步处理过程默认展开状态。
+ *
+ * @param {object} status 状态数据。
+ * @param {{autoOpenProcess?: boolean}} options 展开选项。
+ * @param {object} previousTurnStatus 上一次轮次状态索引。
+ * @returns {void}
+ */
+function syncProcessOpenState(status, options = {}, previousTurnStatus = {}) {
+  const next = {};
+  const turns = (status && status.turns) || [];
+  for (const turn of turns) {
+    const turnId = turn && turn.turnId;
+    if (!turnId) continue;
+    const isRunningTurn = turn.status === 'running' || (status && status.active && turns[turns.length - 1] === turn);
+    if (isRunningTurn) {
+      next[turnId] = true;
+      continue;
+    }
+    if (previousTurnStatus[turnId] === 'running') {
+      next[turnId] = false;
+      continue;
+    }
+    next[turnId] = Boolean(processOpenState.value[turnId]);
+  }
+  processOpenState.value = next;
+}
+
+/**
+ * AI:把发送后的临时回复绑定到当前运行轮次，避免处理过程插到错误消息前。
+ *
+ * @param {object} status 状态数据。
+ * @returns {void}
+ */
+function bindPendingAssistantTurn(status) {
+  const turns = (status && status.turns) || [];
+  let runningTurn = null;
+  for (const turn of turns) {
+    if (turn && turn.turnId && (turn.status === 'running' || status.active)) runningTurn = turn;
+  }
+  if (!runningTurn) return;
+  const rows = messages.value.slice();
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    const row = rows[index];
+    if (row && row.role === 'assistant' && !row.turnId && row.pending) {
+      rows[index] = Object.assign({}, row, { turnId: runningTurn.turnId });
+      messages.value = rows;
+      return;
+    }
+  }
 }
 
 /**
@@ -243,8 +466,11 @@ function toggleProcess() {
  * @returns {Promise<void>}
  */
 async function scrollToBottom() {
+  const token = currentLifecycleToken();
+  if (!canUpdateTask(token)) return;
   scrollTarget.value = '';
   await nextTick();
+  if (!canUpdateTask(token)) return;
   scrollTarget.value = 'bottomAnchor';
 }
 
@@ -280,14 +506,17 @@ function ensureSelection() {
  * @returns {Promise<void>}
  */
 async function refreshConnectionStatus() {
+  const token = currentLifecycleToken();
   try {
-    const data = await getHealth(config.value);
+    const data = await getHealth(config.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+    if (!canUpdateTask(token)) return;
     connectionState.value = {
       online: Boolean(data.online),
       offline: !data.online,
       message: data.online ? 'Agent 在线' : 'Agent 未在线',
     };
   } catch (error) {
+    if (!canUpdateTask(token)) return;
     connectionState.value = { online: false, offline: true, message: error.message };
   }
 }
@@ -298,19 +527,24 @@ async function refreshConnectionStatus() {
  * @returns {Promise<Array<object>>} 对话列表。
  */
 async function fetchThreadRows() {
+  const token = currentLifecycleToken();
+  if (!canUpdateTask(token)) return threadRows.value;
   if (threadListRequest) return threadListRequest;
-  threadListRequest = (async () => {
-    const data = await getThreads(config.value);
+  const request = (async () => {
+    const data = await getThreads(config.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+    if (!canUpdateTask(token)) return threadRows.value;
     connectionState.value = { online: true, offline: false, message: 'Agent 在线' };
     return data.threads || [];
   })();
+  threadListRequest = request;
   try {
-    return await threadListRequest;
+    return await request;
   } catch (error) {
+    if (!canUpdateTask(token)) return threadRows.value;
     connectionState.value = { online: false, offline: true, message: error.message };
     throw error;
   } finally {
-    threadListRequest = null;
+    if (threadListRequest === request) threadListRequest = null;
   }
 }
 
@@ -320,7 +554,10 @@ async function fetchThreadRows() {
  * @returns {Promise<void>}
  */
 async function loadThreads() {
-  threadRows.value = await fetchThreadRows();
+  const token = currentLifecycleToken();
+  const rows = await fetchThreadRows();
+  if (!canUpdateTask(token)) return;
+  threadRows.value = rows;
   ensureSelection();
 }
 
@@ -332,18 +569,10 @@ async function loadThreads() {
  * @returns {void}
  */
 function applyThreadStatus(status, options = {}) {
-  const previousStatus = currentThreadStatus.value && currentThreadStatus.value.status;
+  const previousTurnStatus = turnStatusById(currentThreadStatus.value);
   currentThreadStatus.value = status;
-  const steps = (status && status.steps) || [];
-  if (!steps.length) {
-    processOpen.value = false;
-    return;
-  }
-  if (status.status === 'complete' || status.status === 'error') {
-    if (previousStatus !== 'complete' && previousStatus !== 'error') processOpen.value = false;
-    return;
-  }
-  if (options.autoOpenProcess || followBottom.value) processOpen.value = true;
+  bindPendingAssistantTurn(status);
+  syncProcessOpenState(status, options, previousTurnStatus);
 }
 
 /**
@@ -354,20 +583,24 @@ function applyThreadStatus(status, options = {}) {
  * @returns {Promise<void>}
  */
 async function loadHistory(statusData = null, options = {}) {
+  const token = currentLifecycleToken();
+  if (!canUpdateTask(token)) return;
   if (!selectedThreadId.value) {
     messages.value = [];
     currentThreadStatus.value = null;
-    processOpen.value = false;
-    notice.value = '没有可用 Codex 对话';
+    processOpenState.value = {};
+    setNotice('没有可用 Codex 对话');
     return;
   }
-  const data = await getHistory(config.value, selectedThreadId.value);
+  const data = await getHistory(config.value, selectedThreadId.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+  if (!canUpdateTask(token)) return;
   messages.value = data.messages || [];
   if (data.available) {
-    const snapshot = statusData || await getStatus(config.value, { threadId: selectedThreadId.value });
+    const snapshot = statusData || await getStatus(config.value, { threadId: selectedThreadId.value }, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+    if (!canUpdateTask(token)) return;
     applyThreadStatus(snapshot, { autoOpenProcess: Boolean(options.scrollToBottom) });
   }
-  notice.value = data.available ? '已同步电脑端 Codex 对话' : '这个对话暂时没有可加载的本机记录';
+  setNotice(data.available ? '已同步电脑端 Codex 对话' : '这个对话暂时没有可加载的本机记录');
   if (options.scrollToBottom) await scrollToBottom();
 }
 
@@ -378,14 +611,17 @@ async function loadHistory(statusData = null, options = {}) {
  * @returns {Promise<void>}
  */
 async function refreshAll(options = {}) {
+  const token = currentLifecycleToken();
+  if (!canUpdateTask(token)) return;
   loading.value = true;
   try {
     await loadThreads();
+    if (!canUpdateTask(token)) return;
     await loadHistory(null, options);
   } catch (error) {
-    notice.value = error.message;
+    setNotice(error.message);
   } finally {
-    loading.value = false;
+    if (canUpdateTask(token)) loading.value = false;
   }
 }
 
@@ -406,13 +642,15 @@ async function manualRefresh() {
  * @returns {Promise<void>}
  */
 async function selectThread(projectName, thread) {
+  const token = currentLifecycleToken();
+  if (!canUpdateTask(token)) return;
   selectedProjectName.value = projectName || '';
   selectedThreadId.value = thread ? thread.id : '';
   threadPopupOpen.value = false;
   currentThreadStatus.value = null;
   pendingWatch.value = null;
   historyReloadedForCompletion.value = false;
-  processOpen.value = false;
+  processOpenState.value = {};
   persistSelection();
   await loadHistory(null, { scrollToBottom: true });
 }
@@ -441,9 +679,12 @@ function threadDotClassFor(thread) {
  * @returns {Promise<void>}
  */
 async function pollStatus(watch = pendingWatch.value || {}) {
+  const token = currentLifecycleToken();
+  if (!canUpdateTask(token)) return;
   const requestedThreadId = watch.threadId || selectedThreadId.value;
   if (!requestedThreadId) return;
-  const data = await getStatus(config.value, Object.assign({}, watch, { threadId: requestedThreadId }));
+  const data = await getStatus(config.value, Object.assign({}, watch, { threadId: requestedThreadId }), { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+  if (!canUpdateTask(token)) return;
   if (requestedThreadId !== selectedThreadId.value || data.threadId !== selectedThreadId.value) return;
   applyThreadStatus(data, { autoOpenProcess: followBottom.value });
   if (data.status === 'complete' || data.status === 'error') {
@@ -457,7 +698,7 @@ async function pollStatus(watch = pendingWatch.value || {}) {
     return;
   }
   historyReloadedForCompletion.value = false;
-  notice.value = data.preview || 'Codex 正在回复...';
+  setNotice(data.preview || 'Codex 正在回复...');
 }
 
 /**
@@ -466,6 +707,8 @@ async function pollStatus(watch = pendingWatch.value || {}) {
  * @returns {Promise<void>}
  */
 async function send() {
+  const token = currentLifecycleToken();
+  if (!canUpdateTask(token)) return;
   const text = messageText.value.trim();
   if (!text || !selectedThreadId.value) return;
   messageText.value = '';
@@ -474,17 +717,18 @@ async function send() {
   historyReloadedForCompletion.value = false;
   messages.value = messages.value.concat([
     { role: 'user', text },
-    { role: 'assistant', text: '已发送，等待 Codex 回复...' },
+    { role: 'assistant', text: '已发送，等待 Codex 回复...', pending: true },
   ]);
   await scrollToBottom();
   try {
-    const data = await sendMessage(config.value, { threadId: selectedThreadId.value, text });
+    const data = await sendMessage(config.value, { threadId: selectedThreadId.value, text }, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+    if (!canUpdateTask(token)) return;
     pendingWatch.value = data.watch || { threadId: selectedThreadId.value };
     await pollStatus(pendingWatch.value);
   } catch (error) {
-    notice.value = error.message;
+    setNotice(error.message);
   } finally {
-    sending.value = false;
+    if (canUpdateTask(token)) sending.value = false;
   }
 }
 
@@ -494,12 +738,15 @@ async function send() {
  * @returns {Promise<void>}
  */
 async function stop() {
+  const token = currentLifecycleToken();
+  if (!canUpdateTask(token)) return;
   if (!canStop.value) return;
   try {
-    const data = await stopCodex(config.value);
-    notice.value = data.message || '已发送停止指令';
+    const data = await stopCodex(config.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+    if (!canUpdateTask(token)) return;
+    setNotice(data.message || '已发送停止指令');
   } catch (error) {
-    notice.value = error.message;
+    setNotice(error.message);
   }
 }
 
@@ -509,9 +756,17 @@ async function stop() {
  * @returns {void}
  */
 function startTimers() {
-  connectionTimer = setInterval(() => refreshConnectionStatus(), 3000);
-  threadTimer = setInterval(() => loadThreads().catch(error => { notice.value = error.message; }), 3000);
-  pollTimer = setInterval(() => pollStatus().catch(error => { notice.value = error.message; }), 900);
+  if (timersStarted) return;
+  timersStarted = true;
+  connectionTimer = setInterval(() => {
+    if (canUpdatePage()) refreshConnectionStatus().catch(error => { setNotice(error.message); });
+  }, 3000);
+  threadTimer = setInterval(() => {
+    if (canUpdatePage()) loadThreads().catch(error => { setNotice(error.message); });
+  }, 3000);
+  pollTimer = setInterval(() => {
+    if (canUpdatePage()) pollStatus().catch(error => { setNotice(error.message); });
+  }, 900);
 }
 
 /**
@@ -523,19 +778,38 @@ function stopTimers() {
   clearInterval(connectionTimer);
   clearInterval(threadTimer);
   clearInterval(pollTimer);
+  connectionTimer = null;
+  threadTimer = null;
+  pollTimer = null;
+  timersStarted = false;
 }
 
 onMounted(async () => {
+  activatePage();
+  mountedOnce = true;
   await refreshConnectionStatus();
+  if (!canUpdatePage()) return;
   await refreshAll({ scrollToBottom: true });
+  if (!canUpdatePage()) return;
   startTimers();
 });
 
 onUnmounted(() => {
-  stopTimers();
+  deactivatePage();
+});
+
+onHide(() => {
+  deactivatePage();
+});
+
+onUnload(() => {
+  deactivatePage();
 });
 
 onShow(() => {
+  activatePage();
+  if (!mountedOnce) return;
+  startTimers();
   const latest = loadConfig();
   if (latest.serverUrl !== config.value.serverUrl || latest.token !== config.value.token) {
     config.value = latest;
@@ -637,7 +911,8 @@ onBackPress(() => {
 .selectors {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 58px;
-  height: 38px;
+  align-items: end;
+  height: 40px;
   margin-top: 8px;
 }
 
@@ -676,37 +951,43 @@ onBackPress(() => {
 }
 
 .thread-selector {
-  flex-direction: column;
-  align-items: flex-start;
-  height: 38px;
+  position: relative;
+  justify-content: flex-start;
+  height: 40px;
   min-width: 0;
-  border: 1px solid #dfe3ea;
-  border-radius: 7px;
-  background: #ffffff;
-  padding: 4px 10px;
+  border: 0;
+  border-bottom: 1px solid #9ca3af;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
   color: #111827;
 }
 
 .thread-selector-title,
 .thread-selector-subtitle {
   display: block;
-  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .thread-selector-title {
+  min-width: 0;
+  flex: 1;
   color: #111827;
-  font-size: 13px;
-  line-height: 15px;
+  font-size: 14px;
+  line-height: 40px;
+  text-align: left;
 }
 
 .thread-selector-subtitle {
+  flex: 0 1 34%;
+  margin-left: 8px;
   color: #6b7280;
   font-size: 11px;
-  line-height: 13px;
+  line-height: 40px;
   font-weight: 400;
+  text-align: right;
 }
 
 .notice {

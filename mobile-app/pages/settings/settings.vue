@@ -15,7 +15,8 @@
 </template>
 
 <script setup>
-import { reactive, ref } from 'vue';
+import { onUnmounted, reactive, ref } from 'vue';
+import { onHide, onShow, onUnload } from '@dcloudio/uni-app';
 import { loadConfig, saveConfig } from '../../utils/config';
 import { getHealth } from '../../utils/api';
 
@@ -23,6 +24,56 @@ const form = reactive(loadConfig());
 const saving = ref(false);
 const testing = ref(false);
 const statusText = ref('配置会保存在本机 App 内。');
+let pageActive = true;
+let requestTask = null;
+
+/**
+ * AI:登记设置页测试连接请求，页面退出时可取消。
+ *
+ * @param {object} task uni.request 返回的任务对象。
+ * @returns {void}
+ */
+function registerRequestTask(task) {
+  if (!task || typeof task.abort !== 'function') return;
+  requestTask = task;
+}
+
+/**
+ * AI:测试连接请求结束后清理任务引用。
+ *
+ * @param {object} task uni.request 返回的任务对象。
+ * @returns {void}
+ */
+function unregisterRequestTask(task) {
+  if (requestTask === task) requestTask = null;
+}
+
+/**
+ * AI:设置页退出时取消未完成请求，避免回调写入已销毁页面。
+ *
+ * @returns {void}
+ */
+function deactivatePage() {
+  pageActive = false;
+  const task = requestTask;
+  requestTask = null;
+  if (task && typeof task.abort === 'function') {
+    try {
+      task.abort();
+    } catch (error) {
+      // AI:页面退出时只需要终止请求，不再更新设置页状态。
+    }
+  }
+}
+
+/**
+ * AI:设置页重新显示后允许新的测试连接结果更新页面。
+ *
+ * @returns {void}
+ */
+function activatePage() {
+  pageActive = true;
+}
 
 /**
  * AI:保存服务器地址和 token。
@@ -54,16 +105,34 @@ async function testConnection() {
       serverUrl: String(form.serverUrl || '').trim().replace(/\/+$/, ''),
       token: String(form.token || '').trim(),
     };
-    const data = await getHealth(config);
+    const data = await getHealth(config, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+    if (!pageActive) return;
     statusText.value = data.online ? '服务器可访问，电脑 Agent 在线。' : '服务器可访问，电脑 Agent 未在线。';
     uni.showToast({ title: '连接正常', icon: 'success' });
   } catch (error) {
+    if (!pageActive) return;
     statusText.value = error.message;
     uni.showToast({ title: '连接失败', icon: 'none' });
   } finally {
-    testing.value = false;
+    if (pageActive) testing.value = false;
   }
 }
+
+onHide(() => {
+  deactivatePage();
+});
+
+onShow(() => {
+  activatePage();
+});
+
+onUnload(() => {
+  deactivatePage();
+});
+
+onUnmounted(() => {
+  deactivatePage();
+});
 </script>
 
 <style scoped>
