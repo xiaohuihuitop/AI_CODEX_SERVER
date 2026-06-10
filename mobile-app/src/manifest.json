@@ -1,0 +1,36 @@
+{
+  "name": "Codex 手机端",
+  "appid": "__UNI__CODEXBRIDGE",
+  "description": "通过云端服务器控制 Windows Codex Desktop",
+  "versionName": "0.1.0",
+  "versionCode": 100,
+  "transformPx": false,
+  "app-plus": {
+    "usingComponents": true,
+    "nvueStyleCompiler": "uni-app",
+    "compilerVersion": 3,
+    "splashscreen": {
+      "alwaysShowBeforeRender": false,
+      "waiting": true,
+      "autoclose": true,
+      "delay": 0
+    },
+    "distribute": {
+      "android": {
+        "packagename": "top.xiaohuihui.codex.mobile",
+        "minSdkVersion": 23,
+        "targetSdkVersion": 35,
+        "permissions": [
+          "<uses-permission android:name=\"android.permission.INTERNET\"/>",
+          "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>"
+        ],
+        "usesCleartextTraffic": true
+      }
+    }
+  },
+  "quickapp": {},
+  "mp-weixin": {},
+  "h5": {
+    "title": "Codex 手机端"
+  }
+}
