@@ -97,13 +97,13 @@ ipcMain.handle('manager:save-config', async (_event, input) => {
   return getState();
 });
 
-ipcMain.handle('manager:start-agent', async () => {
-  agentController.start(config);
+ipcMain.handle('manager:stop-agent', async () => {
+  agentController.stop();
   return getState();
 });
 
-ipcMain.handle('manager:stop-agent', async () => {
-  agentController.stop();
+ipcMain.handle('manager:restart-agent', async () => {
+  await agentController.restart(config);
   return getState();
 });
 

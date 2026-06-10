@@ -119,7 +119,8 @@ test('桌面管理器页面包含 Agent 控制和状态区域', () => {
     lastError: [],
   });
 
-  assert.match(html, /启动 Agent/);
+  assert.doesNotMatch(html, /启动 Agent/);
+  assert.match(html, /Agent 上线\/重连/);
   assert.match(html, /停止 Agent/);
   assert.match(html, /Codex Desktop/);
   assert.match(html, /http:\/\/example\.com:8008\/\?token=xiaohuihui/);
@@ -129,16 +130,16 @@ test('桌面管理器 HTTP 接口支持保存配置和控制 Agent', async () =>
   const { createDesktopManagerServer } = require('../src/desktop-manager-server');
   const calls = [];
   const agentController = {
-    start(config) {
-      calls.push(['start', config]);
-      return { running: true, pid: 1234, alreadyRunning: false };
-    },
     stop() {
       calls.push(['stop']);
       return { running: false, pid: 1234 };
     },
+    restart(config) {
+      calls.push(['restart', config]);
+      return { running: true, pid: 5678, alreadyRunning: false };
+    },
     status() {
-      return { running: calls.some(call => call[0] === 'start'), pid: 1234, lastOutput: [], lastError: [] };
+      return { running: calls.some(call => call[0] === 'restart'), pid: 1234, lastOutput: [], lastError: [] };
     },
   };
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-manager-http-'));
@@ -166,10 +167,12 @@ test('桌面管理器 HTTP 接口支持保存配置和控制 Agent', async () =>
     });
     assert.equal(saved.status, 303);
 
-    const start = await fetch(`http://127.0.0.1:${port}/agent/start`, { method: 'POST' });
-    assert.equal(start.status, 200);
-    assert.equal(calls[0][0], 'start');
+    const restart = await fetch(`http://127.0.0.1:${port}/agent/restart`, { method: 'POST' });
+    const restartBody = await restart.json();
+    assert.equal(restart.status, 200);
+    assert.equal(calls[0][0], 'restart');
     assert.equal(calls[0][1].token, 'xiaohuihui');
+    assert.equal(restartBody.agent.pid, 5678);
 
     const status = await fetch(`http://127.0.0.1:${port}/status`);
     const statusBody = await status.json();
@@ -216,6 +219,54 @@ test('桌面 Agent 管理器可以识别并接管已有 Agent 进程', () => {
 
   assert.deepEqual(manager.stop(), { running: false, pid: 4321 });
   assert.deepEqual(killed, [4321]);
+});
+
+test('桌面 Agent 管理器支持一键重启 Agent 让连接重新上线', async () => {
+  const EventEmitter = require('node:events');
+  const { PassThrough } = require('node:stream');
+  const { DesktopAgentProcess } = require('../src/desktop-agent-process');
+  const killed = [];
+  const spawned = [];
+  let existingPid = 4321;
+
+  const manager = new DesktopAgentProcess({
+    cwd: 'C:\\repo',
+    nodePath: 'node.exe',
+    processFinder: () => (existingPid ? { pid: existingPid, commandLine: 'node C:\\repo\\desktop-agent.js' } : null),
+    killProcess: pid => {
+      killed.push(pid);
+      existingPid = null;
+    },
+    spawnImpl: (...args) => {
+      spawned.push(args);
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.pid = 9876;
+      child.exitCode = null;
+      child.killed = false;
+      child.kill = () => {
+        child.killed = true;
+      };
+      return child;
+    },
+    stopPollMs: 1,
+    stopTimeoutMs: 50,
+  });
+
+  const result = await manager.restart({
+    serverUrl: 'http://example.com:8008',
+    token: 'xiaohuihui',
+    deviceName: 'home-pc',
+  });
+
+  assert.deepEqual(killed, [4321]);
+  assert.equal(result.pid, 9876);
+  assert.equal(result.running, true);
+  assert.equal(result.alreadyRunning, false);
+  assert.equal(spawned.length, 1);
+  assert.deepEqual(spawned[0][0], 'node.exe');
+  assert.equal(spawned[0][2].env.CODEX_DEVICE_TOKEN, 'xiaohuihui');
 });
 
 test('桌面 Agent 管理器支持自定义子进程入口参数', () => {

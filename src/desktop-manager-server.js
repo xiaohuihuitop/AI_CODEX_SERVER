@@ -202,7 +202,7 @@ function renderHtml(config, agentStatus) {
         <label><input type="checkbox" name="autoStart" ${config.autoStart ? 'checked' : ''}> 开机自启</label>
         <div class="actions">
           <button type="submit">保存配置</button>
-          <button type="button" id="startAgent">启动 Agent</button>
+          <button type="button" id="restartAgent">Agent 上线/重连</button>
           <button type="button" id="stopAgent" class="danger">停止 Agent</button>
           <button type="button" id="refreshStatus" class="secondary">刷新状态</button>
         </div>
@@ -239,7 +239,7 @@ function renderHtml(config, agentStatus) {
       }
       await refreshStatus();
     }
-    document.getElementById('startAgent').addEventListener('click', () => postAction('/agent/start'));
+    document.getElementById('restartAgent').addEventListener('click', () => postAction('/agent/restart'));
     document.getElementById('stopAgent').addEventListener('click', () => postAction('/agent/stop'));
     document.getElementById('refreshStatus').addEventListener('click', refreshStatus);
     refreshStatus();
@@ -288,8 +288,8 @@ function createDesktopManagerServer(options = {}) {
         res.end();
         return undefined;
       }
-      if (req.method === 'POST' && req.url.startsWith('/agent/start')) {
-        return sendJson(res, 200, { ok: true, agent: agentController.start(config) });
+      if (req.method === 'POST' && req.url.startsWith('/agent/restart')) {
+        return sendJson(res, 200, { ok: true, agent: await agentController.restart(config) });
       }
       if (req.method === 'POST' && req.url.startsWith('/agent/stop')) {
         return sendJson(res, 200, { ok: true, agent: agentController.stop() });

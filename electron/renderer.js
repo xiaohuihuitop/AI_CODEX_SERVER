@@ -10,7 +10,7 @@ const elements = {
   autoStart: document.getElementById('autoStart'),
   saveState: document.getElementById('saveState'),
   configForm: document.getElementById('configForm'),
-  startButton: document.getElementById('startButton'),
+  restartAgentButton: document.getElementById('restartAgentButton'),
   stopButton: document.getElementById('stopButton'),
   restartCodexButton: document.getElementById('restartCodexButton'),
   refreshButton: document.getElementById('refreshButton'),
@@ -43,7 +43,7 @@ function getFormConfig() {
 function setBusy(value) {
   state.busy = value;
   [
-    elements.startButton,
+    elements.restartAgentButton,
     elements.stopButton,
     elements.restartCodexButton,
     elements.refreshButton,
@@ -116,8 +116,8 @@ elements.configForm.addEventListener('submit', event => {
   runAction(() => window.codexManager.saveConfig(getFormConfig()));
 });
 
-elements.startButton.addEventListener('click', () => {
-  runAction(() => window.codexManager.startAgent());
+elements.restartAgentButton.addEventListener('click', () => {
+  runAction(() => window.codexManager.restartAgent());
 });
 
 elements.stopButton.addEventListener('click', () => {

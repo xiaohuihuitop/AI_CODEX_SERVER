@@ -3,6 +3,8 @@ const { execFileSync, spawn } = require('node:child_process');
 const { buildAgentEnv, normalizeManagerConfig } = require('./desktop-manager');
 
 const MAX_LOG_LINES = 30;
+const DEFAULT_STOP_TIMEOUT_MS = 5000;
+const DEFAULT_STOP_POLL_MS = 100;
 
 /**
  * AI:查找当前项目启动的 Agent 进程，避免管理器重启后重复启动。
@@ -67,6 +69,9 @@ class DesktopAgentProcess {
     this.processNamePattern = options.processNamePattern || '^node(\\.exe)?$';
     this.processFinder = options.processFinder || findExistingAgentSnapshot;
     this.killProcess = options.killProcess || process.kill;
+    this.spawnProcess = options.spawnImpl || spawn;
+    this.stopTimeoutMs = options.stopTimeoutMs || DEFAULT_STOP_TIMEOUT_MS;
+    this.stopPollMs = options.stopPollMs || DEFAULT_STOP_POLL_MS;
     this.child = null;
     this.lastOutput = [];
     this.lastError = [];
@@ -117,7 +122,7 @@ class DesktopAgentProcess {
     this.exitCode = null;
     this.signalCode = null;
 
-    const child = spawn(this.nodePath, this.childArgs, {
+    const child = this.spawnProcess(this.nodePath, this.childArgs, {
       cwd: this.cwd,
       env: { ...process.env, ...this.childEnv, ...buildAgentEnv(config) },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -144,6 +149,34 @@ class DesktopAgentProcess {
     if (this.child && this.child.pid === running.pid) this.child.kill();
     else this.killProcess(running.pid);
     return { running: false, pid: running.pid };
+  }
+
+  /**
+   * AI:等待指定 Agent PID 退出，避免重新上线时复用旧连接状态。
+   *
+   * @param {number} pid 需要等待退出的进程 PID。
+   * @returns {Promise<void>} 进程退出后完成。
+   */
+  async waitUntilStopped(pid) {
+    const deadline = Date.now() + this.stopTimeoutMs;
+    while (Date.now() < deadline) {
+      const running = this.getRunningSnapshot();
+      if (!running || running.pid !== pid) return;
+      await new Promise(resolve => setTimeout(resolve, this.stopPollMs));
+    }
+    throw new Error(`Agent 进程 ${pid} 未能在 ${this.stopTimeoutMs}ms 内退出。`);
+  }
+
+  /**
+   * AI:强制重启 Windows Agent，让云端连接重新上线。
+   *
+   * @param {{serverUrl: string, token: string, deviceName: string}} input 管理器配置。
+   * @returns {Promise<{running: boolean, pid: number|null, alreadyRunning: boolean}>} 启动结果。
+   */
+  async restart(input) {
+    const stopped = this.stop();
+    if (stopped.pid) await this.waitUntilStopped(stopped.pid);
+    return this.start(input);
   }
 
   /**
