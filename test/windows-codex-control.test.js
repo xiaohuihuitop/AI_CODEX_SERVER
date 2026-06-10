@@ -223,6 +223,18 @@ test('手机端显示线程运行状态指示点', () => {
   assert.match(html, /setInterval\(\(\) => refreshThreadStatuses/);
 });
 
+test('手机端显示云端 Agent 连接状态指示点', () => {
+  const html = fs.readFileSync(indexPath, 'utf8');
+
+  assert.match(html, /id="connectionStatus"/);
+  assert.match(html, /connection-status--online/);
+  assert.match(html, /connection-status--offline/);
+  assert.match(html, /function updateConnectionStatus/);
+  assert.match(html, /function refreshConnectionStatus/);
+  assert.match(html, /\/codex\/health\?token=/);
+  assert.match(html, /setInterval\(\(\) => refreshConnectionStatus/);
+});
+
 test('手机端运行中展开处理过程，完成后折叠', () => {
   const html = fs.readFileSync(indexPath, 'utf8');
 

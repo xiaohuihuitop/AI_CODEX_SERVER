@@ -35,7 +35,7 @@
       background: var(--panel);
       border-bottom: 1px solid var(--line);
       display: grid;
-      grid-template-columns: 16px minmax(0, 0.9fr) minmax(0, 1.1fr) 44px;
+      grid-template-columns: 16px 16px minmax(0, 0.9fr) minmax(0, 1.1fr) 44px;
       gap: 8px;
       align-items: center;
     }
@@ -251,12 +251,25 @@
       border-bottom: 1px solid #e5e7eb;
     }
 
+    .connection-status,
     .thread-status {
       width: 12px;
       height: 12px;
       border-radius: 999px;
       border: 1px solid #c7ccd3;
       background: #9ca3af;
+    }
+
+    .connection-status--online {
+      border-color: #15803d;
+      background: #22c55e;
+      box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+    }
+
+    .connection-status--offline {
+      border-color: #b42318;
+      background: #ef4444;
+      box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.16);
     }
 
     .thread-status--running {
@@ -268,6 +281,7 @@
 </head>
 <body>
   <header>
+    <span id="connectionStatus" class="connection-status" title="连接状态未知"></span>
     <span id="threadStatus" class="thread-status" title="当前对话空闲"></span>
     <select id="projects" aria-label="选择 Codex 文件夹"></select>
     <select id="threads" aria-label="选择 Codex 线程"></select>
@@ -287,6 +301,7 @@
     const token = tokenFromUrl || localStorage.getItem('codexBridge.token') || '';
     const projectsEl = document.getElementById('projects');
     const threadsEl = document.getElementById('threads');
+    const connectionStatusEl = document.getElementById('connectionStatus');
     const threadStatusEl = document.getElementById('threadStatus');
     const messagesEl = document.getElementById('messages');
     const noticeEl = document.getElementById('notice');
@@ -297,6 +312,7 @@
     let selectedProjectName = localStorage.getItem('codexBridge.projectName') || '';
     let threadRows = [];
     let pollTimer = null;
+    let connectionStatusTimer = null;
     let threadStatusTimer = null;
     let threadListRequest = null;
 
@@ -320,6 +336,41 @@
      */
     function notice(text) {
       noticeEl.textContent = text;
+    }
+
+    /**
+     * 更新手机端到云端 Agent 的连接状态。
+     *
+     * @param {{online?: boolean, offline?: boolean, message?: string}} state 连接状态。
+     * @returns {void}
+     */
+    function updateConnectionStatus(state) {
+      const online = Boolean(state?.online);
+      const offline = Boolean(state?.offline);
+      connectionStatusEl.classList.toggle('connection-status--online', online);
+      connectionStatusEl.classList.toggle('connection-status--offline', !online && offline);
+      const title = online ? '服务器已连接，电脑 Agent 在线' : state?.message || '连接状态未知';
+      connectionStatusEl.title = title;
+      connectionStatusEl.setAttribute('aria-label', title);
+    }
+
+    /**
+     * 刷新云端与 Agent 在线状态。
+     *
+     * @returns {Promise<void>}
+     */
+    async function refreshConnectionStatus() {
+      try {
+        const res = await api(`/codex/health?token=${encodeURIComponent(token)}`);
+        const data = await res.json();
+        if (res.ok && data.ok && data.online) {
+          updateConnectionStatus({ online: true });
+          return;
+        }
+        updateConnectionStatus({ offline: true, message: data.message || '服务器可访问，电脑 Agent 未在线' });
+      } catch {
+        updateConnectionStatus({ offline: true, message: '服务器不可访问' });
+      }
     }
 
     /**
@@ -460,7 +511,11 @@
       threadListRequest = (async () => {
         const res = await api(`/codex/threads?limit=120&token=${encodeURIComponent(token)}`);
         const data = await res.json();
-        if (!res.ok || !data.ok) throw new Error(data.message || errorMessage);
+        if (!res.ok || !data.ok) {
+          updateConnectionStatus({ offline: true, message: data.message || errorMessage });
+          throw new Error(data.message || errorMessage);
+        }
+        updateConnectionStatus({ online: true });
         return data.threads || [];
       })();
       try {
@@ -628,7 +683,10 @@
     });
 
     setRunning(false);
+    updateConnectionStatus({ message: '正在检测连接状态' });
+    refreshConnectionStatus().catch(() => {});
     loadThreads().then(loadHistory).catch(error => notice(error.message));
+    connectionStatusTimer = setInterval(() => refreshConnectionStatus().catch(() => {}), 3000);
     threadStatusTimer = setInterval(() => refreshThreadStatuses().catch(error => notice(error.message)), 3000);
   </script>
 </body>

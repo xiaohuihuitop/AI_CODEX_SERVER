@@ -1,3 +1,4 @@
+const { EventEmitter } = require('node:events');
 const { WebSocket } = require('ws');
 
 function agentUrlFromServerUrl(serverUrl, token) {
@@ -40,17 +41,55 @@ async function handleAgentRequest(api, message) {
 function createDesktopAgentClient(options) {
   const url = agentUrlFromServerUrl(options.serverUrl, options.token);
   const api = options.api;
-  const ws = new WebSocket(url);
-  ws.on('message', async data => {
-    let message = null;
-    try {
-      message = JSON.parse(data.toString());
-    } catch {
-      return;
-    }
-    ws.send(JSON.stringify(await handleAgentRequest(api, message)));
-  });
-  return ws;
+  const WebSocketClass = options.WebSocket || WebSocket;
+  const reconnectDelayMs = Number.isFinite(Number(options.reconnectDelayMs)) ? Math.max(0, Number(options.reconnectDelayMs)) : 2000;
+  const client = new EventEmitter();
+  let socket = null;
+  let reconnectTimer = null;
+  let stopped = false;
+
+  function scheduleReconnect() {
+    if (stopped || reconnectTimer) return;
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, reconnectDelayMs);
+  }
+
+  function connect() {
+    if (stopped) return;
+    socket = new WebSocketClass(url);
+    client.socket = socket;
+    socket.on('open', () => client.emit('open'));
+    socket.on('message', async data => {
+      let message = null;
+      try {
+        message = JSON.parse(data.toString());
+      } catch {
+        return;
+      }
+      const response = await handleAgentRequest(api, message);
+      if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(response));
+    });
+    socket.on('close', (code, reason) => {
+      client.emit('close', code, reason);
+      scheduleReconnect();
+    });
+    socket.on('error', error => {
+      if (client.listenerCount('error') > 0) client.emit('error', error);
+    });
+  }
+
+  client.close = () => {
+    stopped = true;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+    const closedState = typeof socket?.CLOSED === 'number' ? socket.CLOSED : 3;
+    if (socket && socket.readyState !== closedState) socket.close();
+  };
+
+  connect();
+  return client;
 }
 
 module.exports = {
