@@ -194,24 +194,35 @@ test('手机端线程切换不触发桌面端同步切换', () => {
   assert.equal(html.includes('/codex/open'), false);
   assert.equal(threadsChange.includes('await openSelectedThread()'), false);
   assert.equal(projectsChange.includes('await openSelectedThread()'), false);
-  assert.match(threadsChange, /await loadHistory\(\)/);
-  assert.match(projectsChange, /await loadHistory\(\)/);
+  assert.match(threadsChange, /await loadHistory\(null, \{ preserveScroll: false, scrollToBottom: true \}\)/);
+  assert.match(projectsChange, /await loadHistory\(null, \{ preserveScroll: false, scrollToBottom: true \}\)/);
 });
 
 test('手机端初始化不同步切换桌面端当前线程', () => {
   const html = fs.readFileSync(indexPath, 'utf8');
 
-  assert.match(html, /loadThreads\(\)\.then\(loadHistory\)/);
+  assert.match(html, /loadThreads\(\)\.then\(\(\) => loadHistory/);
   assert.equal(html.includes('then(openSelectedThread)'), false);
 });
 
 test('手机端消息使用本地 Markdown 渲染器', () => {
   const html = fs.readFileSync(indexPath, 'utf8');
-  const messageFunction = html.match(/function message\(role, text\) \{([\s\S]*?)\n    \}/)?.[1] || '';
+  const messageFunction = html.match(/function message\(role, text, options = \{\}\) \{([\s\S]*?)\n    \}/)?.[1] || '';
 
   assert.match(html, /<script src="\/markdown\.js(?:\?v=\d+)?"><\/script>/);
   assert.match(messageFunction, /CodexMarkdown\.renderMarkdownToHtml/);
   assert.equal(messageFunction.includes('div.textContent = text'), false);
+});
+
+test('手机端自动刷新保留滚动位置', () => {
+  const html = fs.readFileSync(indexPath, 'utf8');
+
+  assert.match(html, /id="refresh"[^>]+title="重新读取对话列表和当前对话历史"[^>]*>刷新<\/button>/);
+  assert.match(html, /function captureScroll/);
+  assert.match(html, /function restoreScroll/);
+  assert.match(html, /message\(row\.role, row\.text \|\| '', \{ scrollToBottom: false \}\)/);
+  assert.match(html, /await loadHistory\(data, \{ preserveScroll: true \}\)/);
+  assert.match(html, /await loadHistory\(null, \{ preserveScroll: true \}\)/);
 });
 
 test('手机端显示线程运行状态指示点', () => {
@@ -247,7 +258,7 @@ test('手机端运行中展开处理过程，完成后折叠', () => {
   assert.match(html, /details\.open = status\.status !== 'complete'/);
   assert.match(html, /处理过程已折叠/);
   assert.match(html, /renderProcessPanel\(data\)/);
-  assert.match(html, /await loadHistory\(data\)/);
+  assert.match(html, /await loadHistory\(data, \{ preserveScroll: true \}\)/);
   assert.match(html, /pendingWatch/);
   assert.match(html, /setInterval\(\(\) => pollStatus\(\)/);
   assert.match(html, /if \(!requestedThreadId\) return/);

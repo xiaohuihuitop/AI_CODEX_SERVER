@@ -291,7 +291,7 @@
     <span id="threadStatus" class="thread-status" title="当前对话空闲"></span>
     <select id="projects" aria-label="选择 Codex 文件夹"></select>
     <select id="threads" aria-label="选择 Codex 线程"></select>
-    <button id="refresh" type="button" title="刷新线程">刷</button>
+    <button id="refresh" type="button" title="重新读取对话列表和当前对话历史" aria-label="刷新对话">刷新</button>
   </header>
   <div class="notice" id="notice">正在连接本机服务...</div>
   <main id="messages"></main>
@@ -347,6 +347,35 @@
     }
 
     /**
+     * AI:记录当前滚动位置，自动刷新内容后用于还原阅读位置。
+     *
+     * @returns {{y: number}} 滚动快照。
+     */
+    function captureScroll() {
+      return { y: window.scrollY || 0 };
+    }
+
+    /**
+     * AI:还原刷新前的滚动位置，避免后台轮询把页面推到底部。
+     *
+     * @param {{y: number}|null} snapshot 滚动快照。
+     * @returns {void}
+     */
+    function restoreScroll(snapshot) {
+      if (!snapshot) return;
+      window.scrollTo(0, Math.min(snapshot.y, Math.max(0, document.body.scrollHeight - window.innerHeight)));
+    }
+
+    /**
+     * AI:只在明确需要跟随新消息时滚动到底部。
+     *
+     * @returns {void}
+     */
+    function scrollToBottom() {
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+
+    /**
      * 更新手机端到云端 Agent 的连接状态。
      *
      * @param {{online?: boolean, offline?: boolean, message?: string}} state 连接状态。
@@ -388,12 +417,12 @@
      * @param {string} text 消息文本。
      * @returns {HTMLDivElement} 消息元素。
      */
-    function message(role, text) {
+    function message(role, text, options = {}) {
       const div = document.createElement('div');
       div.className = `message ${role}`;
       div.innerHTML = CodexMarkdown.renderMarkdownToHtml(text);
       messagesEl.appendChild(div);
-      window.scrollTo(0, document.body.scrollHeight);
+      if (options.scrollToBottom !== false) scrollToBottom();
       return div;
     }
 
@@ -415,10 +444,14 @@
      * @param {object} status Codex 状态数据。
      * @returns {void}
      */
-    function renderProcessPanel(status) {
+    function renderProcessPanel(status, options = {}) {
+      const scroll = options.preserveScroll === false ? null : captureScroll();
       document.querySelectorAll('.process-card').forEach(item => item.remove());
       const steps = processSteps(status);
-      if (!steps.length) return;
+      if (!steps.length) {
+        restoreScroll(scroll);
+        return;
+      }
 
       const card = document.createElement('section');
       card.className = 'process-card';
@@ -444,7 +477,8 @@
       const lastAssistant = [...messagesEl.querySelectorAll('.message.assistant')].at(-1);
       if (status.status === 'complete' && lastAssistant) messagesEl.insertBefore(card, lastAssistant);
       else messagesEl.appendChild(card);
-      window.scrollTo(0, document.body.scrollHeight);
+      if (options.scrollToBottom) scrollToBottom();
+      else restoreScroll(scroll);
     }
 
     /**
@@ -576,25 +610,30 @@
     /**
      * 加载当前线程历史。
      *
+     * @param {object|null} statusData 已读取的线程状态，避免重复请求。
+     * @param {{preserveScroll?: boolean, scrollToBottom?: boolean}} options 滚动控制选项。
      * @returns {Promise<void>}
      */
-    async function loadHistory(statusData = null) {
+    async function loadHistory(statusData = null, options = {}) {
       if (!selectedThreadId) {
         messagesEl.innerHTML = '';
         notice('没有可用 Codex 线程');
         return;
       }
+      const scroll = options.preserveScroll === false ? null : captureScroll();
       messagesEl.innerHTML = '';
       const res = await api(`/codex/history?thread=${encodeURIComponent(selectedThreadId)}&limit=120&token=${encodeURIComponent(token)}`);
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.message || '读取历史失败');
-      for (const row of data.messages || []) message(row.role, row.text || '');
+      for (const row of data.messages || []) message(row.role, row.text || '', { scrollToBottom: false });
       if (data.available) {
         const snapshot = statusData || await fetchStatus({ threadId: selectedThreadId });
         currentThreadStatus = snapshot;
         updateThreadStatus(snapshot);
-        renderProcessPanel(snapshot);
+        renderProcessPanel(snapshot, { preserveScroll: false });
       }
+      if (options.scrollToBottom) scrollToBottom();
+      else restoreScroll(scroll);
       notice(data.available ? '已同步本机 Codex 线程' : '这个线程暂时没有可加载的本机记录');
     }
 
@@ -630,7 +669,7 @@
         if (pendingWatch?.threadId === data.threadId) pendingWatch = null;
         if (!historyReloadedForCompletion) {
           historyReloadedForCompletion = true;
-          await loadHistory(data);
+          await loadHistory(data, { preserveScroll: true });
         }
       } else {
         historyReloadedForCompletion = false;
@@ -641,7 +680,7 @@
     document.getElementById('refresh').addEventListener('click', async () => {
       try {
         await loadThreads();
-        await loadHistory();
+        await loadHistory(null, { preserveScroll: true });
       } catch (error) {
         notice(error.message);
       }
@@ -655,7 +694,7 @@
         pendingWatch = null;
         historyReloadedForCompletion = false;
         updateThreadStatus();
-        await loadHistory();
+        await loadHistory(null, { preserveScroll: false, scrollToBottom: true });
       } catch (error) {
         notice(error.message);
       }
@@ -670,7 +709,7 @@
         pendingWatch = null;
         historyReloadedForCompletion = false;
         renderThreadOptions();
-        await loadHistory();
+        await loadHistory(null, { preserveScroll: false, scrollToBottom: true });
       } catch (error) {
         notice(error.message);
       }
@@ -715,7 +754,7 @@
     setRunning(false);
     updateConnectionStatus({ message: '正在检测连接状态' });
     refreshConnectionStatus().catch(() => {});
-    loadThreads().then(loadHistory).catch(error => notice(error.message));
+    loadThreads().then(() => loadHistory(null, { preserveScroll: false, scrollToBottom: true })).catch(error => notice(error.message));
     connectionStatusTimer = setInterval(() => refreshConnectionStatus().catch(() => {}), 3000);
     threadStatusTimer = setInterval(() => refreshThreadStatuses().catch(error => notice(error.message)), 3000);
     setInterval(() => pollStatus().catch(error => notice(error.message)), 900);
