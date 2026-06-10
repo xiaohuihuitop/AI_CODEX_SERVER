@@ -273,6 +273,12 @@
     }
 
     .thread-status--running {
+      border-color: #1d4ed8;
+      background: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+    }
+
+    .thread-status--complete {
       border-color: #15803d;
       background: #22c55e;
       box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
@@ -311,10 +317,12 @@
     let selectedThreadId = localStorage.getItem('codexBridge.threadId') || '';
     let selectedProjectName = localStorage.getItem('codexBridge.projectName') || '';
     let threadRows = [];
-    let pollTimer = null;
     let connectionStatusTimer = null;
     let threadStatusTimer = null;
     let threadListRequest = null;
+    let currentThreadStatus = null;
+    let pendingWatch = null;
+    let historyReloadedForCompletion = false;
 
     /**
      * 调用本机桥接 API。
@@ -471,12 +479,18 @@
      *
      * @returns {void}
      */
-    function updateThreadStatus() {
+    function updateThreadStatus(statusData = null) {
       const row = threadRows.find(item => item.id === selectedThreadId);
-      const running = !!row?.active || row?.status === 'running';
+      const scopedStatus = statusData?.threadId === selectedThreadId ? statusData : null;
+      const status = scopedStatus?.status || row?.status || 'idle';
+      const pendingCurrent = pendingWatch?.threadId === selectedThreadId && Boolean(pendingWatch?.since);
+      const running = Boolean(scopedStatus?.active) || !!row?.active || status === 'running' || pendingCurrent;
+      const complete = !running && status === 'complete';
       threadStatusEl.classList.toggle('thread-status--running', running);
-      threadStatusEl.title = running ? '当前对话正在工作' : '当前对话空闲';
+      threadStatusEl.classList.toggle('thread-status--complete', complete);
+      threadStatusEl.title = running ? '当前对话正在工作' : complete ? '当前对话已完成' : '当前对话未连接或空闲';
       threadStatusEl.setAttribute('aria-label', threadStatusEl.title);
+      setRunning(running);
     }
 
     /**
@@ -556,7 +570,7 @@
      */
     async function refreshThreadStatuses() {
       threadRows = await fetchThreadRows('读取线程状态失败');
-      updateThreadStatus();
+      updateThreadStatus(currentThreadStatus);
     }
 
     /**
@@ -577,6 +591,8 @@
       for (const row of data.messages || []) message(row.role, row.text || '');
       if (data.available) {
         const snapshot = statusData || await fetchStatus({ threadId: selectedThreadId });
+        currentThreadStatus = snapshot;
+        updateThreadStatus(snapshot);
         renderProcessPanel(snapshot);
       }
       notice(data.available ? '已同步本机 Codex 线程' : '这个线程暂时没有可加载的本机记录');
@@ -602,15 +618,22 @@
      * @param {{threadId?: string, since?: string}} watch 轮询参数。
      * @returns {Promise<void>}
      */
-    async function pollStatus(watch) {
-      const data = await fetchStatus(watch);
+    async function pollStatus(watch = pendingWatch || {}) {
+      const requestedThreadId = watch.threadId || selectedThreadId;
+      if (!requestedThreadId) return;
+      const data = await fetchStatus({ ...watch, threadId: requestedThreadId });
+      if (requestedThreadId !== selectedThreadId || data.threadId !== selectedThreadId) return;
+      currentThreadStatus = data;
+      updateThreadStatus(data);
       renderProcessPanel(data);
       if (data.status === 'complete' || data.status === 'error') {
-        clearInterval(pollTimer);
-        pollTimer = null;
-        setRunning(false);
-        await loadHistory(data);
+        if (pendingWatch?.threadId === data.threadId) pendingWatch = null;
+        if (!historyReloadedForCompletion) {
+          historyReloadedForCompletion = true;
+          await loadHistory(data);
+        }
       } else {
+        historyReloadedForCompletion = false;
         notice(data.preview || 'Codex 正在回复...');
       }
     }
@@ -628,6 +651,9 @@
       try {
         selectedThreadId = threadsEl.value;
         localStorage.setItem('codexBridge.threadId', selectedThreadId);
+        currentThreadStatus = null;
+        pendingWatch = null;
+        historyReloadedForCompletion = false;
         updateThreadStatus();
         await loadHistory();
       } catch (error) {
@@ -640,6 +666,9 @@
         selectedProjectName = projectsEl.value;
         localStorage.setItem('codexBridge.projectName', selectedProjectName);
         selectedThreadId = '';
+        currentThreadStatus = null;
+        pendingWatch = null;
+        historyReloadedForCompletion = false;
         renderThreadOptions();
         await loadHistory();
       } catch (error) {
@@ -655,6 +684,7 @@
       message('user', text);
       const pending = message('assistant', '已发送，等待 Codex 回复...');
       setRunning(true);
+      historyReloadedForCompletion = false;
       try {
         const res = await api('/send', {
           method: 'POST',
@@ -663,8 +693,8 @@
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || '发送失败');
-        if (pollTimer) clearInterval(pollTimer);
-        pollTimer = setInterval(() => pollStatus(data.watch || {}).catch(error => notice(error.message)), 1400);
+        pendingWatch = data.watch || { threadId: selectedThreadId };
+        await pollStatus(pendingWatch);
       } catch (error) {
         pending.textContent = error.message;
         setRunning(false);
@@ -688,6 +718,7 @@
     loadThreads().then(loadHistory).catch(error => notice(error.message));
     connectionStatusTimer = setInterval(() => refreshConnectionStatus().catch(() => {}), 3000);
     threadStatusTimer = setInterval(() => refreshThreadStatuses().catch(error => notice(error.message)), 3000);
+    setInterval(() => pollStatus().catch(error => notice(error.message)), 900);
   </script>
 </body>
 </html>

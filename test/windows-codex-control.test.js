@@ -220,6 +220,9 @@ test('手机端显示线程运行状态指示点', () => {
   assert.match(html, /id="threadStatus"/);
   assert.match(html, /function updateThreadStatus/);
   assert.match(html, /thread-status--running/);
+  assert.match(html, /thread-status--complete/);
+  assert.match(html, /#3b82f6/);
+  assert.match(html, /setRunning\(running\)/);
   assert.match(html, /setInterval\(\(\) => refreshThreadStatuses/);
 });
 
@@ -245,6 +248,10 @@ test('手机端运行中展开处理过程，完成后折叠', () => {
   assert.match(html, /处理过程已折叠/);
   assert.match(html, /renderProcessPanel\(data\)/);
   assert.match(html, /await loadHistory\(data\)/);
+  assert.match(html, /pendingWatch/);
+  assert.match(html, /setInterval\(\(\) => pollStatus\(\)/);
+  assert.match(html, /if \(!requestedThreadId\) return/);
+  assert.match(html, /data\.threadId !== selectedThreadId/);
 });
 
 test('手机端线程列表请求复用同一个进行中的请求', () => {

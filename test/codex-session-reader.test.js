@@ -164,6 +164,18 @@ test('解析线程历史', () => {
   assert.equal(history.messages[1].text, '你好，我在 Windows 上。');
 });
 
+test('解析线程历史时保留 task_complete 中的最终回复', () => {
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const history = reader.parseHistory('99999999-aaaa-bbbb-cccc-dddddddddddd', 20);
+
+  assert.equal(history.available, true);
+  assert.deepEqual(history.messages.map(item => item.role), ['user', 'assistant']);
+  assert.equal(history.messages[1].text, '这是完成事件里的最终回复。');
+});
+
 test('解析线程控制目标元数据', () => {
   const reader = new CodexSessionReader({
     sessionsDir: path.join(fixtureRoot, 'sessions'),

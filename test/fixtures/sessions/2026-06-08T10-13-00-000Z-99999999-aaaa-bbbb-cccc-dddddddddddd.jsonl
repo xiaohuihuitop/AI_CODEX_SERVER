@@ -1,0 +1,3 @@
+{"timestamp":"2026-06-08T10:13:00.000Z","type":"session_meta","payload":{"cwd":"C:\\Users\\admin\\Desktop\\demo"}}
+{"timestamp":"2026-06-08T10:13:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"只在完成事件里返回结果"}}
+{"timestamp":"2026-06-08T10:13:04.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-complete-only","last_agent_message":"这是完成事件里的最终回复。"}}

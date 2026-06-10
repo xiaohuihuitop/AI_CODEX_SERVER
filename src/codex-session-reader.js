@@ -292,6 +292,13 @@ class CodexSessionReader {
         const text = messageText(payload.content);
         if (text) messages.push({ role: 'assistant', label: 'Codex', text, timestamp: item.timestamp || '' });
       }
+      if (item.type === 'event_msg' && payload.type === 'task_complete') {
+        const text = stripCodexUiDirectives(payload.last_agent_message);
+        const last = messages[messages.length - 1];
+        if (text && !(last && last.role === 'assistant' && last.text === text)) {
+          messages.push({ role: 'assistant', label: 'Codex', text, timestamp: item.timestamp || '' });
+        }
+      }
     }
     return {
       ok: true,
