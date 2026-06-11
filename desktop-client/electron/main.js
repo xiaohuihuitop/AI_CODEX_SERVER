@@ -47,6 +47,18 @@ let config = loadConfig(CONFIG_PATH);
 let mainWindow = null;
 
 /**
+ * AI:按配置启动 Agent，避免打开管理器后仍需要手动上线。
+ *
+ * @returns {Promise<void>} 启动检查完成。
+ */
+async function startAgentIfEnabled() {
+  const normalized = normalizeManagerConfig(config);
+  if (!normalized.autoStart || !normalized.serverUrl || !normalized.token) return;
+  if (agentController.status().running) return;
+  await agentController.restart(normalized);
+}
+
+/**
  * 构建渲染层需要的状态快照。
  *
  * @returns {Promise<object>} 当前管理器状态。
@@ -122,6 +134,9 @@ ipcMain.handle('manager:restart-codex', async () => {
 });
 
 app.whenReady().then(() => {
+  startAgentIfEnabled().catch(error => {
+    console.error(`Codex manager auto start agent failed: ${error.message}`);
+  });
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

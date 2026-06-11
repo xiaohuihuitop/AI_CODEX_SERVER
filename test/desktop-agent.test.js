@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const EventEmitter = require('node:events');
 const test = require('node:test');
-const { agentUrlFromServerUrl, createDesktopAgentClient, handleAgentRequest } = require('../desktop-client/src/desktop-agent-client');
+const { agentUrlFromServerUrl, createDesktopAgentClient, handleAgentRequest, withTimeout } = require('../desktop-client/src/desktop-agent-client');
 const { DesktopAgentApi } = require('../desktop-client/src/desktop-agent-api');
 
 test('desktop-agent 将 HTTPS 云端地址转换为 WSS Agent 地址', () => {
@@ -172,6 +172,60 @@ test('desktop-agent 同步快照为空时不上传会话同步消息', async () 
   client.close();
 
   assert.equal(messages.length, 0);
+});
+
+test('desktop-agent 同步任务超时后会释放后续同步', async () => {
+  const messages = [];
+  class FakeSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.OPEN = 1;
+      this.CLOSED = 3;
+      this.readyState = this.OPEN;
+      setImmediate(() => this.emit('open'));
+    }
+
+    send(message) {
+      messages.push(JSON.parse(message));
+    }
+
+    close() {
+      this.readyState = this.CLOSED;
+      this.emit('close', 1000, Buffer.from(''));
+    }
+  }
+
+  let syncCount = 0;
+  const errors = [];
+  const client = createDesktopAgentClient({
+    serverUrl: 'http://example.test',
+    token: 'token',
+    api: { handle: async () => ({ ok: true }) },
+    WebSocket: FakeSocket,
+    syncIntervalMs: 1000,
+    syncTimeoutMs: 20,
+    syncProvider: async () => {
+      syncCount += 1;
+      if (syncCount === 1) return new Promise(() => {});
+      return { openThreadIds: ['thread-1'], sessions: [] };
+    },
+  });
+  client.on('sync-error', error => errors.push(error));
+
+  await new Promise(resolve => setTimeout(resolve, 1250));
+  client.close();
+
+  assert.equal(errors.length >= 1, true);
+  assert.equal(errors[0].code, 'SYNC_TIMEOUT');
+  assert.equal(messages.length >= 1, true);
+  assert.equal(messages[0].type, 'session-sync');
+});
+
+test('withTimeout 超时后返回明确错误码', async () => {
+  await assert.rejects(
+    () => withTimeout(new Promise(() => {}), 1, '同步超时'),
+    error => error.code === 'SYNC_TIMEOUT' && error.message === '同步超时',
+  );
 });
 
 test('desktop-agent API 控制 Codex 时暴露 busy 状态', async () => {

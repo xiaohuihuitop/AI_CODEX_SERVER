@@ -11,6 +11,25 @@ function agentUrlFromServerUrl(serverUrl, token) {
   return url.toString();
 }
 
+/**
+ * AI:给异步任务增加超时边界，避免一次同步卡住后永久停止后续同步。
+ *
+ * @param {Promise<*>} promise 原始异步任务。
+ * @param {number} timeoutMs 超时时间，毫秒。
+ * @param {string} message 超时错误文本。
+ * @returns {Promise<*>} 带超时的异步任务。
+ */
+function withTimeout(promise, timeoutMs, message) {
+  const ms = Number.isFinite(Number(timeoutMs)) ? Math.max(1, Number(timeoutMs)) : 1000;
+  let timer = null;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => {
+      reject(Object.assign(new Error(message), { code: 'SYNC_TIMEOUT' }));
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
 async function handleAgentRequest(api, message) {
   if (!message || typeof message.id !== 'string' || typeof message.action !== 'string') {
     return {
@@ -46,6 +65,7 @@ function createDesktopAgentClient(options) {
   const client = new EventEmitter();
   const syncProvider = typeof options.syncProvider === 'function' ? options.syncProvider : null;
   const syncIntervalMs = Number.isFinite(Number(options.syncIntervalMs)) ? Math.max(1000, Number(options.syncIntervalMs)) : 2000;
+  const syncTimeoutMs = Number.isFinite(Number(options.syncTimeoutMs)) ? Math.max(1000, Number(options.syncTimeoutMs)) : 15000;
   let socket = null;
   let reconnectTimer = null;
   let syncTimer = null;
@@ -56,7 +76,7 @@ function createDesktopAgentClient(options) {
     if (!syncProvider || syncing || stopped || !socket || socket.readyState !== socket.OPEN) return;
     syncing = true;
     try {
-      const payload = await syncProvider();
+      const payload = await withTimeout(syncProvider(), syncTimeoutMs, 'Agent 会话同步超时。');
       if (payload && socket && socket.readyState === socket.OPEN) {
         socket.send(JSON.stringify({ type: 'session-sync', payload }));
       }
@@ -131,4 +151,5 @@ module.exports = {
   agentUrlFromServerUrl,
   createDesktopAgentClient,
   handleAgentRequest,
+  withTimeout,
 };

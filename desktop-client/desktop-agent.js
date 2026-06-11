@@ -26,9 +26,9 @@ async function syncProvider() {
   }
   const now = Date.now();
   if (now - lastDiscoveryAt >= discoveryIntervalMs) {
+    lastDiscoveryAt = now;
     const openThreads = await controller.listOpenThreads();
     knownThreadTargets = reader.discoverOpenThreadSessions(openThreads);
-    lastDiscoveryAt = now;
   }
   const snapshot = reader.readKnownThreadSync(knownThreadTargets, syncOffsets, {
     initialLineLimit: Number(process.env.CODEX_AGENT_INITIAL_SYNC_LINES || 1000),
@@ -47,6 +47,7 @@ const ws = createDesktopAgentClient({
   api,
   syncProvider,
   syncIntervalMs: Number(process.env.CODEX_AGENT_SYNC_INTERVAL_MS || 2000),
+  syncTimeoutMs: Number(process.env.CODEX_AGENT_SYNC_TIMEOUT_MS || 15000),
 });
 
 ws.on('open', () => {

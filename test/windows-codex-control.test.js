@@ -150,6 +150,16 @@ test('打包后控制脚本路径指向 app.asar.unpacked 真实文件', () => {
   assert.equal(controller.scriptPath, expected);
 });
 
+test('Windows Codex 控制脚本有进程级超时保护', async () => {
+  const { WindowsCodexController } = require('../desktop-client/src/windows-codex-controller');
+  const controller = new WindowsCodexController({
+    scriptPath: path.join(__dirname, 'missing-control.ps1'),
+    timeoutMs: 5,
+  });
+
+  assert.equal(controller.timeoutMs, 5000);
+});
+
 test('脚本支持读取 Codex Desktop 当前打开线程', () => {
   const script = fs.readFileSync(scriptPath, 'utf8');
 

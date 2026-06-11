@@ -51,6 +51,9 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(electronMain, /manager:restart-agent/);
   assert.match(electronMain, /manager:restart-codex/);
   assert.match(electronMain, /createDesktopAgentProcess/);
+  assert.match(electronMain, /async function startAgentIfEnabled\(\)/);
+  assert.match(electronMain, /normalized\.autoStart/);
+  assert.match(electronMain, /agentController\.restart\(normalized\)/);
   assert.match(electronPreload, /contextBridge/);
   assert.doesNotMatch(electronPreload, /\bstartAgent:\s*\(/);
   assert.match(electronPreload, /restartAgent/);

@@ -12,10 +12,11 @@ class WindowsCodexController {
   /**
    * 创建 Windows Codex Desktop 控制器。
    *
-   * @param {{scriptPath?: string}} options 控制脚本配置。
+   * @param {{scriptPath?: string, timeoutMs?: number}} options 控制脚本配置。
    */
   constructor(options = {}) {
     this.scriptPath = resolveAsarUnpackedPath(options.scriptPath || path.join(__dirname, '..', 'scripts', 'win-codex-control.ps1'));
+    this.timeoutMs = Math.max(5000, Number(options.timeoutMs) || Number(process.env.CODEX_CONTROL_TIMEOUT_MS) || 12000);
   }
 
   /**
@@ -27,6 +28,7 @@ class WindowsCodexController {
    */
   run(action, args = []) {
     return new Promise((resolve, reject) => {
+      let settled = false;
       const child = spawn('powershell.exe', [
         '-NoProfile',
         '-ExecutionPolicy',
@@ -40,10 +42,28 @@ class WindowsCodexController {
 
       let stdout = '';
       let stderr = '';
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        child.kill('SIGKILL');
+        reject(Object.assign(new Error(`Windows Codex 控制超时：${action}`), {
+          code: 'CODEX_CONTROL_TIMEOUT',
+          stdout,
+          stderr,
+        }));
+      }, this.timeoutMs);
       child.stdout.on('data', data => { stdout += data.toString(); });
       child.stderr.on('data', data => { stderr += data.toString(); });
-      child.on('error', reject);
+      child.on('error', error => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      });
       child.on('close', code => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         if (code === 0) resolve({ stdout, stderr });
         else reject(Object.assign(new Error(stderr.trim() || `Windows Codex 控制失败：${action}`), { code, stdout, stderr }));
       });
