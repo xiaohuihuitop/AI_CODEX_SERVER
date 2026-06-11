@@ -114,7 +114,16 @@ ipcMain.handle('manager:stop-agent', async () => {
   return getState();
 });
 
+ipcMain.handle('manager:pause-feature', async () => {
+  config = normalizeManagerConfig(Object.assign({}, config, { autoStart: false }));
+  saveConfig(CONFIG_PATH, config);
+  agentController.stop();
+  return getState();
+});
+
 ipcMain.handle('manager:restart-agent', async () => {
+  config = normalizeManagerConfig(Object.assign({}, config, { autoStart: true }));
+  saveConfig(CONFIG_PATH, config);
   await agentController.restart(config);
   return getState();
 });

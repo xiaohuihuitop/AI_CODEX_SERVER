@@ -59,6 +59,10 @@ function setCard(card, ok) {
   card.classList.toggle('bad', !ok);
 }
 
+function isConfigured(config) {
+  return Boolean(config && config.serverUrl && config.token);
+}
+
 function renderConfig(config) {
   elements.serverUrl.value = config.serverUrl || '';
   elements.token.value = config.token || '';
@@ -69,18 +73,22 @@ function renderConfig(config) {
 function renderState(nextState, options = {}) {
   state.current = nextState;
   if (options.renderConfig !== false) renderConfig(nextState.config);
+  const configured = isConfigured(nextState.config);
+  const featureStarted = Boolean(configured && nextState.agent.running);
 
-  setCard(elements.cloudCard, nextState.cloud.ok);
-  elements.cloudStatus.textContent = nextState.cloud.ok ? '可访问' : '不可访问';
-  elements.cloudDetail.textContent = nextState.cloud.online ? 'Agent 已在线' : (nextState.cloud.message || 'Agent 未在线');
+  setCard(elements.cloudCard, nextState.cloud.ok && nextState.cloud.online);
+  elements.cloudStatus.textContent = nextState.cloud.online ? '已连接' : '未连接';
+  elements.cloudDetail.textContent = configured
+    ? (nextState.cloud.message || (nextState.cloud.ok ? '服务器可访问' : '服务器不可访问'))
+    : '请先填写云端地址和 Token';
 
-  setCard(elements.agentCard, nextState.agent.running);
-  elements.agentStatus.textContent = nextState.agent.running ? '运行中' : '未运行';
-  elements.agentDetail.textContent = nextState.agent.pid ? `PID ${nextState.agent.pid}` : '';
+  setCard(elements.agentCard, featureStarted);
+  elements.agentStatus.textContent = !configured ? '配置不完整' : featureStarted ? '已启动' : '已停止';
+  elements.agentDetail.textContent = nextState.agent.pid ? `同步服务 PID ${nextState.agent.pid}` : '手机端暂时不能控制这台电脑';
 
   setCard(elements.codexCard, nextState.codex.ok);
-  elements.codexStatus.textContent = nextState.codex.ok ? 'CDP 已开放' : 'CDP 不可用';
-  elements.codexDetail.textContent = nextState.codex.ok ? `目标数量 ${nextState.codex.targetCount}` : (nextState.codex.message || '');
+  elements.codexStatus.textContent = nextState.codex.ok ? '可用' : '需重启 Codex 生效 CDP';
+  elements.codexDetail.textContent = nextState.codex.ok ? `可控制目标 ${nextState.codex.targetCount}` : (nextState.codex.message || '点击“重启 Codex 生效 CDP”');
 
   elements.mobileUrl.textContent = nextState.mobileUrl || '请先填写云端服务器地址和固定 Token。';
   elements.agentEnv.textContent = [
@@ -130,7 +138,7 @@ elements.restartAgentButton.addEventListener('click', () => {
 });
 
 elements.stopButton.addEventListener('click', () => {
-  runAction(() => window.codexManager.stopAgent());
+  runAction(() => window.codexManager.pauseFeature());
 });
 
 elements.restartCodexButton.addEventListener('click', () => {

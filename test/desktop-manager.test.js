@@ -189,6 +189,24 @@ test('桌面管理器 HTTP 接口支持保存配置和控制 Agent', async () =>
   }
 });
 
+test('Electron 停止功能会关闭自动启动并停止 Agent', () => {
+  const electronMain = fs.readFileSync(path.join(__dirname, '..', 'desktop-client', 'electron', 'main.js'), 'utf8');
+
+  assert.match(electronMain, /manager:pause-feature/);
+  assert.match(electronMain, /autoStart: false/);
+  assert.match(electronMain, /saveConfig\(CONFIG_PATH, config\)/);
+  assert.match(electronMain, /agentController\.stop\(\)/);
+});
+
+test('Electron 启动功能会恢复自动启动并重启 Agent', () => {
+  const electronMain = fs.readFileSync(path.join(__dirname, '..', 'desktop-client', 'electron', 'main.js'), 'utf8');
+
+  assert.match(electronMain, /manager:restart-agent/);
+  assert.match(electronMain, /autoStart: true/);
+  assert.match(electronMain, /saveConfig\(CONFIG_PATH, config\)/);
+  assert.match(electronMain, /agentController\.restart\(config\)/);
+});
+
 test('桌面 Agent 管理器可以识别并接管已有 Agent 进程', () => {
   const { DesktopAgentProcess } = require('../desktop-client/src/desktop-agent-process');
   const killed = [];
