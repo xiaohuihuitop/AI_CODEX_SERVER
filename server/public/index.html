@@ -327,6 +327,7 @@
     let runningHistoryRequest = null;
     let runningHistorySyncAt = 0;
     let runningHistoryThreadId = '';
+    let agentOnline = false;
 
     /**
      * 调用本机桥接 API。
@@ -436,6 +437,7 @@
     function updateConnectionStatus(state) {
       const online = Boolean(state?.online);
       const offline = Boolean(state?.offline);
+      agentOnline = online;
       connectionStatusEl.classList.toggle('connection-status--online', online);
       connectionStatusEl.classList.toggle('connection-status--offline', !online && offline);
       const title = online ? '服务器已连接，电脑 Agent 在线' : state?.message || '连接状态未知';
@@ -452,14 +454,33 @@
       try {
         const res = await api(`/codex/health?token=${encodeURIComponent(token)}`);
         const data = await res.json();
-        if (res.ok && data.ok && data.online) {
-          updateConnectionStatus({ online: true });
+        if (res.ok && data.ok) {
+          updateConnectionStatus({
+            online: Boolean(data.online),
+            offline: !data.online,
+            message: data.online ? '服务器已连接，电脑 Agent 在线' : '服务器可访问，电脑 Agent 未在线',
+          });
           return;
         }
         updateConnectionStatus({ offline: true, message: data.message || '服务器可访问，电脑 Agent 未在线' });
       } catch {
         updateConnectionStatus({ offline: true, message: '服务器不可访问' });
       }
+    }
+
+    /**
+     * AI:使用服务端响应里的 Agent 在线状态更新连接指示，避免缓存接口成功被误判为在线。
+     *
+     * @param {object} data 接口响应。
+     * @returns {void}
+     */
+    function applyAgentOnline(data) {
+      if (!data || typeof data.agentOnline !== 'boolean') return;
+      updateConnectionStatus({
+        online: data.agentOnline,
+        offline: !data.agentOnline,
+        message: data.agentOnline ? '服务器已连接，电脑 Agent 在线' : '服务器可访问，电脑 Agent 未在线',
+      });
     }
 
     /**
@@ -664,7 +685,7 @@
       const scopedStatus = statusData?.threadId === selectedThreadId ? statusData : null;
       const status = scopedStatus?.status || row?.status || 'idle';
       const pendingCurrent = pendingWatch?.threadId === selectedThreadId && Boolean(pendingWatch?.since);
-      const running = Boolean(scopedStatus?.active) || !!row?.active || status === 'running' || pendingCurrent;
+      const running = agentOnline && (Boolean(scopedStatus?.active) || !!row?.active || status === 'running' || pendingCurrent);
       const complete = !running && status === 'complete';
       threadStatusEl.classList.toggle('thread-status--running', running);
       threadStatusEl.classList.toggle('thread-status--complete', complete);
@@ -709,7 +730,7 @@
           updateConnectionStatus({ offline: true, message: data.message || errorMessage });
           throw new Error(data.message || errorMessage);
         }
-        updateConnectionStatus({ online: true });
+        applyAgentOnline(data);
         return data.threads || [];
       })();
       try {
@@ -795,6 +816,7 @@
       const res = await api(`/codex/status?${params}`);
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.message || '读取状态失败');
+      applyAgentOnline(data);
       return data;
     }
 

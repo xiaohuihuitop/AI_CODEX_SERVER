@@ -23,12 +23,17 @@ function createRelayState() {
   };
 }
 
+function isAgentOnline(state, token) {
+  const ws = state.agents.get(token);
+  return Boolean(ws && ws.readyState === ws.OPEN);
+}
+
 function rejectAgent(ws, code, reason) {
   ws.close(code, reason);
 }
 
 function attachAgent(state, ws, token) {
-  if (state.agents.has(token)) {
+  if (isAgentOnline(state, token)) {
     rejectAgent(ws, 1008, 'TOKEN_ALREADY_ONLINE');
     return;
   }
@@ -122,23 +127,23 @@ function createCloudRelayServer(options = {}) {
     }
     try {
       if (req.method === 'GET' && req.url.startsWith('/codex/health')) {
-        return sendJson(res, 200, { ok: true, service: 'codex-cloud-relay', online: state.agents.has(token) });
+        return sendJson(res, 200, { ok: true, service: 'codex-cloud-relay', online: isAgentOnline(state, token) });
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/config')) {
         return sendJson(res, 200, { ok: true, service: 'codex-cloud-relay', localOnly: false });
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/threads')) {
-        return sendJson(res, 200, state.cache.threads(token));
+        return sendJson(res, 200, Object.assign(state.cache.threads(token), { agentOnline: isAgentOnline(state, token) }));
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/history')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const threadId = url.searchParams.get('thread') || '';
-        return sendJson(res, 200, state.cache.history(token, threadId, url.searchParams.get('limit') || 120));
+        return sendJson(res, 200, Object.assign(state.cache.history(token, threadId, url.searchParams.get('limit') || 120), { agentOnline: isAgentOnline(state, token) }));
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/status')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const threadId = url.searchParams.get('thread') || '';
-        return sendJson(res, 200, state.cache.status(token, threadId, url.searchParams.get('since') || ''));
+        return sendJson(res, 200, Object.assign(state.cache.status(token, threadId, url.searchParams.get('since') || ''), { agentOnline: isAgentOnline(state, token) }));
       }
       if (req.method === 'POST' && req.url.startsWith('/send')) {
         const payload = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');

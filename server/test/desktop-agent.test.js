@@ -1,8 +1,8 @@
 const assert = require('node:assert/strict');
 const EventEmitter = require('node:events');
 const test = require('node:test');
-const { agentUrlFromServerUrl, createDesktopAgentClient, handleAgentRequest, withTimeout } = require('../desktop-client/src/desktop-agent-client');
-const { DesktopAgentApi } = require('../desktop-client/src/desktop-agent-api');
+const { agentUrlFromServerUrl, createDesktopAgentClient, handleAgentRequest, withTimeout } = require('../../desktop/src/desktop-agent-client');
+const { DesktopAgentApi } = require('../../desktop/src/desktop-agent-api');
 
 test('desktop-agent 将 HTTPS 云端地址转换为 WSS Agent 地址', () => {
   assert.equal(

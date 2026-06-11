@@ -92,7 +92,7 @@ function renderState(nextState, options = {}) {
   const cloudPort = nextState.ports.cloud || '未配置';
   elements.codexStatus.textContent = nextState.codex.ok ? '可用' : '需重启 Codex 生效 CDP';
   elements.codexDetail.textContent = nextState.codex.ok
-    ? `CDP 端口 ${nextState.ports.codexDebug}，Codex App 目标 ${nextState.codex.appTargetCount || 1}`
+    ? `CDP 端口 ${nextState.ports.codexDebug}`
     : (nextState.codex.message || `点击“重启 Codex 生效 CDP”，端口 ${nextState.ports.codexDebug}`);
   elements.portStatus.textContent = `云端 ${cloudPort} / CDP ${nextState.ports.codexDebug}`;
 

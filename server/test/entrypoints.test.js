@@ -3,10 +3,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const rootDir = path.join(__dirname, '..');
-const desktopDir = path.join(rootDir, 'desktop-client');
+const rootDir = path.join(__dirname, '..', '..');
+const desktopDir = path.join(rootDir, 'desktop');
 const serverDir = path.join(rootDir, 'server');
-const mobileDir = path.join(rootDir, 'mobile-app');
+const mobileDir = path.join(rootDir, 'app');
 
 test('云端和桌面端入口文件存在并使用固定 token 环境变量', () => {
   const cloud = fs.readFileSync(path.join(serverDir, 'cloud-server.js'), 'utf8');
@@ -37,7 +37,6 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   const electronHtml = fs.readFileSync(path.join(desktopDir, 'electron', 'renderer.html'), 'utf8');
   const electronRenderer = fs.readFileSync(path.join(desktopDir, 'electron', 'renderer.js'), 'utf8');
   const desktopPkg = JSON.parse(fs.readFileSync(path.join(desktopDir, 'package.json'), 'utf8'));
-  const rootPkg = JSON.parse(fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'));
 
   assert.match(manager, /createDesktopManagerServer/);
   assert.match(manager, /CODEX_MANAGER_PORT/);
@@ -88,7 +87,8 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(electronHtml, /Codex 控制/);
   assert.match(electronRenderer, /const cloudPort = nextState\.ports\.cloud \|\| '未配置'/);
   assert.match(electronRenderer, /云端 \$\{cloudPort\} \/ CDP \$\{nextState\.ports\.codexDebug\}/);
-  assert.match(electronRenderer, /Codex App 目标/);
+  assert.match(electronRenderer, /CDP 端口 \$\{nextState\.ports\.codexDebug\}/);
+  assert.doesNotMatch(electronRenderer, /Codex App 目标/);
   assert.doesNotMatch(electronRenderer, /可控制目标 \$\{nextState\.codex\.targetCount\}/);
   assert.match(electronRenderer, /function isConfigured\(config\)/);
   assert.match(electronRenderer, /featureStarted/);
@@ -109,12 +109,9 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.equal(desktopPkg.scripts['start:manager:gui:legacy'], 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-desktop-manager-gui.ps1');
   assert.deepEqual(desktopPkg.build.asarUnpack, ['scripts/*.ps1']);
   assert.equal(desktopPkg.devDependencies.electron, '42.3.3');
-  assert.equal(rootPkg.scripts['start:manager:gui'], 'electron desktop-client/electron/main.js');
-  assert.equal(rootPkg.scripts['build:manager:win'], 'electron-builder --win dir --projectDir desktop-client');
-  assert.equal(Object.prototype.hasOwnProperty.call(rootPkg, 'build'), false);
 });
 
-test('电脑端、服务端、手机端目录物理隔离', () => {
+test('根目录只保留三端业务目录和 Git 基础设施', () => {
   const expectedFiles = [
     path.join(desktopDir, 'desktop-agent.js'),
     path.join(desktopDir, 'desktop-manager-server.js'),
@@ -129,23 +126,19 @@ test('电脑端、服务端、手机端目录物理隔离', () => {
     path.join(serverDir, 'src', 'session-cache.js'),
     path.join(mobileDir, 'manifest.json'),
     path.join(mobileDir, 'pages', 'index', 'index.vue'),
+    path.join(mobileDir, 'docs', '使用说明.md'),
   ];
-  const removedRootFiles = [
-    'cloud-server.js',
-    'desktop-agent.js',
-    'desktop-manager-server.js',
-    'server.js',
-    'Dockerfile',
-    'docker-compose.yml',
-    'Caddyfile',
-  ];
+  const allowedRoot = new Set(['.git', '.github', '.gitignore', 'desktop', 'server', 'app']);
 
   for (const file of expectedFiles) assert.equal(fs.existsSync(file), true, file);
-  for (const file of removedRootFiles) assert.equal(fs.existsSync(path.join(rootDir, file)), false, file);
-  assert.equal(fs.existsSync(path.join(rootDir, 'src', 'cloud-relay.js')), false);
-  assert.equal(fs.existsSync(path.join(rootDir, 'public', 'index.html')), false);
-  assert.equal(fs.existsSync(path.join(rootDir, 'electron', 'main.js')), false);
-  assert.equal(fs.existsSync(path.join(rootDir, 'scripts', 'win-codex-control.ps1')), false);
+  const rootNames = fs.readdirSync(rootDir, { withFileTypes: true }).map(item => item.name);
+  assert.deepEqual(rootNames.filter(name => !allowedRoot.has(name)).sort(), []);
+  assert.equal(fs.existsSync(path.join(rootDir, 'desktop-client')), false);
+  assert.equal(fs.existsSync(path.join(rootDir, 'mobile-app')), false);
+  assert.equal(fs.existsSync(path.join(rootDir, 'docs')), false);
+  assert.equal(fs.existsSync(path.join(rootDir, 'test')), false);
+  assert.equal(fs.existsSync(path.join(rootDir, 'package.json')), false);
+  assert.equal(fs.existsSync(path.join(rootDir, 'package-lock.json')), false);
 });
 
 test('服务端 Docker 构建只依赖 server 目录', () => {
@@ -157,6 +150,6 @@ test('服务端 Docker 构建只依赖 server 目录', () => {
   assert.match(dockerfile, /COPY cloud-server\.js \.\//);
   assert.match(dockerfile, /COPY public \.\/public/);
   assert.match(dockerfile, /COPY src \.\/src/);
-  assert.doesNotMatch(dockerfile, /desktop-client|mobile-app|\.\.\//);
+  assert.doesNotMatch(dockerfile, /desktop|COPY\s+app|COPY\s+\.\.\//);
   assert.match(workflow, /context:\s+\.\/server/);
 });

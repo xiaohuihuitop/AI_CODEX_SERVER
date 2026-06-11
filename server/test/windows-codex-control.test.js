@@ -3,8 +3,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const scriptPath = path.join(__dirname, '..', 'desktop-client', 'scripts', 'win-codex-control.ps1');
-const indexPath = path.join(__dirname, '..', 'desktop-client', 'public', 'index.html');
+const scriptPath = path.join(__dirname, '..', '..', 'desktop', 'scripts', 'win-codex-control.ps1');
+const indexPath = path.join(__dirname, '..', '..', 'desktop', 'public', 'index.html');
 
 function extractGetThreadRowExpression(script, projectName, threadName) {
   const functionText = script.match(/function Get-ThreadRow \{[\s\S]*?\n\}\r?\n\r?\nfunction Get-Composer/)?.[0] || '';
@@ -127,7 +127,7 @@ test('关闭 CDP socket 时不等待远端关闭帧', () => {
 });
 
 test('打包后控制脚本路径指向 app.asar.unpacked 真实文件', () => {
-  const { WindowsCodexController, resolveAsarUnpackedPath } = require('../desktop-client/src/windows-codex-controller');
+  const { WindowsCodexController, resolveAsarUnpackedPath } = require('../../desktop/src/windows-codex-controller');
   const packedPath = [
     'C:',
     'app',
@@ -151,7 +151,7 @@ test('打包后控制脚本路径指向 app.asar.unpacked 真实文件', () => {
 });
 
 test('Windows Codex 控制脚本有进程级超时保护', async () => {
-  const { WindowsCodexController } = require('../desktop-client/src/windows-codex-controller');
+  const { WindowsCodexController } = require('../../desktop/src/windows-codex-controller');
   const controller = new WindowsCodexController({
     scriptPath: path.join(__dirname, 'missing-control.ps1'),
     timeoutMs: 5,
@@ -270,12 +270,27 @@ test('手机端显示云端 Agent 连接状态指示点', () => {
   const html = fs.readFileSync(indexPath, 'utf8');
 
   assert.match(html, /id="connectionStatus"/);
+  assert.match(html, /let agentOnline = false/);
   assert.match(html, /connection-status--online/);
   assert.match(html, /connection-status--offline/);
   assert.match(html, /function updateConnectionStatus/);
+  assert.match(html, /agentOnline = online/);
+  assert.match(html, /function applyAgentOnline\(data\)/);
+  assert.match(html, /typeof data\.agentOnline !== 'boolean'/);
   assert.match(html, /function refreshConnectionStatus/);
   assert.match(html, /\/codex\/health\?token=/);
   assert.match(html, /setInterval\(\(\) => refreshConnectionStatus/);
+});
+
+test('网页端连接状态不再由线程缓存请求成功误判为在线', () => {
+  const html = fs.readFileSync(indexPath, 'utf8');
+  const updateThreadStatusFunction = html.match(/function updateThreadStatus\(statusData = null\) \{([\s\S]*?)\n    \}/)?.[1] || '';
+  const fetchThreadRowsFunction = html.match(/async function fetchThreadRows\(errorMessage\) \{([\s\S]*?)\n    \}/)?.[1] || '';
+
+  assert.match(updateThreadStatusFunction, /const running = agentOnline &&/);
+  assert.match(fetchThreadRowsFunction, /applyAgentOnline\(data\);/);
+  assert.doesNotMatch(fetchThreadRowsFunction, /updateConnectionStatus\(\{ online: true \}\)/);
+  assert.match(html, /applyAgentOnline\(data\);[\s\S]*return data;/);
 });
 
 test('手机端处理过程默认折叠且只通过手动展开', () => {

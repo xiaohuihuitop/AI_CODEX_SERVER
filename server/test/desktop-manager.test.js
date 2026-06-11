@@ -9,7 +9,7 @@ const {
   createDefaultManagerConfig,
   generateDeviceToken,
   normalizeManagerConfig,
-} = require('../desktop-client/src/desktop-manager');
+} = require('../../desktop/src/desktop-manager');
 
 test('桌面管理器生成可直接用于手机和 Agent 的固定 token 配置', () => {
   const config = normalizeManagerConfig({
@@ -60,7 +60,7 @@ test('桌面管理器 token 生成不使用短 token', () => {
 });
 
 test('桌面管理器配置可以持久化到文件', () => {
-  const { loadConfig, saveConfig } = require('../desktop-client/src/desktop-manager-server');
+  const { loadConfig, saveConfig } = require('../../desktop/src/desktop-manager-server');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-manager-'));
   const file = path.join(dir, 'manager-config.json');
   try {
@@ -83,7 +83,7 @@ test('桌面管理器配置可以持久化到文件', () => {
 });
 
 test('桌面管理器配置兼容 UTF-8 BOM 文件', () => {
-  const { loadConfig } = require('../desktop-client/src/desktop-manager-server');
+  const { loadConfig } = require('../../desktop/src/desktop-manager-server');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-manager-bom-'));
   const file = path.join(dir, 'manager-config.json');
   try {
@@ -106,7 +106,7 @@ test('桌面管理器配置兼容 UTF-8 BOM 文件', () => {
 });
 
 test('桌面管理器页面包含 Agent 控制和状态区域', () => {
-  const { renderHtml } = require('../desktop-client/src/desktop-manager-server');
+  const { renderHtml } = require('../../desktop/src/desktop-manager-server');
   const html = renderHtml({
     serverUrl: 'http://example.com:8008',
     token: 'xiaohuihui',
@@ -127,7 +127,7 @@ test('桌面管理器页面包含 Agent 控制和状态区域', () => {
 });
 
 test('桌面管理器 HTTP 接口支持保存配置和控制 Agent', async () => {
-  const { createDesktopManagerServer } = require('../desktop-client/src/desktop-manager-server');
+  const { createDesktopManagerServer } = require('../../desktop/src/desktop-manager-server');
   const calls = [];
   const agentController = {
     stop() {
@@ -190,7 +190,7 @@ test('桌面管理器 HTTP 接口支持保存配置和控制 Agent', async () =>
 });
 
 test('桌面管理器 Codex 控制只统计可控制 App 目标', async () => {
-  const { probeCodexDebug } = require('../desktop-client/src/desktop-manager-server');
+  const { probeCodexDebug } = require('../../desktop/src/desktop-manager-server');
   const result = await probeCodexDebug({
     fetchWithTimeout: async () => ({
       json: async () => [
@@ -210,7 +210,7 @@ test('桌面管理器 Codex 控制只统计可控制 App 目标', async () => {
 });
 
 test('Electron 停止功能会关闭自动启动并停止 Agent', () => {
-  const electronMain = fs.readFileSync(path.join(__dirname, '..', 'desktop-client', 'electron', 'main.js'), 'utf8');
+  const electronMain = fs.readFileSync(path.join(__dirname, '..', '..', 'desktop', 'electron', 'main.js'), 'utf8');
 
   assert.match(electronMain, /manager:pause-feature/);
   assert.match(electronMain, /autoStart: false/);
@@ -219,7 +219,7 @@ test('Electron 停止功能会关闭自动启动并停止 Agent', () => {
 });
 
 test('Electron 启动功能会恢复自动启动并重启 Agent', () => {
-  const electronMain = fs.readFileSync(path.join(__dirname, '..', 'desktop-client', 'electron', 'main.js'), 'utf8');
+  const electronMain = fs.readFileSync(path.join(__dirname, '..', '..', 'desktop', 'electron', 'main.js'), 'utf8');
 
   assert.match(electronMain, /manager:restart-agent/);
   assert.match(electronMain, /autoStart: true/);
@@ -228,7 +228,7 @@ test('Electron 启动功能会恢复自动启动并重启 Agent', () => {
 });
 
 test('桌面 Agent 管理器可以识别并接管已有 Agent 进程', () => {
-  const { DesktopAgentProcess } = require('../desktop-client/src/desktop-agent-process');
+  const { DesktopAgentProcess } = require('../../desktop/src/desktop-agent-process');
   const killed = [];
   const manager = new DesktopAgentProcess({
     cwd: 'C:\\repo',
@@ -262,7 +262,7 @@ test('桌面 Agent 管理器可以识别并接管已有 Agent 进程', () => {
 test('桌面 Agent 管理器支持一键重启 Agent 让连接重新上线', async () => {
   const EventEmitter = require('node:events');
   const { PassThrough } = require('node:stream');
-  const { DesktopAgentProcess } = require('../desktop-client/src/desktop-agent-process');
+  const { DesktopAgentProcess } = require('../../desktop/src/desktop-agent-process');
   const killed = [];
   const spawned = [];
   let existingPid = 4321;
@@ -308,7 +308,7 @@ test('桌面 Agent 管理器支持一键重启 Agent 让连接重新上线', asy
 });
 
 test('桌面 Agent 管理器支持自定义子进程入口参数', () => {
-  const { DesktopAgentProcess } = require('../desktop-client/src/desktop-agent-process');
+  const { DesktopAgentProcess } = require('../../desktop/src/desktop-agent-process');
   const calls = [];
   const manager = new DesktopAgentProcess({
     cwd: 'C:\\repo',

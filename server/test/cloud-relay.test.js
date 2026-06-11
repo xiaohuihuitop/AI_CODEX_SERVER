@@ -2,10 +2,10 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const test = require('node:test');
 const { WebSocket } = require('ws');
-const { createCloudRelayServer } = require('../server/src/cloud-relay');
-const { createCloudSessionCache } = require('../server/src/session-cache');
+const { createCloudRelayServer } = require('../src/cloud-relay');
+const { createCloudSessionCache } = require('../src/session-cache');
 
-const publicDir = path.join(__dirname, '..', 'server', 'public');
+const publicDir = path.join(__dirname, '..', 'public');
 
 function listen(server) {
   return new Promise(resolve => {
@@ -53,6 +53,7 @@ test('云端 relay 手机线程请求读取服务器缓存', async () => {
 
   assert.equal(res.status, 200);
   assert.equal(body.cached, true);
+  assert.equal(body.agentOnline, true);
   assert.deepEqual(body.threads.map(row => ({ id: row.id, name: row.name, projectName: row.projectName })), [
     { id: 'thread-1', name: '远程线程', projectName: 'demo' },
   ]);
@@ -74,6 +75,7 @@ test('云端 relay 没有缓存时线程列表返回空数组', async () => {
 
   assert.equal(res.status, 200);
   assert.equal(body.cached, true);
+  assert.equal(body.agentOnline, false);
   assert.deepEqual(body.threads, []);
 
   await close(server);
@@ -192,11 +194,13 @@ test('云端 relay 从服务器缓存返回历史和状态', async () => {
   assert.equal(historyRes.status, 200);
   assert.equal(statusRes.status, 200);
   assert.equal(history.cached, true);
+  assert.equal(history.agentOnline, true);
   assert.deepEqual(history.messages.map(row => ({ role: row.role, text: row.text })), [
     { role: 'user', text: '你好' },
     { role: 'assistant', text: '完成' },
   ]);
   assert.equal(status.cached, true);
+  assert.equal(status.agentOnline, true);
   assert.equal(status.status, 'complete');
   assert.equal(status.turns[0].steps[0].text, '我在处理');
 

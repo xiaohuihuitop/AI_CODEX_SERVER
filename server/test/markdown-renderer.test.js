@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const { renderMarkdownToHtml } = require('../server/public/markdown');
+const { renderMarkdownToHtml } = require('../public/markdown');
 
 test('渲染常用 Markdown 格式', () => {
   const html = renderMarkdownToHtml([
@@ -37,7 +37,7 @@ test('Markdown 渲染会转义原始 HTML 并拒绝危险链接', () => {
 });
 
 test('网页端 Markdown 渲染器避免旧 Android WebView 不兼容 API', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'server', 'public', 'markdown.js'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', 'public', 'markdown.js'), 'utf8');
 
   assert.doesNotMatch(source, /\.replaceAll\s*\(/);
   assert.doesNotMatch(source, /new\s+URL\s*\(/);

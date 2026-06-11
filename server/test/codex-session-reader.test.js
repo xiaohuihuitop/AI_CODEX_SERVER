@@ -7,7 +7,7 @@ const {
   reasoningText,
   stripCodexUiDirectives,
   threadIdFromSessionFile,
-} = require('../desktop-client/src/codex-session-reader');
+} = require('../../desktop/src/codex-session-reader');
 
 const fixtureRoot = path.join(__dirname, 'fixtures');
 

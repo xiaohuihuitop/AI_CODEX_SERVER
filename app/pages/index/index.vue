@@ -4,8 +4,12 @@
       <view class="topbar">
         <view class="status-row">
           <view class="status-item">
-            <view class="dot" :class="connectionDotClass"></view>
-            <text class="status-text">{{ connectionText }}</text>
+            <view class="dot" :class="serverDotClass"></view>
+            <text class="status-text">{{ serverText }}</text>
+          </view>
+          <view class="status-item">
+            <view class="dot" :class="agentDotClass"></view>
+            <text class="status-text">{{ agentText }}</text>
           </view>
           <view class="status-item">
             <view class="dot" :class="threadDotClass"></view>
@@ -109,7 +113,8 @@ const threadRows = ref([]);
 const messages = ref([]);
 const notice = ref('正在连接服务器...');
 const messageText = ref('');
-const connectionState = ref({ online: false, offline: false, message: '正在检测连接状态' });
+const serverState = ref({ online: false, offline: false, message: '服务器检测中' });
+const agentState = ref({ online: false, offline: false, message: 'Agent 检测中' });
 const currentThreadStatus = ref(null);
 const pendingWatch = ref(null);
 const historyReloadedForCompletion = ref(false);
@@ -168,7 +173,7 @@ const running = computed(() => {
   const status = (currentThreadStatus.value && currentThreadStatus.value.status) || (selectedThread.value && selectedThread.value.status);
   const activeStatus = Boolean(currentThreadStatus.value && currentThreadStatus.value.active) || Boolean(selectedThread.value && selectedThread.value.active);
   const pendingThreadId = pendingWatch.value && pendingWatch.value.threadId;
-  return activeStatus || status === 'running' || pendingThreadId === selectedThreadId.value;
+  return agentState.value.online && (activeStatus || status === 'running' || pendingThreadId === selectedThreadId.value);
 });
 const complete = computed(() => {
   const currentStatus = currentThreadStatus.value && currentThreadStatus.value.status;
@@ -176,9 +181,11 @@ const complete = computed(() => {
   return !running.value && (currentStatus === 'complete' || selectedStatus === 'complete');
 });
 const canStop = computed(() => running.value && !sending.value && !switchingThread.value);
-const connectionDotClass = computed(() => connectionState.value.online ? 'dot-green' : connectionState.value.offline ? 'dot-red' : 'dot-gray');
+const serverDotClass = computed(() => serverState.value.online ? 'dot-green' : serverState.value.offline ? 'dot-red' : 'dot-gray');
+const agentDotClass = computed(() => agentState.value.online ? 'dot-green' : 'dot-gray');
 const threadDotClass = computed(() => running.value ? 'dot-blue' : complete.value ? 'dot-green' : 'dot-gray');
-const connectionText = computed(() => connectionState.value.online ? 'Agent 在线' : connectionState.value.message || '连接未知');
+const serverText = computed(() => serverState.value.online ? '服务器已连' : serverState.value.message || '服务器未知');
+const agentText = computed(() => agentState.value.online ? 'Agent 在线' : agentState.value.message || 'Agent 未知');
 const threadText = computed(() => running.value ? '对话进行中' : complete.value ? '对话已完成' : '对话空闲');
 const timelineItems = computed(() => {
   const items = [];
@@ -555,15 +562,30 @@ async function refreshConnectionStatus() {
   try {
     const data = await getHealth(config.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token)) return;
-    connectionState.value = {
-      online: Boolean(data.online),
-      offline: !data.online,
-      message: data.online ? 'Agent 在线' : 'Agent 未在线',
-    };
+    serverState.value = { online: true, offline: false, message: '服务器已连' };
+    applyAgentOnline({ agentOnline: Boolean(data.online) });
   } catch (error) {
     if (!canUpdateTask(token)) return;
-    connectionState.value = { online: false, offline: true, message: error.message };
+    serverState.value = { online: false, offline: true, message: '服务器断开' };
+    agentState.value = { online: false, offline: true, message: 'Agent 未知' };
+    setNotice(error.message);
   }
+}
+
+/**
+ * AI:使用服务端响应里的 Agent 在线状态更新连接指示，避免缓存接口成功被误判为在线。
+ *
+ * @param {object} data 接口响应。
+ * @returns {void}
+ */
+function applyAgentOnline(data) {
+  if (!data || typeof data.agentOnline !== 'boolean') return;
+  serverState.value = { online: true, offline: false, message: '服务器已连' };
+  agentState.value = {
+    online: data.agentOnline,
+    offline: !data.agentOnline,
+    message: data.agentOnline ? 'Agent 在线' : 'Agent 未在线',
+  };
 }
 
 /**
@@ -578,7 +600,7 @@ async function fetchThreadRows() {
   const request = (async () => {
     const data = await getThreads(config.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token)) return threadRows.value;
-    connectionState.value = { online: true, offline: false, message: 'Agent 在线' };
+    applyAgentOnline(data);
     return data.threads || [];
   })();
   threadListRequest = request;
@@ -586,7 +608,8 @@ async function fetchThreadRows() {
     return await request;
   } catch (error) {
     if (!canUpdateTask(token)) return threadRows.value;
-    connectionState.value = { online: false, offline: true, message: error.message };
+    serverState.value = { online: false, offline: true, message: '服务器断开' };
+    agentState.value = { online: false, offline: true, message: 'Agent 未知' };
     throw error;
   } finally {
     if (threadListRequest === request) threadListRequest = null;
@@ -613,6 +636,7 @@ async function loadThreads() {
  * @returns {void}
  */
 function applyThreadStatus(status) {
+  applyAgentOnline(status);
   currentThreadStatus.value = status;
   bindPendingAssistantTurn(status);
   syncManualProcessOpenState(status);
@@ -755,6 +779,7 @@ function threadDotClassFor(thread) {
   const active = isSelected && currentThreadStatus.value
     ? Boolean(currentThreadStatus.value.active)
     : Boolean(thread && thread.active);
+  if (!agentState.value.online) return 'dot-gray';
   return active || status === 'running' ? 'dot-blue' : 'dot-green';
 }
 
@@ -849,10 +874,10 @@ function startTimers() {
   timersStarted = true;
   connectionTimer = setInterval(() => {
     if (canUpdatePage()) refreshConnectionStatus().catch(error => { setNotice(error.message); });
-  }, 3000);
+  }, 1500);
   threadTimer = setInterval(() => {
     if (canUpdatePage()) loadThreads().catch(error => { setNotice(error.message); });
-  }, 3000);
+  }, 2000);
   pollTimer = setInterval(() => {
     if (canUpdatePage()) pollStatus().catch(error => { setNotice(error.message); });
   }, 900);
@@ -941,33 +966,33 @@ onBackPress(() => {
 }
 
 .topbar {
-  height: 36px;
+  height: 32px;
 }
 
 .status-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   min-width: 0;
   flex: 1;
-  gap: 8px;
+  gap: 5px;
 }
 
 .status-item {
   display: flex;
   align-items: center;
-  height: 36px;
+  height: 30px;
   min-width: 0;
   border: 1px solid #dfe3ea;
-  border-radius: 7px;
+  border-radius: 6px;
   background: #ffffff;
-  padding: 0 8px;
-  gap: 6px;
+  padding: 0 6px;
+  gap: 4px;
 }
 
 .dot {
-  width: 10px;
-  height: 10px;
-  flex: 0 0 10px;
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
   border-radius: 999px;
   background: #9ca3af;
 }
@@ -990,7 +1015,7 @@ onBackPress(() => {
 
 .status-text {
   color: #4b5563;
-  font-size: 12px;
+  font-size: 11px;
   line-height: 1;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1025,7 +1050,7 @@ onBackPress(() => {
 
 .settings-button {
   width: 58px;
-  height: 36px;
+  height: 32px;
   flex: 0 0 58px;
   background: #111827;
   color: #ffffff;
