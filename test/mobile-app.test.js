@@ -79,6 +79,9 @@ test('uni-app Android 手机端按每轮对话渲染处理过程', () => {
   assert.match(index, /const timelineItems = computed/);
   assert.match(index, /const turnsById = \{\};/);
   assert.match(index, /row\.turnId \? turnsById\[row\.turnId\] : null/);
+  assert.match(index, /function shouldAppendUnmatchedProcess\(turn\)/);
+  assert.match(index, /turn && turn\.status === 'running'/);
+  assert.match(index, /if \(shouldAppendUnmatchedProcess\(turn\)\) items\.push\(\{ type: 'process'/);
   assert.doesNotMatch(index, /pendingTurns\.splice\(0, 1\)/);
   assert.match(index, /items\.push\(\{ type: 'process'/);
   assert.match(index, /items\.push\(\{ type: 'message'/);

@@ -265,6 +265,9 @@ test('手机端处理过程默认折叠且只通过手动展开', () => {
   assert.match(html, /function processSummaryText\(turn\)/);
   assert.match(html, /processSummaryText\(turn\)/);
   assert.match(html, /findAssistantMessageByTurn\(turn\.turnId\)/);
+  assert.match(html, /function shouldAppendUnmatchedProcess\(turn\)/);
+  assert.match(html, /turn && turn\.status === 'running'/);
+  assert.match(html, /else if \(shouldAppendUnmatchedProcess\(turn\)\) messagesEl\.appendChild\(card\)/);
   assert.match(html, /bindPendingAssistantTurn\(data\)/);
   assert.match(html, /处理过程已折叠/);
   assert.match(html, /renderProcessPanel\(data\)/);

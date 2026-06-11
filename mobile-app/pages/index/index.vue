@@ -200,7 +200,7 @@ const timelineItems = computed(() => {
     items.push({ type: 'message', key: row.id || `message-${row.role}-${index}`, row });
   }
   for (const turn of pendingTurns) {
-    items.push({ type: 'process', key: `process-${turn.turnId}`, turn });
+    if (shouldAppendUnmatchedProcess(turn)) items.push({ type: 'process', key: `process-${turn.turnId}`, turn });
   }
   return items;
 });
@@ -245,6 +245,16 @@ function processTitle(turn, open) {
   const prefix = open ? '处理过程' : '处理过程已折叠';
   const duration = turn && turn.durationText ? ` · ${turn.durationText}` : '';
   return `${prefix}${duration}（${count}）`;
+}
+
+/**
+ * AI:判断没有匹配到最终回复的处理过程是否允许临时追加到底部。
+ *
+ * @param {object} turn 处理过程轮次。
+ * @returns {boolean} 只有当前运行轮次允许追加。
+ */
+function shouldAppendUnmatchedProcess(turn) {
+  return Boolean(turn && turn.status === 'running');
 }
 
 /**
