@@ -44,9 +44,39 @@ function createDesktopAgentClient(options) {
   const WebSocketClass = options.WebSocket || WebSocket;
   const reconnectDelayMs = Number.isFinite(Number(options.reconnectDelayMs)) ? Math.max(0, Number(options.reconnectDelayMs)) : 2000;
   const client = new EventEmitter();
+  const syncProvider = typeof options.syncProvider === 'function' ? options.syncProvider : null;
+  const syncIntervalMs = Number.isFinite(Number(options.syncIntervalMs)) ? Math.max(1000, Number(options.syncIntervalMs)) : 2000;
   let socket = null;
   let reconnectTimer = null;
+  let syncTimer = null;
+  let syncing = false;
   let stopped = false;
+
+  async function syncSessions() {
+    if (!syncProvider || syncing || stopped || !socket || socket.readyState !== socket.OPEN) return;
+    syncing = true;
+    try {
+      const payload = await syncProvider();
+      if (payload && socket && socket.readyState === socket.OPEN) {
+        socket.send(JSON.stringify({ type: 'session-sync', payload }));
+      }
+    } catch (error) {
+      if (client.listenerCount('sync-error') > 0) client.emit('sync-error', error);
+    } finally {
+      syncing = false;
+    }
+  }
+
+  function startSyncTimer() {
+    if (!syncProvider || syncTimer) return;
+    syncSessions();
+    syncTimer = setInterval(syncSessions, syncIntervalMs);
+  }
+
+  function stopSyncTimer() {
+    if (syncTimer) clearInterval(syncTimer);
+    syncTimer = null;
+  }
 
   function scheduleReconnect() {
     if (stopped || reconnectTimer) return;
@@ -60,7 +90,10 @@ function createDesktopAgentClient(options) {
     if (stopped) return;
     socket = new WebSocketClass(url);
     client.socket = socket;
-    socket.on('open', () => client.emit('open'));
+    socket.on('open', () => {
+      client.emit('open');
+      startSyncTimer();
+    });
     socket.on('message', async data => {
       let message = null;
       try {
@@ -73,6 +106,7 @@ function createDesktopAgentClient(options) {
     });
     socket.on('close', (code, reason) => {
       client.emit('close', code, reason);
+      stopSyncTimer();
       scheduleReconnect();
     });
     socket.on('error', error => {
@@ -84,6 +118,7 @@ function createDesktopAgentClient(options) {
     stopped = true;
     if (reconnectTimer) clearTimeout(reconnectTimer);
     reconnectTimer = null;
+    stopSyncTimer();
     const closedState = typeof socket?.CLOSED === 'number' ? socket.CLOSED : 3;
     if (socket && socket.readyState !== closedState) socket.close();
   };

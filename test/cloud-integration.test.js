@@ -23,31 +23,41 @@ function openSocket(ws) {
   });
 }
 
-test('云端 relay 和 desktop-agent 可以完成一次手机线程请求', async () => {
+test('云端 relay 和 desktop-agent 通过服务器缓存完成手机线程请求', async () => {
   const server = createCloudRelayServer({
     tokens: ['integration-token'],
     publicDir,
     requestTimeoutMs: 2000,
   });
   const port = await listen(server);
-  const api = {
-    handle: async action => {
-      assert.equal(action, 'threads');
-      return { ok: true, threads: [{ id: 'thread-1', name: '集成线程', projectName: 'demo' }] };
-    },
-  };
   const ws = createDesktopAgentClient({
     serverUrl: `http://127.0.0.1:${port}`,
     token: 'integration-token',
-    api,
+    api: { handle: async () => ({ ok: true }) },
+    syncProvider: async () => ({
+      openThreadIds: ['thread-1'],
+      sessions: [{
+        threadId: 'thread-1',
+        threadName: '集成线程',
+        projectName: 'demo',
+        reset: true,
+        lines: [
+          JSON.stringify({ timestamp: '2026-06-08T00:00:00.000Z', type: 'session_meta', payload: { cwd: 'C:\\demo' } }),
+        ],
+      }],
+    }),
   });
   await openSocket(ws);
+  await new Promise(resolve => setTimeout(resolve, 30));
 
   const res = await fetch(`http://127.0.0.1:${port}/codex/threads?token=integration-token`);
   const body = JSON.parse(await res.text());
 
   assert.equal(res.status, 200);
-  assert.deepEqual(body.threads, [{ id: 'thread-1', name: '集成线程', projectName: 'demo' }]);
+  assert.equal(body.cached, true);
+  assert.deepEqual(body.threads.map(row => ({ id: row.id, name: row.name, projectName: row.projectName })), [
+    { id: 'thread-1', name: '集成线程', projectName: 'demo' },
+  ]);
 
   ws.close();
   await closeServer(server);

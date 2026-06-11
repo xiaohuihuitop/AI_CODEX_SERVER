@@ -146,6 +146,89 @@ function readJsonl(file) {
 }
 
 /**
+ * AI:读取 JSONL 文本行，保留原始行用于云端增量解析。
+ *
+ * @param {string} file JSONL 文件路径。
+ * @returns {string[]} JSONL 原始行。
+ */
+function readJsonlLines(file) {
+  try {
+    return fs.readFileSync(file, 'utf8').split('\n').filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * AI:只读取文件头部查找 session_meta，避免为匹配项目名解析完整会话文件。
+ *
+ * @param {string} file JSONL 文件路径。
+ * @returns {object} session_meta 记录。
+ */
+function readSessionMeta(file) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, 'r');
+    const buffer = Buffer.alloc(64 * 1024);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const lines = buffer.toString('utf8', 0, bytesRead).split('\n').filter(Boolean);
+    for (const line of lines) {
+      const item = safeJson(line);
+      if (item && item.type === 'session_meta') return item;
+    }
+  } catch {
+    return {};
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+  return {};
+}
+
+/**
+ * AI:读取文件指定字节区间并返回完整 JSONL 行。
+ *
+ * @param {string} file JSONL 文件路径。
+ * @param {number} start 起始字节。
+ * @param {number} end 结束字节。
+ * @returns {string[]} JSONL 原始行。
+ */
+function readJsonlRangeLines(file, start, end) {
+  const from = Math.max(0, Number(start) || 0);
+  const to = Math.max(from, Number(end) || 0);
+  const length = to - from;
+  if (length <= 0) return [];
+  let fd = null;
+  try {
+    fd = fs.openSync(file, 'r');
+    const buffer = Buffer.alloc(length);
+    const bytesRead = fs.readSync(fd, buffer, 0, length, from);
+    return buffer.toString('utf8', 0, bytesRead).split('\n').filter(Boolean);
+  } catch {
+    return [];
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
+/**
+ * AI:读取文件尾部 JSONL 行，用于首次打开线程同步。
+ *
+ * @param {string} file JSONL 文件路径。
+ * @param {number} size 文件大小。
+ * @param {number} lineLimit 最大行数。
+ * @returns {string[]} JSONL 尾部行。
+ */
+function readTailJsonlLines(file, size, lineLimit) {
+  const maxBytes = 2 * 1024 * 1024;
+  const start = Math.max(0, Number(size) - maxBytes);
+  const lines = readJsonlRangeLines(file, start, size);
+  const completeLines = start > 0 ? lines.slice(1) : lines;
+  return completeLines.length > lineLimit
+    ? completeLines.slice(completeLines.length - lineLimit)
+    : completeLines;
+}
+
+/**
  * 生成项目名和线程名的匹配键。
  *
  * @param {string} projectName Codex Desktop 项目名。
@@ -177,6 +260,7 @@ class CodexSessionReader {
   constructor(options = {}) {
     this.sessionsDir = options.sessionsDir || path.join(DEFAULT_CODEX_DIR, 'sessions');
     this.sessionIndexFile = options.sessionIndexFile || path.join(DEFAULT_CODEX_DIR, 'session_index.jsonl');
+    this.sessionMetaCache = new Map();
   }
 
   /**
@@ -313,6 +397,160 @@ class CodexSessionReader {
       const bIndex = openTargets.findIndex(item => targetKey(item.projectName, item.threadName) === targetKey(b.projectName, b.name));
       return aIndex - bIndex;
     });
+  }
+
+  /**
+   * AI:读取 Codex Desktop 当前打开线程的会话文件快照。
+   *
+   * @param {Array<{projectName: string, threadName: string}>} openTargets 当前打开线程目标。
+   * @param {Map<string, {size: number}>|object} offsets 已同步偏移。
+   * @param {{initialLineLimit?: number}} options 同步选项。
+   * @returns {{sessions: Array<object>, openThreadIds: string[]}} 会话同步快照。
+   */
+  readOpenThreadSync(openTargets, offsets = new Map(), options = {}) {
+    const wanted = new Map();
+    for (const target of openTargets || []) {
+      const key = targetKey(target.projectName, target.threadName);
+      if (key !== '\u0000') wanted.set(key, target);
+    }
+    const byId = this.readIndex();
+    const files = this.sessionFiles();
+    const sessions = [];
+    const openThreadIds = [];
+    const initialLineLimit = Math.max(1, Math.min(Number(options.initialLineLimit) || 800, 5000));
+
+    for (const file of files) {
+      const id = threadIdFromSessionFile(file);
+      if (!id) continue;
+      const indexed = byId.get(id) || { id, name: '', updatedAt: '' };
+      const stat = fs.statSync(file);
+      const cachedMeta = this.sessionMetaCache.get(file);
+      const meta = cachedMeta && cachedMeta.size === stat.size && cachedMeta.mtimeMs === stat.mtimeMs
+        ? cachedMeta.meta
+        : readSessionMeta(file);
+      this.sessionMetaCache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, meta });
+      const cwd = String((meta.payload && meta.payload.cwd) || '').trim();
+      const projectName = projectNameFromCwd(cwd);
+      const threadName = indexed.name || '未命名线程';
+      if (!wanted.has(targetKey(projectName, threadName))) continue;
+
+      const previous = offsets instanceof Map ? offsets.get(id) : offsets[id];
+      const previousSize = previous && Number(previous.size) > 0 ? Number(previous.size) : 0;
+      const reset = previousSize <= 0 || previousSize > stat.size;
+      const lines = reset
+        ? readTailJsonlLines(file, stat.size, initialLineLimit)
+        : readJsonlRangeLines(file, previousSize, stat.size);
+      offsets instanceof Map ? offsets.set(id, { size: stat.size }) : offsets[id] = { size: stat.size };
+      openThreadIds.push(id);
+      if (!lines.length && !reset) continue;
+      sessions.push({
+        threadId: id,
+        threadName,
+        projectName,
+        cwd,
+        updatedAt: indexed.updatedAt || new Date(stat.mtimeMs).toISOString(),
+        sessionFile: path.basename(file),
+        mtimeMs: stat.mtimeMs,
+        reset,
+        lines,
+      });
+    }
+
+    return { sessions, openThreadIds };
+  }
+
+  /**
+   * AI:低频发现当前打开线程对应的会话文件，避免每次增量同步都扫目录和调用 CDP。
+   *
+   * @param {Array<{projectName: string, threadName: string}>} openTargets 当前打开线程目标。
+   * @returns {Array<object>} 打开线程会话目标。
+   */
+  discoverOpenThreadSessions(openTargets) {
+    const wanted = new Map();
+    for (const target of openTargets || []) {
+      const key = targetKey(target.projectName, target.threadName);
+      if (key !== '\u0000') wanted.set(key, target);
+    }
+    const byId = this.readIndex();
+    const rows = [];
+
+    for (const file of this.sessionFiles()) {
+      const id = threadIdFromSessionFile(file);
+      if (!id) continue;
+      const indexed = byId.get(id) || { id, name: '', updatedAt: '' };
+      const stat = fs.statSync(file);
+      const cachedMeta = this.sessionMetaCache.get(file);
+      const meta = cachedMeta && cachedMeta.size === stat.size && cachedMeta.mtimeMs === stat.mtimeMs
+        ? cachedMeta.meta
+        : readSessionMeta(file);
+      this.sessionMetaCache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, meta });
+      const cwd = String((meta.payload && meta.payload.cwd) || '').trim();
+      const projectName = projectNameFromCwd(cwd);
+      const threadName = indexed.name || '未命名线程';
+      if (!wanted.has(targetKey(projectName, threadName))) continue;
+      rows.push({
+        threadId: id,
+        threadName,
+        projectName,
+        cwd,
+        file,
+        updatedAt: indexed.updatedAt || new Date(stat.mtimeMs).toISOString(),
+        sessionFile: path.basename(file),
+        mtimeMs: stat.mtimeMs,
+      });
+    }
+
+    return rows.sort((a, b) => {
+      const aIndex = openTargets.findIndex(item => targetKey(item.projectName, item.threadName) === targetKey(a.projectName, a.threadName));
+      const bIndex = openTargets.findIndex(item => targetKey(item.projectName, item.threadName) === targetKey(b.projectName, b.threadName));
+      return aIndex - bIndex;
+    });
+  }
+
+  /**
+   * AI:读取已发现打开线程的新增 JSONL 行。
+   *
+   * @param {Array<object>} targets 打开线程会话目标。
+   * @param {Map<string, {size: number}>|object} offsets 已同步偏移。
+   * @param {{initialLineLimit?: number}} options 同步选项。
+   * @returns {{sessions: Array<object>, openThreadIds: string[]}} 会话同步快照。
+   */
+  readKnownThreadSync(targets, offsets = new Map(), options = {}) {
+    const sessions = [];
+    const openThreadIds = [];
+    const initialLineLimit = Math.max(1, Math.min(Number(options.initialLineLimit) || 800, 5000));
+
+    for (const target of targets || []) {
+      if (!target || !target.threadId || !target.file) continue;
+      let stat = null;
+      try {
+        stat = fs.statSync(target.file);
+      } catch {
+        continue;
+      }
+      const previous = offsets instanceof Map ? offsets.get(target.threadId) : offsets[target.threadId];
+      const previousSize = previous && Number(previous.size) > 0 ? Number(previous.size) : 0;
+      const reset = previousSize <= 0 || previousSize > stat.size;
+      const lines = reset
+        ? readTailJsonlLines(target.file, stat.size, initialLineLimit)
+        : readJsonlRangeLines(target.file, previousSize, stat.size);
+      offsets instanceof Map ? offsets.set(target.threadId, { size: stat.size }) : offsets[target.threadId] = { size: stat.size };
+      openThreadIds.push(target.threadId);
+      if (!lines.length && !reset) continue;
+      sessions.push({
+        threadId: target.threadId,
+        threadName: target.threadName,
+        projectName: target.projectName,
+        cwd: target.cwd,
+        updatedAt: target.updatedAt || new Date(stat.mtimeMs).toISOString(),
+        sessionFile: target.sessionFile || path.basename(target.file),
+        mtimeMs: stat.mtimeMs,
+        reset,
+        lines,
+      });
+    }
+
+    return { sessions, openThreadIds };
   }
 
   /**
@@ -598,4 +836,5 @@ module.exports = {
   stripCodexUiDirectives,
   projectNameFromCwd,
   threadIdFromSessionFile,
+  readJsonlLines,
 };

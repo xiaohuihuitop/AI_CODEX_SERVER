@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const EventEmitter = require('node:events');
 const test = require('node:test');
 const { agentUrlFromServerUrl, createDesktopAgentClient, handleAgentRequest } = require('../desktop-client/src/desktop-agent-client');
+const { DesktopAgentApi } = require('../desktop-client/src/desktop-agent-api');
 
 test('desktop-agent 将 HTTPS 云端地址转换为 WSS Agent 地址', () => {
   assert.equal(
@@ -92,4 +93,109 @@ test('desktop-agent 断线后自动重连', async () => {
   assert.equal(sockets.length, 2);
   assert.equal(sockets[1].url, 'ws://127.0.0.1:8008/agent?token=token-1');
   client.close();
+});
+
+test('desktop-agent 连接后主动上传会话同步快照', async () => {
+  const messages = [];
+  class FakeSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.OPEN = 1;
+      this.CLOSED = 3;
+      this.readyState = this.OPEN;
+      setImmediate(() => this.emit('open'));
+    }
+
+    send(message) {
+      messages.push(JSON.parse(message));
+    }
+
+    close() {
+      this.readyState = this.CLOSED;
+      this.emit('close', 1000, Buffer.from(''));
+    }
+  }
+
+  let syncCount = 0;
+  const client = createDesktopAgentClient({
+    serverUrl: 'http://example.test',
+    token: 'token',
+    api: { handle: async () => ({ ok: true }) },
+    WebSocket: FakeSocket,
+    syncIntervalMs: 1000,
+    syncProvider: async () => {
+      syncCount += 1;
+      return { openThreadIds: ['thread-1'], sessions: [] };
+    },
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 20));
+  client.close();
+
+  assert.equal(syncCount, 1);
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, 'session-sync');
+  assert.deepEqual(messages[0].payload.openThreadIds, ['thread-1']);
+});
+
+test('desktop-agent 同步快照为空时不上传会话同步消息', async () => {
+  const messages = [];
+  class FakeSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.OPEN = 1;
+      this.CLOSED = 3;
+      this.readyState = this.OPEN;
+      setImmediate(() => this.emit('open'));
+    }
+
+    send(message) {
+      messages.push(JSON.parse(message));
+    }
+
+    close() {
+      this.readyState = this.CLOSED;
+      this.emit('close', 1000, Buffer.from(''));
+    }
+  }
+
+  const client = createDesktopAgentClient({
+    serverUrl: 'http://example.test',
+    token: 'token',
+    api: { handle: async () => ({ ok: true }) },
+    WebSocket: FakeSocket,
+    syncIntervalMs: 1000,
+    syncProvider: async () => null,
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 20));
+  client.close();
+
+  assert.equal(messages.length, 0);
+});
+
+test('desktop-agent API 控制 Codex 时暴露 busy 状态', async () => {
+  let releaseControl;
+  const api = new DesktopAgentApi({
+    reader: {
+      getThreadTarget: () => ({
+        available: true,
+        projectName: 'demo',
+        threadName: '测试线程',
+      }),
+    },
+    controller: {
+      sendToThread: async () => new Promise(resolve => {
+        releaseControl = resolve;
+      }),
+    },
+    now: () => Date.parse('2026-06-08T00:00:00.000Z'),
+  });
+
+  const sending = api.send({ threadId: 'thread-1', text: '你好' });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(api.isBusy(), true);
+  releaseControl();
+  await sending;
+  assert.equal(api.isBusy(), false);
 });

@@ -17,6 +17,12 @@ test('云端和桌面端入口文件存在并使用固定 token 环境变量', (
   assert.match(agent, /createDesktopAgentClient/);
   assert.match(agent, /CODEX_CLOUD_URL/);
   assert.match(agent, /CODEX_DEVICE_TOKEN/);
+  assert.match(agent, /function syncProvider\(\)/);
+  assert.match(agent, /api\.isBusy\(\)/);
+  assert.match(agent, /discoverOpenThreadSessions/);
+  assert.match(agent, /readKnownThreadSync/);
+  assert.match(agent, /CODEX_AGENT_SYNC_INTERVAL_MS/);
+  assert.match(agent, /CODEX_AGENT_DISCOVERY_INTERVAL_MS/);
 });
 
 test('桌面管理小软件入口使用本地管理端口和配置模块', () => {
@@ -81,6 +87,7 @@ test('电脑端、服务端、手机端目录物理隔离', () => {
     path.join(serverDir, 'docker-compose.yml'),
     path.join(serverDir, 'public', 'index.html'),
     path.join(serverDir, 'src', 'cloud-relay.js'),
+    path.join(serverDir, 'src', 'session-cache.js'),
     path.join(mobileDir, 'manifest.json'),
     path.join(mobileDir, 'pages', 'index', 'index.vue'),
   ];

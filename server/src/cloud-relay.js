@@ -2,6 +2,7 @@ const http = require('node:http');
 const path = require('node:path');
 const { WebSocketServer } = require('ws');
 const { readBody, sendJson, sendOptions, serveStatic } = require('./http-utils');
+const { createCloudSessionCache } = require('./session-cache');
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30000;
@@ -16,6 +17,7 @@ function tokenFromRequest(req) {
 function createRelayState() {
   return {
     agents: new Map(),
+    cache: createCloudSessionCache(),
     pending: new Map(),
     nextId: 0,
   };
@@ -36,6 +38,10 @@ function attachAgent(state, ws, token) {
     try {
       message = JSON.parse(data.toString());
     } catch {
+      return;
+    }
+    if (message.type === 'session-sync') {
+      state.cache.applySync(token, message.payload || {});
       return;
     }
     const pending = state.pending.get(message.id);
@@ -122,24 +128,17 @@ function createCloudRelayServer(options = {}) {
         return sendJson(res, 200, { ok: true, service: 'codex-cloud-relay', localOnly: false });
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/threads')) {
-        const result = await forwardToAgent(state, token, 'threads', {}, requestTimeoutMs);
-        return sendJson(res, 200, result);
+        return sendJson(res, 200, state.cache.threads(token));
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/history')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-        const result = await forwardToAgent(state, token, 'history', {
-          threadId: url.searchParams.get('thread') || '',
-          limit: url.searchParams.get('limit') || 120,
-        }, requestTimeoutMs);
-        return sendJson(res, 200, result);
+        const threadId = url.searchParams.get('thread') || '';
+        return sendJson(res, 200, state.cache.history(token, threadId, url.searchParams.get('limit') || 120));
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/status')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-        const result = await forwardToAgent(state, token, 'status', {
-          threadId: url.searchParams.get('thread') || '',
-          since: url.searchParams.get('since') || '',
-        }, requestTimeoutMs);
-        return sendJson(res, 200, result);
+        const threadId = url.searchParams.get('thread') || '';
+        return sendJson(res, 200, state.cache.status(token, threadId, url.searchParams.get('since') || ''));
       }
       if (req.method === 'POST' && req.url.startsWith('/send')) {
         const payload = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');

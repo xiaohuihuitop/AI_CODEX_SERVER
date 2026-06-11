@@ -224,6 +224,58 @@ test('打开线程列表只扫描一次会话目录', () => {
   assert.equal(reader.sessionFilesCalls, 1);
 });
 
+test('打开线程同步只上传尾部和后续增量', () => {
+  const offsets = new Map();
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const first = reader.readOpenThreadSync([
+    { projectName: 'demo', threadName: '测试线程' },
+  ], offsets, { initialLineLimit: 2 });
+  const second = reader.readOpenThreadSync([
+    { projectName: 'demo', threadName: '测试线程' },
+  ], offsets, { initialLineLimit: 2 });
+
+  assert.deepEqual(first.openThreadIds, ['aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee']);
+  assert.equal(first.sessions.length, 1);
+  assert.equal(first.sessions[0].reset, true);
+  assert.equal(first.sessions[0].lines.length, 2);
+  assert.equal(second.sessions.length, 0);
+  assert.deepEqual(second.openThreadIds, ['aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee']);
+});
+
+test('已发现打开线程后增量同步不再扫描会话目录', () => {
+  class CountingReader extends CodexSessionReader {
+    constructor(options) {
+      super(options);
+      this.sessionFilesCalls = 0;
+    }
+
+    sessionFiles() {
+      this.sessionFilesCalls += 1;
+      return super.sessionFiles();
+    }
+  }
+
+  const offsets = new Map();
+  const reader = new CountingReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const targets = reader.discoverOpenThreadSessions([
+    { projectName: 'demo', threadName: '测试线程' },
+  ]);
+  const callsAfterDiscovery = reader.sessionFilesCalls;
+  const first = reader.readKnownThreadSync(targets, offsets, { initialLineLimit: 2 });
+  const second = reader.readKnownThreadSync(targets, offsets, { initialLineLimit: 2 });
+
+  assert.equal(callsAfterDiscovery, 1);
+  assert.equal(reader.sessionFilesCalls, callsAfterDiscovery);
+  assert.equal(first.sessions.length, 1);
+  assert.equal(second.sessions.length, 0);
+});
+
 test('解析线程历史', () => {
   const reader = new CodexSessionReader({
     sessionsDir: path.join(fixtureRoot, 'sessions'),
