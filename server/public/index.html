@@ -1,0 +1,898 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Codex Windows Bridge</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f8;
+      --panel: #ffffff;
+      --text: #111827;
+      --muted: #5b6472;
+      --line: #d9dde3;
+      --accent: #1f6feb;
+      --danger: #b42318;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      padding: 12px 14px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+      display: grid;
+      grid-template-columns: 16px 16px minmax(0, 0.9fr) minmax(0, 1.1fr) 44px;
+      gap: 8px;
+      align-items: center;
+    }
+
+    select {
+      min-width: 0;
+      width: 100%;
+      height: 38px;
+      border: 0;
+      border-bottom: 1px solid #9ca3af;
+      border-radius: 0;
+      background: transparent;
+      padding: 0;
+      color: var(--text);
+      font: inherit;
+    }
+
+    main {
+      padding: 12px;
+      padding-bottom: 96px;
+    }
+
+    .message {
+      max-width: min(92%, 760px);
+      margin: 10px 0;
+      padding: 10px 12px;
+      border-radius: 8px;
+      line-height: 1.45;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    .message > :first-child {
+      margin-top: 0;
+    }
+
+    .message > :last-child {
+      margin-bottom: 0;
+    }
+
+    .message p,
+    .message ul,
+    .message ol,
+    .message blockquote,
+    .message pre,
+    .message table {
+      margin: 0.55em 0;
+    }
+
+    .message ul,
+    .message ol {
+      padding-left: 1.4em;
+    }
+
+    .message blockquote {
+      border-left: 3px solid var(--line);
+      padding-left: 10px;
+      color: var(--muted);
+    }
+
+    .message pre {
+      overflow-x: auto;
+      padding: 10px;
+      border-radius: 6px;
+      background: #0f172a;
+      color: #e5e7eb;
+      white-space: pre;
+    }
+
+    .message code {
+      border-radius: 4px;
+      padding: 1px 4px;
+      background: rgba(15, 23, 42, 0.08);
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 0.92em;
+    }
+
+    .message pre code {
+      padding: 0;
+      background: transparent;
+      color: inherit;
+    }
+
+    .message table {
+      width: 100%;
+      border-collapse: collapse;
+      display: block;
+      overflow-x: auto;
+    }
+
+    .message th,
+    .message td {
+      border: 1px solid var(--line);
+      padding: 6px 8px;
+      text-align: left;
+    }
+
+    .message a {
+      color: inherit;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .user {
+      margin-left: auto;
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .assistant {
+      margin-right: auto;
+      background: var(--panel);
+      border: 1px solid var(--line);
+    }
+
+    .process-card {
+      max-width: min(92%, 760px);
+      margin: 10px 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--muted);
+      overflow: hidden;
+    }
+
+    .process-card details {
+      padding: 0;
+    }
+
+    .process-card summary {
+      cursor: pointer;
+      padding: 9px 12px;
+      font-size: 13px;
+      color: var(--text);
+      background: #f9fafb;
+      user-select: none;
+    }
+
+    .process-step {
+      padding: 9px 12px;
+      border-top: 1px solid #edf0f3;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .process-step strong {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--text);
+      font-size: 12px;
+    }
+
+    .process-step :first-child {
+      margin-top: 0;
+    }
+
+    .process-step :last-child {
+      margin-bottom: 0;
+    }
+
+    form {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 48px 48px;
+      gap: 8px;
+      padding: 10px;
+      padding-bottom: max(10px, env(safe-area-inset-bottom));
+      background: var(--panel);
+      border-top: 1px solid var(--line);
+    }
+
+    textarea {
+      width: 100%;
+      min-height: 42px;
+      max-height: 120px;
+      resize: none;
+      border: 1px solid #c7ccd3;
+      border-radius: 6px;
+      padding: 10px;
+      color: var(--text);
+      font: inherit;
+      line-height: 1.35;
+    }
+
+    button {
+      min-width: 0;
+      height: 38px;
+      border: 0;
+      border-radius: 6px;
+      background: #111827;
+      color: #fff;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+
+    #stop {
+      background: var(--danger);
+    }
+
+    .notice {
+      min-height: 32px;
+      font-size: 12px;
+      color: var(--muted);
+      padding: 8px 14px;
+      background: var(--panel);
+      border-bottom: 1px solid #e5e7eb;
+    }
+
+    .connection-status,
+    .thread-status {
+      width: 12px;
+      height: 12px;
+      border-radius: 999px;
+      border: 1px solid #c7ccd3;
+      background: #9ca3af;
+    }
+
+    .connection-status--online {
+      border-color: #15803d;
+      background: #22c55e;
+      box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+    }
+
+    .connection-status--offline {
+      border-color: #b42318;
+      background: #ef4444;
+      box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.16);
+    }
+
+    .thread-status--running {
+      border-color: #1d4ed8;
+      background: #3b82f6;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
+    }
+
+    .thread-status--complete {
+      border-color: #15803d;
+      background: #22c55e;
+      box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span id="connectionStatus" class="connection-status" title="连接状态未知"></span>
+    <span id="threadStatus" class="thread-status" title="当前对话空闲"></span>
+    <select id="projects" aria-label="选择 Codex 文件夹"></select>
+    <select id="threads" aria-label="选择 Codex 线程"></select>
+    <button id="refresh" type="button" title="重新读取对话列表和当前对话历史" aria-label="刷新对话">刷新</button>
+  </header>
+  <div class="notice" id="notice">正在连接本机服务...</div>
+  <main id="messages"></main>
+  <form id="composer">
+    <textarea id="text" placeholder="发消息给电脑 Codex"></textarea>
+    <button id="send" type="submit">发</button>
+    <button id="stop" type="button">停</button>
+  </form>
+  <script src="/markdown.js?v=1"></script>
+  <script>
+    const tokenFromUrl = new URLSearchParams(location.search).get('token') || '';
+    if (tokenFromUrl) localStorage.setItem('codexBridge.token', tokenFromUrl);
+    const token = tokenFromUrl || localStorage.getItem('codexBridge.token') || '';
+    const projectsEl = document.getElementById('projects');
+    const threadsEl = document.getElementById('threads');
+    const connectionStatusEl = document.getElementById('connectionStatus');
+    const threadStatusEl = document.getElementById('threadStatus');
+    const messagesEl = document.getElementById('messages');
+    const noticeEl = document.getElementById('notice');
+    const textEl = document.getElementById('text');
+    const sendButton = document.getElementById('send');
+    const stopButton = document.getElementById('stop');
+    let selectedThreadId = localStorage.getItem('codexBridge.threadId') || '';
+    let selectedProjectName = localStorage.getItem('codexBridge.projectName') || '';
+    let threadRows = [];
+    let connectionStatusTimer = null;
+    let threadStatusTimer = null;
+    let threadListRequest = null;
+    let currentThreadStatus = null;
+    let pendingWatch = null;
+    let historyReloadedForCompletion = false;
+
+    /**
+     * 调用本机桥接 API。
+     *
+     * @param {string} apiPath API 路径。
+     * @param {RequestInit} options 请求选项。
+     * @returns {Promise<Response>} fetch 响应。
+     */
+    function api(apiPath, options = {}) {
+      const headers = { ...(options.headers || {}), 'x-mobile-typer-token': token };
+      return fetch(apiPath, { ...options, headers, cache: 'no-store' });
+    }
+
+    /**
+     * 更新顶部状态文本。
+     *
+     * @param {string} text 状态文本。
+     * @returns {void}
+     */
+    function notice(text) {
+      noticeEl.textContent = text;
+    }
+
+    /**
+     * AI:记录当前滚动位置，自动刷新内容后用于还原阅读位置。
+     *
+     * @returns {{y: number}} 滚动快照。
+     */
+    function captureScroll() {
+      return { y: window.scrollY || 0 };
+    }
+
+    /**
+     * AI:还原刷新前的滚动位置，避免后台轮询把页面推到底部。
+     *
+     * @param {{y: number}|null} snapshot 滚动快照。
+     * @returns {void}
+     */
+    function restoreScroll(snapshot) {
+      if (!snapshot) return;
+      window.scrollTo(0, Math.min(snapshot.y, Math.max(0, document.body.scrollHeight - window.innerHeight)));
+    }
+
+    /**
+     * AI:只在明确需要跟随新消息时滚动到底部。
+     *
+     * @returns {void}
+     */
+    function scrollToBottom() {
+      window.scrollTo(0, document.body.scrollHeight);
+    }
+
+    /**
+     * AI:过滤 Codex Desktop 注入的浏览器上下文和客户端指令。
+     *
+     * @param {string} text 原始消息文本。
+     * @returns {string} 可展示文本。
+     */
+    function stripCodexUiDirectives(text) {
+      const lines = [];
+      let inBrowserContext = false;
+
+      for (const line of String(text || '').split(/\r?\n/)) {
+        const trimmed = line.trim();
+        const isBrowserHeader = /^(?:#+\s*)?In app browser:\s*$/i.test(trimmed);
+        const isRequestHeader = /^(?:#+\s*)?My request for Codex:\s*$/i.test(trimmed);
+        const isBrowserMeta = /^[-*]\s*(?:The user has the in-app browser open\.?|Current URL:.*)$/i.test(trimmed);
+
+        if (isBrowserHeader) {
+          inBrowserContext = true;
+          continue;
+        }
+        if (isRequestHeader) {
+          inBrowserContext = false;
+          continue;
+        }
+        if (inBrowserContext) {
+          if (!trimmed || isBrowserMeta) continue;
+          inBrowserContext = false;
+        }
+        if (isBrowserMeta) continue;
+        lines.push(line);
+      }
+
+      return lines
+        .filter(line => !/^::[a-z][a-z-]*\{.*\}\s*$/i.test(line.trim()))
+        .join('\n')
+        .trim();
+    }
+
+    /**
+     * AI:把 Markdown 文本清洗后渲染为 HTML。
+     *
+     * @param {string} text Markdown 文本。
+     * @returns {string} HTML 字符串。
+     */
+    function renderCleanMarkdown(text) {
+      return CodexMarkdown.renderMarkdownToHtml(stripCodexUiDirectives(text));
+    }
+
+    /**
+     * 更新手机端到云端 Agent 的连接状态。
+     *
+     * @param {{online?: boolean, offline?: boolean, message?: string}} state 连接状态。
+     * @returns {void}
+     */
+    function updateConnectionStatus(state) {
+      const online = Boolean(state?.online);
+      const offline = Boolean(state?.offline);
+      connectionStatusEl.classList.toggle('connection-status--online', online);
+      connectionStatusEl.classList.toggle('connection-status--offline', !online && offline);
+      const title = online ? '服务器已连接，电脑 Agent 在线' : state?.message || '连接状态未知';
+      connectionStatusEl.title = title;
+      connectionStatusEl.setAttribute('aria-label', title);
+    }
+
+    /**
+     * 刷新云端与 Agent 在线状态。
+     *
+     * @returns {Promise<void>}
+     */
+    async function refreshConnectionStatus() {
+      try {
+        const res = await api(`/codex/health?token=${encodeURIComponent(token)}`);
+        const data = await res.json();
+        if (res.ok && data.ok && data.online) {
+          updateConnectionStatus({ online: true });
+          return;
+        }
+        updateConnectionStatus({ offline: true, message: data.message || '服务器可访问，电脑 Agent 未在线' });
+      } catch {
+        updateConnectionStatus({ offline: true, message: '服务器不可访问' });
+      }
+    }
+
+    /**
+     * 追加消息气泡。
+     *
+     * @param {'user'|'assistant'} role 消息角色。
+     * @param {string} text 消息文本。
+     * @returns {HTMLDivElement} 消息元素。
+     */
+    function message(role, text, options = {}) {
+      const div = document.createElement('div');
+      div.className = `message ${role}`;
+      if (options.turnId) div.dataset.turnId = options.turnId;
+      if (options.pending) div.dataset.pending = 'true';
+      div.innerHTML = renderCleanMarkdown(text);
+      messagesEl.appendChild(div);
+      if (options.scrollToBottom !== false) scrollToBottom();
+      return div;
+    }
+
+    /**
+     * 提取每轮可显示的处理过程。
+     *
+     * @param {object} status Codex 状态数据。
+     * @returns {Array<object>} 过程轮次。
+     */
+    function processTurns(status) {
+      return (status?.turns || [])
+        .map(turn => ({
+          turnId: turn?.turnId || '',
+          status: turn?.status || '',
+          steps: (turn?.steps || []).filter(step => step?.text && step.kind !== 'start' && step.kind !== 'final' && step.kind !== 'complete'),
+          durationText: formatElapsedTime(turn?.startedAt || '', turn?.completedAt || ''),
+        }))
+        .filter(turn => turn.turnId && turn.steps.length);
+    }
+
+    /**
+     * AI:格式化当前轮次已处理时间。
+     *
+     * @param {string} startedAt 开始时间。
+     * @param {string} completedAt 完成时间。
+     * @returns {string} 已处理时间文本。
+     */
+    function formatElapsedTime(startedAt, completedAt) {
+      const start = Date.parse(startedAt || '');
+      if (Number.isNaN(start)) return '';
+      const end = Date.parse(completedAt || '') || Date.now();
+      const totalSeconds = Math.max(0, Math.floor((end - start) / 1000));
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      if (minutes > 0) return `已处理 ${minutes}m ${seconds}s`;
+      return `已处理 ${seconds}s`;
+    }
+
+    /**
+     * AI:生成处理过程标题。
+     *
+     * @param {object} turn 当前轮次。
+     * @returns {string} 标题文本。
+     */
+    function processSummaryText(turn) {
+      const count = turn?.steps?.length || 0;
+      const prefix = '处理过程已折叠';
+      const duration = turn.durationText ? ` · ${turn.durationText}` : '';
+      return `${prefix}${duration}（${count}）`;
+    }
+
+    /**
+     * AI:把发送后的临时回复绑定到当前运行轮次。
+     *
+     * @param {object} status Codex 状态数据。
+     * @returns {void}
+     */
+    function bindPendingAssistantTurn(status) {
+      const turns = processTurns(status);
+      let runningTurn = null;
+      for (const turn of turns) {
+        if (turn.status === 'running') runningTurn = turn;
+      }
+      if (!runningTurn && status?.active && turns.length) runningTurn = turns[turns.length - 1];
+      if (!runningTurn) return;
+      const pendingRows = messagesEl.querySelectorAll('.message.assistant[data-pending="true"]');
+      const pending = pendingRows[pendingRows.length - 1];
+      if (pending) pending.dataset.turnId = runningTurn.turnId;
+    }
+
+    /**
+     * AI:查找指定轮次对应的最终回复元素。
+     *
+     * @param {string} turnId 轮次 ID。
+     * @returns {Element|null} 最终回复元素。
+     */
+    function findAssistantMessageByTurn(turnId) {
+      for (const item of messagesEl.querySelectorAll('.message.assistant')) {
+        if (item.dataset.turnId === turnId) return item;
+      }
+      return null;
+    }
+
+    /**
+     * AI:创建单轮处理过程面板。
+     *
+     * @param {object} turn 处理轮次。
+     * @returns {HTMLElement} 处理过程面板。
+     */
+    function createProcessCard(turn) {
+      const card = document.createElement('section');
+      card.className = 'process-card';
+      card.dataset.turnId = turn.turnId;
+      const details = document.createElement('details');
+      details.open = false;
+      const summary = document.createElement('summary');
+      summary.textContent = processSummaryText(turn);
+      details.appendChild(summary);
+
+      for (const step of turn.steps) {
+        const row = document.createElement('div');
+        row.className = 'process-step';
+        const label = document.createElement('strong');
+        label.textContent = step.label || '过程';
+        row.appendChild(label);
+        const body = document.createElement('div');
+        body.innerHTML = renderCleanMarkdown(step.text || '');
+        row.appendChild(body);
+        details.appendChild(row);
+      }
+
+      card.appendChild(details);
+      return card;
+    }
+
+    /**
+     * 渲染处理过程面板，默认折叠且只通过用户手动展开。
+     *
+     * @param {object} status Codex 状态数据。
+     * @returns {void}
+     */
+    function renderProcessPanel(status, options = {}) {
+      const scroll = options.preserveScroll === false ? null : captureScroll();
+      document.querySelectorAll('.process-card').forEach(item => item.remove());
+      const turns = processTurns(status);
+      if (!turns.length) {
+        restoreScroll(scroll);
+        return;
+      }
+
+      for (const turn of turns) {
+        const card = createProcessCard(turn);
+        const assistant = findAssistantMessageByTurn(turn.turnId);
+        if (assistant) messagesEl.insertBefore(card, assistant);
+        else messagesEl.appendChild(card);
+      }
+      if (options.scrollToBottom) scrollToBottom();
+      else restoreScroll(scroll);
+    }
+
+    /**
+     * 切换运行态按钮状态。
+     *
+     * @param {boolean} running 是否正在等待回复。
+     * @returns {void}
+     */
+    function setRunning(running) {
+      sendButton.disabled = running;
+      stopButton.disabled = !running;
+    }
+
+    /**
+     * 按项目名分组线程。
+     *
+     * @param {Array<{id: string, name: string, projectName?: string}>} rows 线程列表。
+     * @returns {Map<string, Array<object>>} 项目分组。
+     */
+    function groupThreads(rows) {
+      const groups = new Map();
+      for (const row of rows || []) {
+        const projectName = row.projectName || '未命名文件夹';
+        if (!groups.has(projectName)) groups.set(projectName, []);
+        groups.get(projectName).push(row);
+      }
+      return groups;
+    }
+
+    /**
+     * 更新当前线程运行状态指示点。
+     *
+     * @returns {void}
+     */
+    function updateThreadStatus(statusData = null) {
+      const row = threadRows.find(item => item.id === selectedThreadId);
+      const scopedStatus = statusData?.threadId === selectedThreadId ? statusData : null;
+      const status = scopedStatus?.status || row?.status || 'idle';
+      const pendingCurrent = pendingWatch?.threadId === selectedThreadId && Boolean(pendingWatch?.since);
+      const running = Boolean(scopedStatus?.active) || !!row?.active || status === 'running' || pendingCurrent;
+      const complete = !running && status === 'complete';
+      threadStatusEl.classList.toggle('thread-status--running', running);
+      threadStatusEl.classList.toggle('thread-status--complete', complete);
+      threadStatusEl.title = running ? '当前对话正在工作' : complete ? '当前对话已完成' : '当前对话未连接或空闲';
+      threadStatusEl.setAttribute('aria-label', threadStatusEl.title);
+      setRunning(running);
+    }
+
+    /**
+     * 渲染当前项目下的线程选择。
+     *
+     * @returns {void}
+     */
+    function renderThreadOptions() {
+      const groups = groupThreads(threadRows);
+      const rows = groups.get(selectedProjectName) || [];
+      threadsEl.innerHTML = '';
+      for (const item of rows) {
+        const option = document.createElement('option');
+        option.value = item.id;
+        option.textContent = item.name || item.id;
+        threadsEl.appendChild(option);
+      }
+      if (!rows.some(item => item.id === selectedThreadId)) selectedThreadId = rows[0]?.id || '';
+      threadsEl.value = selectedThreadId;
+      if (selectedThreadId) localStorage.setItem('codexBridge.threadId', selectedThreadId);
+      updateThreadStatus();
+    }
+
+    /**
+     * 读取 Codex Desktop 当前打开线程列表，并复用正在进行中的请求。
+     *
+     * @param {string} errorMessage 读取失败时的错误文本。
+     * @returns {Promise<Array<object>>} 线程列表。
+     */
+    async function fetchThreadRows(errorMessage) {
+      if (threadListRequest) return threadListRequest;
+      threadListRequest = (async () => {
+        const res = await api(`/codex/threads?limit=120&token=${encodeURIComponent(token)}`);
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          updateConnectionStatus({ offline: true, message: data.message || errorMessage });
+          throw new Error(data.message || errorMessage);
+        }
+        updateConnectionStatus({ online: true });
+        return data.threads || [];
+      })();
+      try {
+        return await threadListRequest;
+      } finally {
+        threadListRequest = null;
+      }
+    }
+
+    /**
+     * 加载 Codex 线程列表。
+     *
+     * @returns {Promise<void>}
+     */
+    async function loadThreads() {
+      threadRows = await fetchThreadRows('读取线程失败');
+      const groups = groupThreads(threadRows);
+      projectsEl.innerHTML = '';
+      for (const projectName of groups.keys()) {
+        const option = document.createElement('option');
+        option.value = projectName;
+        option.textContent = projectName;
+        projectsEl.appendChild(option);
+      }
+      const selectedRow = threadRows.find(item => item.id === selectedThreadId);
+      if (selectedRow) selectedProjectName = selectedRow.projectName || '未命名文件夹';
+      if (!groups.has(selectedProjectName)) selectedProjectName = [...groups.keys()][0] || '';
+      projectsEl.value = selectedProjectName;
+      if (selectedProjectName) localStorage.setItem('codexBridge.projectName', selectedProjectName);
+      renderThreadOptions();
+      updateThreadStatus();
+    }
+
+    /**
+     * 刷新当前打开线程的运行状态。
+     *
+     * @returns {Promise<void>}
+     */
+    async function refreshThreadStatuses() {
+      threadRows = await fetchThreadRows('读取线程状态失败');
+      updateThreadStatus(currentThreadStatus);
+    }
+
+    /**
+     * 加载当前线程历史。
+     *
+     * @param {object|null} statusData 已读取的线程状态，避免重复请求。
+     * @param {{preserveScroll?: boolean, scrollToBottom?: boolean}} options 滚动控制选项。
+     * @returns {Promise<void>}
+     */
+    async function loadHistory(statusData = null, options = {}) {
+      if (!selectedThreadId) {
+        messagesEl.innerHTML = '';
+        notice('没有可用 Codex 线程');
+        return;
+      }
+      const scroll = options.preserveScroll === false ? null : captureScroll();
+      messagesEl.innerHTML = '';
+      const res = await api(`/codex/history?thread=${encodeURIComponent(selectedThreadId)}&limit=120&token=${encodeURIComponent(token)}`);
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.message || '读取历史失败');
+      for (const row of data.messages || []) message(row.role, row.text || '', { scrollToBottom: false, turnId: row.turnId || '' });
+      if (data.available) {
+        const snapshot = statusData || await fetchStatus({ threadId: selectedThreadId });
+        currentThreadStatus = snapshot;
+        bindPendingAssistantTurn(snapshot);
+        updateThreadStatus(snapshot);
+        renderProcessPanel(snapshot, { preserveScroll: false });
+      }
+      if (options.scrollToBottom) scrollToBottom();
+      else restoreScroll(scroll);
+      notice(data.available ? '已同步本机 Codex 线程' : '这个线程暂时没有可加载的本机记录');
+    }
+
+    /**
+     * 读取当前线程状态。
+     *
+     * @param {{threadId?: string, since?: string}} watch 状态查询参数。
+     * @returns {Promise<object>} 状态数据。
+     */
+    async function fetchStatus(watch = {}) {
+      const params = new URLSearchParams({ token, thread: watch.threadId || selectedThreadId, since: watch.since || '' });
+      const res = await api(`/codex/status?${params}`);
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.message || '读取状态失败');
+      return data;
+    }
+
+    /**
+     * 轮询 Codex 回复状态。
+     *
+     * @param {{threadId?: string, since?: string}} watch 轮询参数。
+     * @returns {Promise<void>}
+     */
+    async function pollStatus(watch = pendingWatch || {}) {
+      const requestedThreadId = watch.threadId || selectedThreadId;
+      if (!requestedThreadId) return;
+      const data = await fetchStatus({ ...watch, threadId: requestedThreadId });
+      if (requestedThreadId !== selectedThreadId || data.threadId !== selectedThreadId) return;
+      currentThreadStatus = data;
+      bindPendingAssistantTurn(data);
+      updateThreadStatus(data);
+      renderProcessPanel(data);
+      if (data.status === 'complete' || data.status === 'error') {
+        if (pendingWatch?.threadId === data.threadId) pendingWatch = null;
+        if (!historyReloadedForCompletion) {
+          historyReloadedForCompletion = true;
+          await loadHistory(data, { preserveScroll: true });
+        }
+      } else {
+        historyReloadedForCompletion = false;
+        notice(data.preview || 'Codex 正在回复...');
+      }
+    }
+
+    document.getElementById('refresh').addEventListener('click', async () => {
+      try {
+        await loadThreads();
+        await loadHistory(null, { preserveScroll: true });
+      } catch (error) {
+        notice(error.message);
+      }
+    });
+
+    threadsEl.addEventListener('change', async () => {
+      try {
+        selectedThreadId = threadsEl.value;
+        localStorage.setItem('codexBridge.threadId', selectedThreadId);
+        currentThreadStatus = null;
+        pendingWatch = null;
+        historyReloadedForCompletion = false;
+        updateThreadStatus();
+        await loadHistory(null, { preserveScroll: false, scrollToBottom: true });
+      } catch (error) {
+        notice(error.message);
+      }
+    });
+
+    projectsEl.addEventListener('change', async () => {
+      try {
+        selectedProjectName = projectsEl.value;
+        localStorage.setItem('codexBridge.projectName', selectedProjectName);
+        selectedThreadId = '';
+        currentThreadStatus = null;
+        pendingWatch = null;
+        historyReloadedForCompletion = false;
+        renderThreadOptions();
+        await loadHistory(null, { preserveScroll: false, scrollToBottom: true });
+      } catch (error) {
+        notice(error.message);
+      }
+    });
+
+    document.getElementById('composer').addEventListener('submit', async event => {
+      event.preventDefault();
+      const text = textEl.value;
+      if (!text.trim()) return;
+      textEl.value = '';
+      message('user', text);
+      const pending = message('assistant', '已发送，等待 Codex 回复...', { pending: true });
+      setRunning(true);
+      historyReloadedForCompletion = false;
+      try {
+        const res = await api('/send', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text, threadId: selectedThreadId }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.message || '发送失败');
+        pendingWatch = data.watch || { threadId: selectedThreadId };
+        await pollStatus(pendingWatch);
+      } catch (error) {
+        pending.textContent = error.message;
+        setRunning(false);
+      }
+    });
+
+    stopButton.addEventListener('click', async () => {
+      try {
+        const res = await api('/codex/stop', { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.message || '停止失败');
+        notice(data.message || '已发送停止指令');
+      } catch (error) {
+        notice(error.message);
+      }
+    });
+
+    setRunning(false);
+    updateConnectionStatus({ message: '正在检测连接状态' });
+    refreshConnectionStatus().catch(() => {});
+    loadThreads().then(() => loadHistory(null, { preserveScroll: false, scrollToBottom: true })).catch(error => notice(error.message));
+    connectionStatusTimer = setInterval(() => refreshConnectionStatus().catch(() => {}), 3000);
+    threadStatusTimer = setInterval(() => refreshThreadStatuses().catch(error => notice(error.message)), 3000);
+    setInterval(() => pollStatus().catch(error => notice(error.message)), 900);
+  </script>
+</body>
+</html>

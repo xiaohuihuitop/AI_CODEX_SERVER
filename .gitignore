@@ -1,5 +1,6 @@
 node_modules/
 dist/
+desktop-client/dist/
 .env
 *.log
 .hbuilderx/

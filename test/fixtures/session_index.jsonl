@@ -4,3 +4,4 @@
 {"id":"eeeeeeee-ffff-aaaa-bbbb-cccccccccccc","thread_name":"第二线程","updated_at":"2026-06-08T10:11:00.000Z"}
 {"id":"ffffffff-aaaa-bbbb-cccc-dddddddddddd","thread_name":"运行中线程","updated_at":"2026-06-08T10:12:00.000Z"}
 {"id":"99999999-aaaa-bbbb-cccc-dddddddddddd","thread_name":"完成事件线程","updated_at":"2026-06-08T10:13:00.000Z"}
+{"id":"11111111-2222-3333-4444-555555555555","thread_name":"只有开始事件线程","updated_at":"2026-06-08T10:14:00.000Z"}

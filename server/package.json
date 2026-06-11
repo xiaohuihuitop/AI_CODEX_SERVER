@@ -1,0 +1,17 @@
+{
+  "name": "codex-cloud-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Cloud relay server for Codex bridge",
+  "main": "cloud-server.js",
+  "scripts": {
+    "start": "node cloud-server.js"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

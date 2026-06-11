@@ -6,6 +6,16 @@
 
 服务器端网页入口暂时保留，App 不依赖服务器返回页面，只通过服务器数据接口连接云端 relay 和 Windows Agent。
 
+## 三端目录
+
+```text
+mobile-app/      Android uni-app 手机端
+server/          云端 relay 和网页入口
+desktop-client/  Windows 桌面管理器和 Agent
+```
+
+修改 `mobile-app` 后只需要重新编译手机 App。只要接口协议不变，不需要更新服务器 Docker 镜像。
+
 ## 默认配置
 
 - 服务器地址：`http://www.xiaohuihuitop.top:8008`

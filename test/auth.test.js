@@ -1,6 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { isAuthorized, parseCookies } = require('../src/auth');
+const { isAuthorized, parseCookies } = require('../desktop-client/src/auth');
 
 /**
  * 构造最小 HTTP 请求对象。

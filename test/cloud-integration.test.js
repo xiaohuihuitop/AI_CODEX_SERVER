@@ -1,10 +1,10 @@
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const test = require('node:test');
-const { createCloudRelayServer } = require('../src/cloud-relay');
-const { createDesktopAgentClient } = require('../src/desktop-agent-client');
+const { createCloudRelayServer } = require('../server/src/cloud-relay');
+const { createDesktopAgentClient } = require('../desktop-client/src/desktop-agent-client');
 
-const publicDir = path.join(__dirname, '..', 'public');
+const publicDir = path.join(__dirname, '..', 'server', 'public');
 
 function listen(server) {
   return new Promise(resolve => {

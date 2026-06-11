@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { createDesktopAgentApi } = require('../src/desktop-agent-api');
+const { createDesktopAgentApi } = require('../desktop-client/src/desktop-agent-api');
 
 test('desktop-agent API 将 threads 动作映射到本机读取和状态解析', async () => {
   const controller = {

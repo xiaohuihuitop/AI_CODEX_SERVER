@@ -480,7 +480,8 @@ class CodexSessionReader {
           completed = false;
           startedAt = item.timestamp || startedAt;
         }
-        addStep({ kind: 'start', label: '开始', text: '开始处理这条消息', time: item.timestamp || '' }, { visible });
+        const turn = ensureTurn(currentTurnId);
+        if (turn && item.timestamp) turn.startedAt = item.timestamp;
       }
       if ((item.type === 'event_msg' && payload.type === 'agent_reasoning') || (item.type === 'response_item' && payload.type === 'reasoning')) {
         const text = reasoningText(payload);

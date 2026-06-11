@@ -2,9 +2,9 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const test = require('node:test');
 const { WebSocket } = require('ws');
-const { createCloudRelayServer } = require('../src/cloud-relay');
+const { createCloudRelayServer } = require('../server/src/cloud-relay');
 
-const publicDir = path.join(__dirname, '..', 'public');
+const publicDir = path.join(__dirname, '..', 'server', 'public');
 
 function listen(server) {
   return new Promise(resolve => {

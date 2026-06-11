@@ -66,9 +66,9 @@ function renderConfig(config) {
   elements.autoStart.checked = Boolean(config.autoStart);
 }
 
-function renderState(nextState) {
+function renderState(nextState, options = {}) {
   state.current = nextState;
-  renderConfig(nextState.config);
+  if (options.renderConfig !== false) renderConfig(nextState.config);
 
   setCard(elements.cloudCard, nextState.cloud.ok);
   elements.cloudStatus.textContent = nextState.cloud.ok ? '可访问' : '不可访问';
@@ -94,21 +94,30 @@ function renderState(nextState) {
   elements.lastUpdated.textContent = `最后刷新 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
 }
 
-async function runAction(action) {
+async function runAction(action, options = {}) {
+  const interactive = options.interactive !== false;
   if (state.busy) return;
-  setBusy(true);
+  if (interactive) setBusy(true);
   try {
-    renderState(await action());
-    elements.saveState.textContent = '状态已更新';
+    renderState(await action(), { renderConfig: options.renderConfig !== false });
+    if (interactive) elements.saveState.textContent = '状态已更新';
   } catch (error) {
-    elements.saveState.textContent = error.message || '操作失败';
+    if (interactive) elements.saveState.textContent = error.message || '操作失败';
   } finally {
-    setBusy(false);
+    if (interactive) setBusy(false);
   }
 }
 
-async function refresh() {
-  await runAction(() => window.codexManager.getState());
+async function refresh(options = {}) {
+  await runAction(() => window.codexManager.getState(), {
+    interactive: options.interactive !== false,
+    renderConfig: options.renderConfig !== false,
+  });
+}
+
+async function refreshSilently() {
+  if (state.busy) return;
+  await refresh({ interactive: false, renderConfig: false });
 }
 
 elements.configForm.addEventListener('submit', event => {
@@ -152,4 +161,4 @@ elements.copyMobileButton.addEventListener('click', async () => {
 });
 
 refresh();
-setInterval(refresh, 5000);
+setInterval(refreshSilently, 5000);

@@ -20,7 +20,7 @@
           <text class="thread-selector-title">{{ selectedThreadName || '选择对话' }}</text>
           <text class="thread-selector-subtitle">{{ selectedProjectName || '未选择文件夹' }}</text>
         </button>
-        <button class="refresh-button" :disabled="loading" @click="manualRefresh">刷新</button>
+        <button class="refresh-button" :disabled="loading || switchingThread" @click="manualRefresh">刷新</button>
       </view>
 
       <view class="notice">{{ notice }}</view>
@@ -54,6 +54,12 @@
     </view>
 
     <scroll-view class="messages" scroll-y :scroll-into-view="scrollTarget">
+      <view v-if="switchingThread" class="switch-loading">
+        <view class="switch-loading-spinner"></view>
+        <text class="switch-loading-title">正在载入对话</text>
+        <text class="switch-loading-subtitle">{{ selectedThreadName || '请稍候' }}</text>
+      </view>
+
       <view v-for="item in timelineItems" :key="item.key">
         <view
           v-if="item.type === 'message'"
@@ -64,11 +70,11 @@
         </view>
 
         <view v-else-if="item.type === 'process'" class="process-card">
-          <view class="process-title" @click="toggleProcess(item.turn.turnId)">
-            <text>{{ processTitle(item.turn, processOpenState[item.turn.turnId]) }}</text>
-            <text class="process-action">{{ processOpenState[item.turn.turnId] ? '收起' : '展开' }}</text>
+          <view class="process-title" @click="toggleProcess(item.turn)">
+            <text>{{ processTitle(item.turn, isProcessOpen(item.turn)) }}</text>
+            <text class="process-action">{{ isProcessOpen(item.turn) ? '收起' : '展开' }}</text>
           </view>
-          <view v-if="processOpenState[item.turn.turnId]" class="process-body">
+          <view v-if="isProcessOpen(item.turn)" class="process-body">
             <view v-for="(step, index) in item.turn.steps" :key="`${item.turn.turnId}-${step.kind || 'step'}-${index}`" class="process-step">
               <text class="process-label">{{ step.label || '过程' }}</text>
               <rich-text class="markdown muted-markdown" :nodes="renderMarkdown(step.text || '')" />
@@ -82,7 +88,7 @@
 
     <view class="composer">
       <textarea v-model="messageText" class="input" auto-height maxlength="-1" placeholder="发消息给电脑 Codex" />
-      <button class="send-button" :disabled="sending || !selectedThreadId" @click="send">发送</button>
+      <button class="send-button" :disabled="sending || switchingThread || !selectedThreadId" @click="send">发送</button>
       <button class="stop-button" :disabled="!canStop" @click="stop">停止</button>
     </view>
   </view>
@@ -108,12 +114,14 @@ const currentThreadStatus = ref(null);
 const pendingWatch = ref(null);
 const historyReloadedForCompletion = ref(false);
 const followBottom = ref(false);
-const processOpenState = ref({});
+const manualProcessOpenState = ref({});
 const loading = ref(false);
 const sending = ref(false);
+const switchingThread = ref(false);
 const threadPopupOpen = ref(false);
 const scrollTarget = ref('');
 let threadListRequest = null;
+let switchRequestSeq = 0;
 let connectionTimer = null;
 let threadTimer = null;
 let pollTimer = null;
@@ -152,15 +160,7 @@ const projectGroups = computed(() => projectNames.value.map(name => ({
   name,
   threads: groupedThreads.value.groups[name] || [],
 })));
-const processTurns = computed(() => ((currentThreadStatus.value && currentThreadStatus.value.turns) || [])
-  .map(turn => ({
-    turnId: turn.turnId || '',
-    status: turn.status || '',
-    steps: ((turn.steps || []).filter(step => step && step.text && step.kind !== 'final' && step.kind !== 'complete')),
-    final: turn.final || '',
-    durationText: formatElapsedTime(turn.startedAt, turn.completedAt),
-  }))
-  .filter(turn => turn.turnId && turn.steps.length));
+const processTurns = computed(() => normalizeProcessTurns(currentThreadStatus.value));
 const running = computed(() => {
   const status = (currentThreadStatus.value && currentThreadStatus.value.status) || (selectedThread.value && selectedThread.value.status);
   const activeStatus = Boolean(currentThreadStatus.value && currentThreadStatus.value.active) || Boolean(selectedThread.value && selectedThread.value.active);
@@ -172,7 +172,7 @@ const complete = computed(() => {
   const selectedStatus = selectedThread.value && selectedThread.value.status;
   return !running.value && (currentStatus === 'complete' || selectedStatus === 'complete');
 });
-const canStop = computed(() => running.value && !sending.value);
+const canStop = computed(() => running.value && !sending.value && !switchingThread.value);
 const connectionDotClass = computed(() => connectionState.value.online ? 'dot-green' : connectionState.value.offline ? 'dot-red' : 'dot-gray');
 const threadDotClass = computed(() => running.value ? 'dot-blue' : complete.value ? 'dot-green' : 'dot-gray');
 const connectionText = computed(() => connectionState.value.online ? 'Agent 在线' : connectionState.value.message || '连接未知');
@@ -245,6 +245,53 @@ function processTitle(turn, open) {
   const prefix = open ? '处理过程' : '处理过程已折叠';
   const duration = turn && turn.durationText ? ` · ${turn.durationText}` : '';
   return `${prefix}${duration}（${count}）`;
+}
+
+/**
+ * AI:筛出手机端可展示的处理过程步骤。
+ *
+ * @param {object} turn Codex 轮次数据。
+ * @returns {Array<object>} 可展示步骤。
+ */
+function visibleProcessSteps(turn) {
+  return ((turn && turn.steps) || []).filter(step => step && step.text && step.kind !== 'start' && step.kind !== 'final' && step.kind !== 'complete');
+}
+
+/**
+ * AI:生成处理过程展开状态键，避免旧轮次的手动状态串到新轮次。
+ *
+ * @param {object} turn Codex 轮次数据。
+ * @param {Array<object>} steps 可展示步骤。
+ * @returns {string} 展开状态键。
+ */
+function processStateKey(turn, steps) {
+  const turnId = String((turn && turn.turnId) || '').trim();
+  const startedAt = String((turn && turn.startedAt) || '').trim();
+  const firstStep = steps && steps[0] ? steps[0] : null;
+  const firstStepTime = String((firstStep && firstStep.time) || '').trim();
+  return `${turnId}\u0000${startedAt}\u0000${firstStepTime}`;
+}
+
+/**
+ * AI:规范化处理过程轮次，默认只生成折叠状态所需的数据。
+ *
+ * @param {object|null} status 状态数据。
+ * @returns {Array<object>} 可展示处理过程轮次。
+ */
+function normalizeProcessTurns(status) {
+  return ((status && status.turns) || [])
+    .map(turn => {
+      const steps = visibleProcessSteps(turn);
+      return {
+        turnId: turn && turn.turnId ? turn.turnId : '',
+        processKey: processStateKey(turn, steps),
+        status: turn && turn.status ? turn.status : '',
+        steps,
+        final: turn && turn.final ? turn.final : '',
+        durationText: formatElapsedTime(turn && turn.startedAt, turn && turn.completedAt),
+      };
+    })
+    .filter(turn => turn.turnId && turn.steps.length);
 }
 
 /**
@@ -337,6 +384,8 @@ function deactivatePage() {
   if (!pageActive && !timersStarted) return;
   pageActive = false;
   lifecycleToken += 1;
+  switchRequestSeq += 1;
+  switchingThread.value = false;
   threadListRequest = null;
   stopTimers();
   abortRequestTasks();
@@ -381,59 +430,41 @@ function closeThreadPopup() {
 }
 
 /**
- * AI:切换指定轮次的处理过程展开状态。
+ * AI:判断处理过程是否由用户手动展开。
  *
- * @param {string} turnId 轮次 ID。
+ * @param {object} turn 处理过程轮次。
+ * @returns {boolean} 已手动展开时返回 true。
+ */
+function isProcessOpen(turn) {
+  return Boolean(turn && manualProcessOpenState.value[turn.processKey]);
+}
+
+/**
+ * AI:切换指定轮次的处理过程手动展开状态。
+ *
+ * @param {object} turn 处理过程轮次。
  * @returns {void}
  */
-function toggleProcess(turnId) {
-  if (!turnId) return;
-  processOpenState.value = Object.assign({}, processOpenState.value, {
-    [turnId]: !processOpenState.value[turnId],
+function toggleProcess(turn) {
+  if (!turn || !turn.processKey) return;
+  manualProcessOpenState.value = Object.assign({}, manualProcessOpenState.value, {
+    [turn.processKey]: !manualProcessOpenState.value[turn.processKey],
   });
 }
 
 /**
- * AI:提取每轮处理过程的状态索引。
- *
- * @param {object|null} status 状态数据。
- * @returns {object} 以 turnId 为键的状态索引。
- */
-function turnStatusById(status) {
-  const rows = (status && status.turns) || [];
-  const result = {};
-  for (const turn of rows) {
-    if (turn && turn.turnId) result[turn.turnId] = turn.status || '';
-  }
-  return result;
-}
-
-/**
- * AI:按轮次状态同步处理过程默认展开状态。
+ * AI:同步用户手动展开的处理过程状态，新轮次始终默认折叠。
  *
  * @param {object} status 状态数据。
- * @param {{autoOpenProcess?: boolean}} options 展开选项。
- * @param {object} previousTurnStatus 上一次轮次状态索引。
  * @returns {void}
  */
-function syncProcessOpenState(status, options = {}, previousTurnStatus = {}) {
+function syncManualProcessOpenState(status) {
   const next = {};
-  const turns = (status && status.turns) || [];
+  const turns = normalizeProcessTurns(status);
   for (const turn of turns) {
-    const turnId = turn && turn.turnId;
-    if (!turnId) continue;
-    const isRunningTurn = turn.status === 'running' || (status && status.active && turns[turns.length - 1] === turn);
-    if (isRunningTurn) {
-      next[turnId] = true;
-      continue;
-    }
-    if (previousTurnStatus[turnId] === 'running') {
-      next[turnId] = false;
-      continue;
-    }
-    next[turnId] = Boolean(processOpenState.value[turnId]);
+    if (manualProcessOpenState.value[turn.processKey] === true) next[turn.processKey] = true;
   }
-  processOpenState.value = next;
+  manualProcessOpenState.value = next;
 }
 
 /**
@@ -565,14 +596,12 @@ async function loadThreads() {
  * AI:根据状态数据更新处理过程展开状态。
  *
  * @param {object} status 状态数据。
- * @param {{autoOpenProcess?: boolean}} options 展开选项。
  * @returns {void}
  */
-function applyThreadStatus(status, options = {}) {
-  const previousTurnStatus = turnStatusById(currentThreadStatus.value);
+function applyThreadStatus(status) {
   currentThreadStatus.value = status;
   bindPendingAssistantTurn(status);
-  syncProcessOpenState(status, options, previousTurnStatus);
+  syncManualProcessOpenState(status);
 }
 
 /**
@@ -585,20 +614,21 @@ function applyThreadStatus(status, options = {}) {
 async function loadHistory(statusData = null, options = {}) {
   const token = currentLifecycleToken();
   if (!canUpdateTask(token)) return;
-  if (!selectedThreadId.value) {
+  const requestedThreadId = options.threadId || selectedThreadId.value;
+  if (!requestedThreadId) {
     messages.value = [];
     currentThreadStatus.value = null;
-    processOpenState.value = {};
+    manualProcessOpenState.value = {};
     setNotice('没有可用 Codex 对话');
     return;
   }
-  const data = await getHistory(config.value, selectedThreadId.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
-  if (!canUpdateTask(token)) return;
+  const data = await getHistory(config.value, requestedThreadId, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+  if (!canUpdateTask(token) || selectedThreadId.value !== requestedThreadId) return;
   messages.value = data.messages || [];
   if (data.available) {
-    const snapshot = statusData || await getStatus(config.value, { threadId: selectedThreadId.value }, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
-    if (!canUpdateTask(token)) return;
-    applyThreadStatus(snapshot, { autoOpenProcess: Boolean(options.scrollToBottom) });
+    const snapshot = statusData || await getStatus(config.value, { threadId: requestedThreadId }, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+    if (!canUpdateTask(token) || selectedThreadId.value !== requestedThreadId) return;
+    applyThreadStatus(snapshot);
   }
   setNotice(data.available ? '已同步电脑端 Codex 对话' : '这个对话暂时没有可加载的本机记录');
   if (options.scrollToBottom) await scrollToBottom();
@@ -617,6 +647,7 @@ async function refreshAll(options = {}) {
   try {
     await loadThreads();
     if (!canUpdateTask(token)) return;
+    if (sending.value || pendingWatch.value) return;
     await loadHistory(null, options);
   } catch (error) {
     setNotice(error.message);
@@ -644,15 +675,26 @@ async function manualRefresh() {
 async function selectThread(projectName, thread) {
   const token = currentLifecycleToken();
   if (!canUpdateTask(token)) return;
+  const requestSeq = switchRequestSeq + 1;
+  switchRequestSeq = requestSeq;
   selectedProjectName.value = projectName || '';
   selectedThreadId.value = thread ? thread.id : '';
   threadPopupOpen.value = false;
+  switchingThread.value = true;
+  messages.value = [];
   currentThreadStatus.value = null;
   pendingWatch.value = null;
   historyReloadedForCompletion.value = false;
-  processOpenState.value = {};
+  manualProcessOpenState.value = {};
   persistSelection();
-  await loadHistory(null, { scrollToBottom: true });
+  setNotice('正在载入对话...');
+  try {
+    await loadHistory(null, { scrollToBottom: true, threadId: selectedThreadId.value });
+  } catch (error) {
+    if (canUpdateTask(token) && switchRequestSeq === requestSeq) setNotice(error.message);
+  } finally {
+    if (canUpdateTask(token) && switchRequestSeq === requestSeq) switchingThread.value = false;
+  }
 }
 
 /**
@@ -686,7 +728,7 @@ async function pollStatus(watch = pendingWatch.value || {}) {
   const data = await getStatus(config.value, Object.assign({}, watch, { threadId: requestedThreadId }), { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
   if (!canUpdateTask(token)) return;
   if (requestedThreadId !== selectedThreadId.value || data.threadId !== selectedThreadId.value) return;
-  applyThreadStatus(data, { autoOpenProcess: followBottom.value });
+  applyThreadStatus(data);
   if (data.status === 'complete' || data.status === 'error') {
     const shouldScroll = followBottom.value;
     if (pendingWatch.value && pendingWatch.value.threadId === data.threadId) pendingWatch.value = null;
@@ -715,9 +757,10 @@ async function send() {
   sending.value = true;
   followBottom.value = true;
   historyReloadedForCompletion.value = false;
+  const sentAt = Date.now();
   messages.value = messages.value.concat([
-    { role: 'user', text },
-    { role: 'assistant', text: '已发送，等待 Codex 回复...', pending: true },
+    { role: 'user', text, id: `local-user-${sentAt}` },
+    { role: 'assistant', text: '已发送，等待 Codex 回复...', pending: true, id: `local-assistant-${sentAt}` },
   ]);
   await scrollToBottom();
   try {
@@ -1119,6 +1162,56 @@ onBackPress(() => {
   min-height: 0;
   height: 0;
   padding: 10px 12px 14px;
+}
+
+.switch-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 210px;
+  margin: 8px 0;
+  border: 1px solid #dfe3ea;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.switch-loading-spinner {
+  width: 26px;
+  height: 26px;
+  border: 3px solid #d8dde5;
+  border-top-color: #1f2937;
+  border-radius: 50%;
+  animation: switch-loading-spin 0.9s linear infinite;
+}
+
+.switch-loading-title {
+  margin-top: 12px;
+  color: #111827;
+  font-size: 15px;
+  line-height: 20px;
+  font-weight: 700;
+}
+
+.switch-loading-subtitle {
+  max-width: 260px;
+  margin-top: 4px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes switch-loading-spin {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .message {

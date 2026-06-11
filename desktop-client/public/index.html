@@ -488,7 +488,7 @@
         .map(turn => ({
           turnId: turn?.turnId || '',
           status: turn?.status || '',
-          steps: (turn?.steps || []).filter(step => step?.text && step.kind !== 'final' && step.kind !== 'complete'),
+          steps: (turn?.steps || []).filter(step => step?.text && step.kind !== 'start' && step.kind !== 'final' && step.kind !== 'complete'),
           durationText: formatElapsedTime(turn?.startedAt || '', turn?.completedAt || ''),
         }))
         .filter(turn => turn.turnId && turn.steps.length);
@@ -520,7 +520,7 @@
      */
     function processSummaryText(turn) {
       const count = turn?.steps?.length || 0;
-      const prefix = turn.status === 'running' ? '处理过程' : '处理过程已折叠';
+      const prefix = '处理过程已折叠';
       const duration = turn.durationText ? ` · ${turn.durationText}` : '';
       return `${prefix}${duration}（${count}）`;
     }
@@ -568,7 +568,7 @@
       card.className = 'process-card';
       card.dataset.turnId = turn.turnId;
       const details = document.createElement('details');
-      details.open = turn.status === 'running';
+      details.open = false;
       const summary = document.createElement('summary');
       summary.textContent = processSummaryText(turn);
       details.appendChild(summary);
@@ -590,7 +590,7 @@
     }
 
     /**
-     * 渲染处理过程面板，按轮次运行中展开，完成后折叠。
+     * 渲染处理过程面板，默认折叠且只通过用户手动展开。
      *
      * @param {object} status Codex 状态数据。
      * @returns {void}

@@ -1,0 +1,52 @@
+{
+  "name": "codex-desktop-client",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "Windows desktop client and agent for Codex bridge",
+  "author": "xiaohuihui",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "node server.js",
+    "start:agent": "node desktop-agent.js",
+    "start:manager": "node desktop-manager-server.js",
+    "start:manager:gui": "electron electron/main.js",
+    "start:manager:gui:legacy": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-desktop-manager-gui.ps1",
+    "build:manager:win": "electron-builder --win dir"
+  },
+  "dependencies": {
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "electron": "42.3.3",
+    "electron-builder": "^26.15.2"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "productName": "Codex Desktop 管理器",
+  "build": {
+    "appId": "top.xiaohuihui.codex-desktop-manager",
+    "productName": "Codex Desktop 管理器",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**/*",
+      "src/**/*",
+      "desktop-agent.js",
+      "scripts/win-codex-control.ps1",
+      "package.json",
+      "node_modules/**/*"
+    ],
+    "asarUnpack": [
+      "scripts/*.ps1"
+    ],
+    "win": {
+      "target": [
+        "dir"
+      ],
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
+    }
+  }
+}

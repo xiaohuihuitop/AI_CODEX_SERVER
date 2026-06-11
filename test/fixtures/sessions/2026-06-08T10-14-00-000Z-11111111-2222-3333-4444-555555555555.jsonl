@@ -1,0 +1,3 @@
+{"timestamp":"2026-06-08T10:14:00.000Z","type":"session_meta","payload":{"cwd":"C:\\Users\\admin\\Desktop\\demo"}}
+{"timestamp":"2026-06-08T10:14:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"只有开始事件"}}
+{"timestamp":"2026-06-08T10:14:02.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-start-only"}}

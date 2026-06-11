@@ -7,7 +7,7 @@ const {
   reasoningText,
   stripCodexUiDirectives,
   threadIdFromSessionFile,
-} = require('../src/codex-session-reader');
+} = require('../desktop-client/src/codex-session-reader');
 
 const fixtureRoot = path.join(__dirname, 'fixtures');
 
@@ -161,6 +161,21 @@ test('运行状态包含公开过程步骤', () => {
   assert.equal(status.turns[0].steps.filter(item => item.kind === 'commentary').length, 1);
   assert.deepEqual(status.turns[0].steps.filter(item => item.kind === 'tools').map(item => item.text), ['已运行 3 条命令']);
   assert.deepEqual(status.turns[0].steps.filter(item => item.kind === 'reasoning').map(item => item.text), ['正在检查项目结构', '准备修改手机端显示逻辑']);
+});
+
+test('只有开始事件时不返回可显示处理过程', () => {
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const status = reader.parseStatus({ threadId: '11111111-2222-3333-4444-555555555555' });
+
+  assert.equal(status.status, 'running');
+  assert.equal(status.turns.length, 1);
+  assert.equal(status.turns[0].turnId, 'turn-start-only');
+  assert.equal(status.turns[0].startedAt, '2026-06-08T10:14:02.000Z');
+  assert.deepEqual(status.steps, []);
+  assert.deepEqual(status.turns[0].steps, []);
 });
 
 test('指定 since 后仍保留当前轮次的公开过程归属', () => {

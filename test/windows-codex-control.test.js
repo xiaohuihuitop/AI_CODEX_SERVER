@@ -3,8 +3,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 
-const scriptPath = path.join(__dirname, '..', 'scripts', 'win-codex-control.ps1');
-const indexPath = path.join(__dirname, '..', 'public', 'index.html');
+const scriptPath = path.join(__dirname, '..', 'desktop-client', 'scripts', 'win-codex-control.ps1');
+const indexPath = path.join(__dirname, '..', 'desktop-client', 'public', 'index.html');
 
 function extractGetThreadRowExpression(script, projectName, threadName) {
   const functionText = script.match(/function Get-ThreadRow \{[\s\S]*?\n\}\r?\n\r?\nfunction Get-Composer/)?.[0] || '';
@@ -127,7 +127,7 @@ test('关闭 CDP socket 时不等待远端关闭帧', () => {
 });
 
 test('打包后控制脚本路径指向 app.asar.unpacked 真实文件', () => {
-  const { WindowsCodexController, resolveAsarUnpackedPath } = require('../src/windows-codex-controller');
+  const { WindowsCodexController, resolveAsarUnpackedPath } = require('../desktop-client/src/windows-codex-controller');
   const packedPath = [
     'C:',
     'app',
@@ -252,13 +252,15 @@ test('手机端显示云端 Agent 连接状态指示点', () => {
   assert.match(html, /setInterval\(\(\) => refreshConnectionStatus/);
 });
 
-test('手机端运行中展开处理过程，完成后折叠', () => {
+test('手机端处理过程默认折叠且只通过手动展开', () => {
   const html = fs.readFileSync(indexPath, 'utf8');
 
   assert.match(html, /className = 'process-card'/);
   assert.match(html, /function renderProcessPanel/);
   assert.match(html, /function processTurns\(status\)/);
-  assert.match(html, /details\.open = turn\.status === 'running'/);
+  assert.match(html, /step\.kind !== 'start'/);
+  assert.match(html, /details\.open = false/);
+  assert.doesNotMatch(html, /details\.open = turn\.status === 'running'/);
   assert.match(html, /function formatElapsedTime\(startedAt, completedAt\)/);
   assert.match(html, /function processSummaryText\(turn\)/);
   assert.match(html, /processSummaryText\(turn\)/);

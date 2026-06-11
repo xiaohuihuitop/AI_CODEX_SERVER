@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   restartCodexDesktopWithDebug,
-} = require('../src/codex-desktop-process');
+} = require('../desktop-client/src/codex-desktop-process');
 
 test('重启 Codex Desktop 时使用调试端口启动主进程', async () => {
   const killed = [];
@@ -92,7 +92,7 @@ test('重启 Codex Desktop 时未安装应用会给出明确错误', async () =>
 });
 
 test('停止 Codex Desktop 不结束本地 app-server 后端进程', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'codex-desktop-process.js'), 'utf8');
+  const source = fs.readFileSync(path.join(__dirname, '..', 'desktop-client', 'src', 'codex-desktop-process.js'), 'utf8');
 
   assert.doesNotMatch(source, /OpenAI\\\\Codex\\\\bin/);
   assert.doesNotMatch(source, /resources\\\\codex\.exe/);
