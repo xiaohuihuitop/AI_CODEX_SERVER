@@ -730,6 +730,13 @@ async function selectThread(projectName, thread) {
   persistSelection();
   setNotice('正在载入对话...');
   try {
+    await loadThreads();
+    if (!canUpdateTask(token) || switchRequestSeq !== requestSeq) return;
+    const refreshedThread = threadRows.value.find(row => row.id === selectedThreadId.value);
+    if (refreshedThread) {
+      selectedProjectName.value = refreshedThread.projectName || '未命名文件夹';
+      persistSelection();
+    }
     await loadHistory(null, { scrollToBottom: true, threadId: selectedThreadId.value });
   } catch (error) {
     if (canUpdateTask(token) && switchRequestSeq === requestSeq) setNotice(error.message);

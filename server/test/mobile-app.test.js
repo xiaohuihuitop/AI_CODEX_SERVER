@@ -239,6 +239,7 @@ test('uni-app Android 手机端连接状态只以 Agent 在线信息为准', () 
 
 test('uni-app Android 手机端切换对话时显示等待 UI 并防止旧请求覆盖', () => {
   const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+  const selectThreadFunction = index.match(/async function selectThread\(projectName, thread\) \{([\s\S]*?)\n\}/)?.[1] || '';
 
   assert.match(index, /const switchingThread = ref\(false\)/);
   assert.match(index, /let switchRequestSeq = 0;/);
@@ -249,7 +250,9 @@ test('uni-app Android 手机端切换对话时显示等待 UI 并防止旧请求
   assert.match(index, /const requestSeq = switchRequestSeq \+ 1;/);
   assert.match(index, /switchingThread\.value = true;/);
   assert.match(index, /messages\.value = \[\];/);
-  assert.match(index, /await loadHistory\(null, \{ scrollToBottom: true, threadId: selectedThreadId\.value \}\)/);
+  assert.match(selectThreadFunction, /await loadThreads\(\);[\s\S]*await loadHistory\(null, \{ scrollToBottom: true, threadId: selectedThreadId\.value \}\)/);
+  assert.match(selectThreadFunction, /const refreshedThread = threadRows\.value\.find\(row => row\.id === selectedThreadId\.value\);/);
+  assert.match(selectThreadFunction, /selectedProjectName\.value = refreshedThread\.projectName \|\| '未命名文件夹';/);
   assert.match(index, /switchRequestSeq === requestSeq/);
   assert.match(index, /if \(canUpdateTask\(token\) && switchRequestSeq === requestSeq\) setNotice\(error\.message\);/);
   assert.match(index, /selectedThreadId\.value !== requestedThreadId/);
