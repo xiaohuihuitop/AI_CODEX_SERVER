@@ -29,11 +29,13 @@ test('uni-app Android 手机端工程包含必要入口和默认连接配置', (
   assert.equal(fs.existsSync(path.join(appDir, 'package.json')), false);
   assert.equal(fs.existsSync(path.join(appDir, 'node_modules')), false);
   assert.equal(manifest.vueVersion, '3');
-  assert.equal(manifest['app-plus'].distribute.android.packagename, 'top.xiaohuihui.codex.mobile');
+  assert.equal(manifest['app-plus'].distribute.android.packagename, 'io.github.codexbridge.mobile');
   assert.equal(manifest['app-plus'].distribute.android.usesCleartextTraffic, true);
   assert.deepEqual(pages.pages.map(page => page.path), ['pages/index/index', 'pages/settings/settings']);
-  assert.match(config, /http:\/\/www\.xiaohuihuitop\.top:8008/);
-  assert.match(config, /xiaohuihui/);
+  assert.match(config, /serverUrl:\s*''/);
+  assert.match(config, /token:\s*''/);
+  assert.match(index, /function hasConnectionConfig\(\)/);
+  assert.match(index, /function markConfigMissing\(\)/);
   assert.match(index, /getThreads/);
   assert.match(index, /getHistory/);
   assert.match(index, /sendMessage/);

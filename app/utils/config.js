@@ -1,6 +1,6 @@
 export const DEFAULT_CONFIG = {
-  serverUrl: 'http://www.xiaohuihuitop.top:8008',
-  token: 'xiaohuihui',
+  serverUrl: '',
+  token: '',
 };
 
 const CONFIG_KEY = 'codexMobile.config';

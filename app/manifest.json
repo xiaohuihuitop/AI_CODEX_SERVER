@@ -18,7 +18,7 @@
     },
     "distribute": {
       "android": {
-        "packagename": "top.xiaohuihui.codex.mobile",
+        "packagename": "io.github.codexbridge.mobile",
         "minSdkVersion": 23,
         "targetSdkVersion": 35,
         "permissions": [

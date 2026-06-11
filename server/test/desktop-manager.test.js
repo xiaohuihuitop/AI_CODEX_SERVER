@@ -66,14 +66,14 @@ test('桌面管理器配置可以持久化到文件', () => {
   try {
     saveConfig(file, {
       serverUrl: 'http://example.com:8008/',
-      token: 'xiaohuihui',
+      token: 'token_replace_with_random_value',
       deviceName: 'home-pc',
       autoStart: true,
     });
 
     assert.deepEqual(loadConfig(file), {
       serverUrl: 'http://example.com:8008',
-      token: 'xiaohuihui',
+      token: 'token_replace_with_random_value',
       deviceName: 'home-pc',
       autoStart: true,
     });
@@ -89,14 +89,14 @@ test('桌面管理器配置兼容 UTF-8 BOM 文件', () => {
   try {
     fs.writeFileSync(file, `\uFEFF${JSON.stringify({
       serverUrl: 'http://example.com:8008/',
-      token: 'xiaohuihui',
+      token: 'token_replace_with_random_value',
       deviceName: 'home-pc',
       autoStart: false,
     })}`, 'utf8');
 
     assert.deepEqual(loadConfig(file), {
       serverUrl: 'http://example.com:8008',
-      token: 'xiaohuihui',
+      token: 'token_replace_with_random_value',
       deviceName: 'home-pc',
       autoStart: false,
     });
@@ -109,7 +109,7 @@ test('桌面管理器页面包含 Agent 控制和状态区域', () => {
   const { renderHtml } = require('../../desktop/src/desktop-manager-server');
   const html = renderHtml({
     serverUrl: 'http://example.com:8008',
-    token: 'xiaohuihui',
+    token: 'token_replace_with_random_value',
     deviceName: 'home-pc',
     autoStart: false,
   }, {
@@ -123,7 +123,7 @@ test('桌面管理器页面包含 Agent 控制和状态区域', () => {
   assert.match(html, /Agent 上线\/重连/);
   assert.match(html, /停止 Agent/);
   assert.match(html, /Codex Desktop/);
-  assert.match(html, /http:\/\/example\.com:8008\/\?token=xiaohuihui/);
+  assert.match(html, /http:\/\/example\.com:8008\/\?token=token_replace_with_random_value/);
 });
 
 test('桌面管理器 HTTP 接口支持保存配置和控制 Agent', async () => {
@@ -156,7 +156,7 @@ test('桌面管理器 HTTP 接口支持保存配置和控制 Agent', async () =>
   try {
     const form = new URLSearchParams({
       serverUrl: 'http://example.com:8008',
-      token: 'xiaohuihui',
+      token: 'token_replace_with_random_value',
       deviceName: 'home-pc',
     });
     const saved = await fetch(`http://127.0.0.1:${port}/config`, {
@@ -171,7 +171,7 @@ test('桌面管理器 HTTP 接口支持保存配置和控制 Agent', async () =>
     const restartBody = await restart.json();
     assert.equal(restart.status, 200);
     assert.equal(calls[0][0], 'restart');
-    assert.equal(calls[0][1].token, 'xiaohuihui');
+    assert.equal(calls[0][1].token, 'token_replace_with_random_value');
     assert.equal(restartBody.agent.pid, 5678);
 
     const status = await fetch(`http://127.0.0.1:${port}/status`);
@@ -247,7 +247,7 @@ test('桌面 Agent 管理器可以识别并接管已有 Agent 进程', () => {
 
   assert.deepEqual(manager.start({
     serverUrl: 'http://example.com:8008',
-    token: 'xiaohuihui',
+    token: 'token_replace_with_random_value',
     deviceName: 'home-pc',
   }), {
     running: true,
@@ -294,7 +294,7 @@ test('桌面 Agent 管理器支持一键重启 Agent 让连接重新上线', asy
 
   const result = await manager.restart({
     serverUrl: 'http://example.com:8008',
-    token: 'xiaohuihui',
+    token: 'token_replace_with_random_value',
     deviceName: 'home-pc',
   });
 
@@ -304,7 +304,7 @@ test('桌面 Agent 管理器支持一键重启 Agent 让连接重新上线', asy
   assert.equal(result.alreadyRunning, false);
   assert.equal(spawned.length, 1);
   assert.deepEqual(spawned[0][0], 'node.exe');
-  assert.equal(spawned[0][2].env.CODEX_DEVICE_TOKEN, 'xiaohuihui');
+  assert.equal(spawned[0][2].env.CODEX_DEVICE_TOKEN, 'token_replace_with_random_value');
 });
 
 test('桌面 Agent 管理器支持自定义子进程入口参数', () => {

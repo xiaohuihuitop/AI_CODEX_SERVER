@@ -18,8 +18,12 @@ desktop/  Windows 桌面管理器和 Agent
 
 ## 默认配置
 
-- 服务器地址：`http://www.xiaohuihuitop.top:8008`
-- Token：`xiaohuihui`
+默认不内置服务器地址和 token。首次启动后需要进入“设置”页填写自己的云端地址和 token，例如：
+
+```text
+服务器地址：http://example.com:8008
+Token：token_replace_with_random_value
+```
 
 App 内可以在“连接设置”页修改服务器地址和 token，配置保存在手机本地。
 

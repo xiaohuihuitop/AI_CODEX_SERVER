@@ -216,6 +216,28 @@ const timelineItems = computed(() => {
 });
 
 /**
+ * AI:判断手机端是否已经填写云端地址和 Token。
+ *
+ * @returns {boolean} 已配置返回 true。
+ */
+function hasConnectionConfig() {
+  return Boolean(config.value && config.value.serverUrl && config.value.token);
+}
+
+/**
+ * AI:缺少连接配置时阻止请求空地址。
+ *
+ * @returns {void}
+ */
+function markConfigMissing() {
+  serverState.value = { online: false, offline: false, message: '请配置服务器' };
+  agentState.value = { online: false, offline: false, message: 'Agent 未连接' };
+  currentThreadStatus.value = null;
+  threadRows.value = [];
+  setNotice('请先在设置中填写服务器地址和 Token。');
+}
+
+/**
  * AI:渲染 Markdown 消息。
  *
  * @param {string} text Markdown 文本。
@@ -559,6 +581,10 @@ function ensureSelection() {
  */
 async function refreshConnectionStatus() {
   const token = currentLifecycleToken();
+  if (!hasConnectionConfig()) {
+    markConfigMissing();
+    return;
+  }
   try {
     const data = await getHealth(config.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token)) return;
@@ -596,6 +622,10 @@ function applyAgentOnline(data) {
 async function fetchThreadRows() {
   const token = currentLifecycleToken();
   if (!canUpdateTask(token)) return threadRows.value;
+  if (!hasConnectionConfig()) {
+    markConfigMissing();
+    return threadRows.value;
+  }
   if (threadListRequest) return threadListRequest;
   const request = (async () => {
     const data = await getThreads(config.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });

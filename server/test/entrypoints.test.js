@@ -120,7 +120,7 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.equal(desktopPkg.devDependencies.electron, '42.3.3');
 });
 
-test('根目录只保留三端业务目录和 Git 基础设施', () => {
+test('根目录只保留三端业务目录、README 和 Git 基础设施', () => {
   const expectedFiles = [
     path.join(desktopDir, 'desktop-agent.js'),
     path.join(desktopDir, 'desktop-manager-server.js'),
@@ -129,17 +129,20 @@ test('根目录只保留三端业务目录和 Git 基础设施', () => {
     path.join(desktopDir, 'scripts', 'win-codex-control.ps1'),
     path.join(serverDir, 'cloud-server.js'),
     path.join(serverDir, 'Dockerfile'),
+    path.join(serverDir, 'README.md'),
     path.join(serverDir, 'docker-compose.yml'),
     path.join(serverDir, 'public', 'index.html'),
     path.join(serverDir, 'src', 'cloud-relay.js'),
     path.join(serverDir, 'src', 'session-cache.js'),
     path.join(mobileDir, 'manifest.json'),
+    path.join(mobileDir, 'README.md'),
     path.join(mobileDir, 'pages', 'index', 'index.vue'),
     path.join(mobileDir, 'docs', '使用说明.md'),
   ];
-  const allowedRoot = new Set(['.git', '.github', '.gitignore', 'desktop', 'server', 'app']);
+  const allowedRoot = new Set(['.git', '.github', '.gitignore', 'README.md', 'desktop', 'server', 'app']);
 
   for (const file of expectedFiles) assert.equal(fs.existsSync(file), true, file);
+  assert.equal(fs.existsSync(path.join(desktopDir, 'README.md')), true);
   const rootNames = fs.readdirSync(rootDir, { withFileTypes: true }).map(item => item.name);
   assert.deepEqual(rootNames.filter(name => !allowedRoot.has(name)).sort(), []);
   assert.equal(fs.existsSync(path.join(rootDir, 'desktop-client')), false);

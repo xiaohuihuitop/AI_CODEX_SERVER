@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "description": "Windows desktop client and agent for Codex bridge",
-  "author": "xiaohuihui",
+  "author": "codex-bridge contributors",
   "main": "electron/main.js",
   "scripts": {
     "start": "node server.js",
@@ -26,7 +26,7 @@
   },
   "productName": "Codex Desktop 管理器",
   "build": {
-    "appId": "top.xiaohuihui.codex-desktop-manager",
+    "appId": "io.github.codexbridge.desktop-manager",
     "productName": "Codex Desktop 管理器",
     "directories": {
       "output": "dist"
