@@ -39,12 +39,21 @@ input {
 .top-actions {
   display: flex;
   align-items: center;
+  gap: 10px;
 }
 
 .topbar {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 18px;
+}
+
+.port-status {
+  min-width: 142px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .eyebrow {

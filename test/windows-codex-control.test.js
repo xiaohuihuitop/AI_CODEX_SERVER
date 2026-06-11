@@ -169,6 +169,22 @@ test('脚本支持读取 Codex Desktop 当前打开线程', () => {
   assert.match(script, /threadName/);
 });
 
+test('后台读取打开线程不把 Codex Desktop 拉到前台', () => {
+  const script = fs.readFileSync(scriptPath, 'utf8');
+  const getSocket = script.match(/function Get-CodexSocket \{[\s\S]*?\n\}/)?.[0] || '';
+  const getOpenThreads = script.match(/function Get-OpenThreads \{[\s\S]*?\n\}\r?\n\r?\nfunction Send-ToThread/)?.[0] || '';
+  const sendToThread = script.match(/function Send-ToThread \{[\s\S]*?\n\}\r?\n\r?\nfunction Stop-CodexResponse/)?.[0] || '';
+  const stopResponse = script.match(/function Stop-CodexResponse \{[\s\S]*?\n\}\r?\n\r?\nif \(\$Action -eq 'send-thread'\)/)?.[0] || '';
+
+  assert.match(getSocket, /\[switch\]\$BringToFront/);
+  assert.match(getSocket, /if \(\$BringToFront\)/);
+  assert.match(getSocket, /Page\.bringToFront/);
+  assert.match(getOpenThreads, /\$socket = Get-CodexSocket/);
+  assert.doesNotMatch(getOpenThreads, /-BringToFront/);
+  assert.match(sendToThread, /\$socket = Get-CodexSocket -BringToFront/);
+  assert.match(stopResponse, /\$socket = Get-CodexSocket -BringToFront/);
+});
+
 test('脚本不支持单独切换 Codex Desktop 线程', () => {
   const script = fs.readFileSync(scriptPath, 'utf8');
 
@@ -286,6 +302,31 @@ test('手机端处理过程默认折叠且只通过手动展开', () => {
   assert.match(html, /setInterval\(\(\) => pollStatus\(\)/);
   assert.match(html, /if \(!requestedThreadId\) return/);
   assert.match(html, /data\.threadId !== selectedThreadId/);
+});
+
+test('网页端运行中同步电脑端新增用户消息', () => {
+  const html = fs.readFileSync(indexPath, 'utf8');
+
+  assert.match(html, /let runningHistoryRequest = null/);
+  assert.match(html, /let runningHistorySyncAt = 0/);
+  assert.match(html, /let runningHistoryThreadId = ''/);
+  assert.match(html, /async function syncRunningHistory\(statusData\)/);
+  assert.match(html, /if \(!selectedThreadId \|\| pendingWatch\) return false/);
+  assert.match(html, /if \(!statusData \|\| \(!statusData\.active && statusData\.status !== 'running'\)\) return false/);
+  assert.match(html, /if \(runningHistoryRequest\) \{[\s\S]*await runningHistoryRequest;[\s\S]*return true;[\s\S]*\}/);
+  assert.match(html, /now - runningHistorySyncAt < 1500/);
+  assert.match(html, /loadHistory\(statusData, \{ preserveScroll: true, silent: true \}\)/);
+  assert.match(html, /const historySynced = await syncRunningHistory\(data\)/);
+  assert.match(html, /if \(!historySynced\) \{[\s\S]*renderProcessPanel\(data\);[\s\S]*\}/);
+  assert.match(html, /if \(!options\.silent\) notice/);
+});
+
+test('网页端消息顺序固定为用户消息、处理过程、最终回复', () => {
+  const html = fs.readFileSync(indexPath, 'utf8');
+
+  assert.match(html, /if \(assistant\) messagesEl\.insertBefore\(card, assistant\)/);
+  assert.match(html, /else if \(shouldAppendUnmatchedProcess\(turn\)\) messagesEl\.appendChild\(card\)/);
+  assert.match(html, /const historySynced = await syncRunningHistory\(data\);[\s\S]*if \(!historySynced\) \{[\s\S]*renderProcessPanel\(data\);[\s\S]*\}/);
 });
 
 test('网页端线程选择控件使用底部直线样式', () => {

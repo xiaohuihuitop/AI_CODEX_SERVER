@@ -130,6 +130,9 @@ let pageActive = false;
 let timersStarted = false;
 let lifecycleToken = 0;
 let requestTasks = [];
+let runningHistoryRequest = null;
+let runningHistorySyncAt = 0;
+let runningHistoryThreadId = '';
 
 /**
  * AI:按项目分组当前打开的 Codex 对话。
@@ -397,6 +400,7 @@ function deactivatePage() {
   switchRequestSeq += 1;
   switchingThread.value = false;
   threadListRequest = null;
+  runningHistoryRequest = null;
   stopTimers();
   abortRequestTasks();
 }
@@ -640,7 +644,7 @@ async function loadHistory(statusData = null, options = {}) {
     if (!canUpdateTask(token) || selectedThreadId.value !== requestedThreadId) return;
     applyThreadStatus(snapshot);
   }
-  setNotice(data.available ? '已同步电脑端 Codex 对话' : '这个对话暂时没有可加载的本机记录');
+  if (!options.silent) setNotice(data.available ? '已同步电脑端 Codex 对话' : '这个对话暂时没有可加载的本机记录');
   if (options.scrollToBottom) await scrollToBottom();
 }
 
@@ -695,6 +699,9 @@ async function selectThread(projectName, thread) {
   currentThreadStatus.value = null;
   pendingWatch.value = null;
   historyReloadedForCompletion.value = false;
+  runningHistoryRequest = null;
+  runningHistorySyncAt = 0;
+  runningHistoryThreadId = '';
   manualProcessOpenState.value = {};
   persistSelection();
   setNotice('正在载入对话...');
@@ -704,6 +711,33 @@ async function selectThread(projectName, thread) {
     if (canUpdateTask(token) && switchRequestSeq === requestSeq) setNotice(error.message);
   } finally {
     if (canUpdateTask(token) && switchRequestSeq === requestSeq) switchingThread.value = false;
+  }
+}
+
+/**
+ * AI:电脑端直接发送消息时，运行中也补拉历史，避免用户消息等到最终回复后才出现。
+ *
+ * @param {object} statusData 当前轮询到的运行状态。
+ * @returns {Promise<void>} 历史同步完成。
+ */
+async function syncRunningHistory(statusData) {
+  const requestedThreadId = selectedThreadId.value;
+  if (!requestedThreadId || sending.value || pendingWatch.value) return false;
+  if (!statusData || (!statusData.active && statusData.status !== 'running')) return false;
+  if (runningHistoryRequest) {
+    await runningHistoryRequest;
+    return true;
+  }
+  const now = Date.now();
+  if (runningHistoryThreadId === requestedThreadId && now - runningHistorySyncAt < 1500) return false;
+  runningHistoryThreadId = requestedThreadId;
+  runningHistorySyncAt = now;
+  runningHistoryRequest = loadHistory(statusData, { scrollToBottom: false, silent: true });
+  try {
+    await runningHistoryRequest;
+    return true;
+  } finally {
+    runningHistoryRequest = null;
   }
 }
 
@@ -738,8 +772,8 @@ async function pollStatus(watch = pendingWatch.value || {}) {
   const data = await getStatus(config.value, Object.assign({}, watch, { threadId: requestedThreadId }), { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
   if (!canUpdateTask(token)) return;
   if (requestedThreadId !== selectedThreadId.value || data.threadId !== selectedThreadId.value) return;
-  applyThreadStatus(data);
   if (data.status === 'complete' || data.status === 'error') {
+    applyThreadStatus(data);
     const shouldScroll = followBottom.value;
     if (pendingWatch.value && pendingWatch.value.threadId === data.threadId) pendingWatch.value = null;
     followBottom.value = false;
@@ -749,6 +783,8 @@ async function pollStatus(watch = pendingWatch.value || {}) {
     }
     return;
   }
+  const historySynced = await syncRunningHistory(data);
+  if (!historySynced) applyThreadStatus(data);
   historyReloadedForCompletion.value = false;
   setNotice(data.preview || 'Codex 正在回复...');
 }

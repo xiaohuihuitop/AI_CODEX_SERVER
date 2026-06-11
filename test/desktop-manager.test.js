@@ -189,6 +189,26 @@ test('桌面管理器 HTTP 接口支持保存配置和控制 Agent', async () =>
   }
 });
 
+test('桌面管理器 Codex 控制只统计可控制 App 目标', async () => {
+  const { probeCodexDebug } = require('../desktop-client/src/desktop-manager-server');
+  const result = await probeCodexDebug({
+    fetchWithTimeout: async () => ({
+      json: async () => [
+        { url: 'app://-/index.html' },
+        { url: 'devtools://devtools/bundled/inspector.html' },
+        { url: 'chrome-extension://example/background.html' },
+        { url: 'about:blank' },
+        { url: 'app://-/other.html' },
+      ],
+    }),
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.targetCount, 5);
+  assert.equal(result.appTargetCount, 1);
+  assert.equal(result.port, 9229);
+});
+
 test('Electron 停止功能会关闭自动启动并停止 Agent', () => {
   const electronMain = fs.readFileSync(path.join(__dirname, '..', 'desktop-client', 'electron', 'main.js'), 'utf8');
 

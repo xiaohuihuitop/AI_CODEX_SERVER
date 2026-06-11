@@ -23,6 +23,7 @@ const { restartCodexDesktopWithDebug } = require('../src/codex-desktop-process')
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const CONFIG_PATH = getDefaultConfigPath();
+const CODEX_DEBUG_PORT = Number(process.env.CODEX_DEBUG_PORT || 9229);
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -45,6 +46,29 @@ const agentController = createAgentController();
 
 let config = loadConfig(CONFIG_PATH);
 let mainWindow = null;
+
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+}
+
+app.on('second-instance', () => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+});
+
+function serverPortFromUrl(serverUrl) {
+  try {
+    const url = new URL(serverUrl);
+    if (url.port) return Number(url.port);
+    if (url.protocol === 'https:') return 443;
+    if (url.protocol === 'http:') return 80;
+  } catch {
+    return null;
+  }
+  return null;
+}
 
 /**
  * AI:按配置启动 Agent，避免打开管理器后仍需要手动上线。
@@ -74,6 +98,10 @@ async function getState() {
     agent: agentController.status(),
     cloud,
     codex,
+    ports: {
+      cloud: serverPortFromUrl(normalized.serverUrl),
+      codexDebug: codex.port || CODEX_DEBUG_PORT,
+    },
   };
 }
 
@@ -98,6 +126,11 @@ function createWindow() {
     },
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer.html'));
+  mainWindow.on('close', event => {
+    if (app.isQuitting) return;
+    event.preventDefault();
+    mainWindow.hide();
+  });
   return mainWindow;
 }
 
@@ -153,5 +186,9 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
+  if (process.platform === 'darwin') return;
+});
+
+app.on('before-quit', () => {
+  app.isQuitting = true;
 });

@@ -144,6 +144,34 @@ test('uni-app Android 手机端发送后立即追加本地消息', () => {
   assert.match(index, /await scrollToBottom\(\);/);
 });
 
+test('uni-app Android 手机端运行中同步电脑端新增用户消息', () => {
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+
+  assert.match(index, /let runningHistoryRequest = null;/);
+  assert.match(index, /let runningHistorySyncAt = 0;/);
+  assert.match(index, /let runningHistoryThreadId = '';/);
+  assert.match(index, /async function syncRunningHistory\(statusData\)/);
+  assert.match(index, /if \(!requestedThreadId \|\| sending\.value \|\| pendingWatch\.value\) return false;/);
+  assert.match(index, /if \(!statusData \|\| \(!statusData\.active && statusData\.status !== 'running'\)\) return false;/);
+  assert.match(index, /if \(runningHistoryRequest\) \{[\s\S]*await runningHistoryRequest;[\s\S]*return true;[\s\S]*\}/);
+  assert.match(index, /now - runningHistorySyncAt < 1500/);
+  assert.match(index, /loadHistory\(statusData, \{ scrollToBottom: false, silent: true \}\)/);
+  assert.match(index, /const historySynced = await syncRunningHistory\(data\);/);
+  assert.match(index, /if \(!historySynced\) applyThreadStatus\(data\);/);
+  assert.match(index, /if \(!options\.silent\) setNotice/);
+  assert.match(index, /runningHistoryRequest = null;/);
+});
+
+test('uni-app Android 手机端消息顺序固定为用户消息、处理过程、最终回复', () => {
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+  const timelineFunction = index.match(/const timelineItems = computed\(\(\) => \{([\s\S]*?)\n\}\);/)?.[1] || '';
+  const pollFunction = index.match(/async function pollStatus\(watch = pendingWatch\.value \|\| \{\}\) \{([\s\S]*?)\n\}/)?.[1] || '';
+
+  assert.match(timelineFunction, /if \(exactTurn\) \{[\s\S]*items\.push\(\{ type: 'process'[\s\S]*\}\);[\s\S]*\}[\s\S]*items\.push\(\{ type: 'message'/);
+  assert.match(timelineFunction, /if \(shouldAppendUnmatchedProcess\(turn\)\) items\.push\(\{ type: 'process'/);
+  assert.match(pollFunction, /const historySynced = await syncRunningHistory\(data\);[\s\S]*if \(!historySynced\) applyThreadStatus\(data\);/);
+});
+
 test('uni-app Android 手机端使用弹出二级对话列表选择线程', () => {
   const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
 

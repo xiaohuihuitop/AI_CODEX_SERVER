@@ -324,6 +324,9 @@
     let currentThreadStatus = null;
     let pendingWatch = null;
     let historyReloadedForCompletion = false;
+    let runningHistoryRequest = null;
+    let runningHistorySyncAt = 0;
+    let runningHistoryThreadId = '';
 
     /**
      * 调用本机桥接 API。
@@ -778,7 +781,7 @@
       }
       if (options.scrollToBottom) scrollToBottom();
       else restoreScroll(scroll);
-      notice(data.available ? '已同步本机 Codex 线程' : '这个线程暂时没有可加载的本机记录');
+      if (!options.silent) notice(data.available ? '已同步本机 Codex 线程' : '这个线程暂时没有可加载的本机记录');
     }
 
     /**
@@ -796,6 +799,32 @@
     }
 
     /**
+     * AI:电脑端直接发送消息时，运行中也补拉历史，避免用户消息等到最终回复后才出现。
+     *
+     * @param {object} statusData 当前轮询到的运行状态。
+     * @returns {Promise<void>} 历史同步完成。
+     */
+    async function syncRunningHistory(statusData) {
+      if (!selectedThreadId || pendingWatch) return false;
+      if (!statusData || (!statusData.active && statusData.status !== 'running')) return false;
+      if (runningHistoryRequest) {
+        await runningHistoryRequest;
+        return true;
+      }
+      const now = Date.now();
+      if (runningHistoryThreadId === selectedThreadId && now - runningHistorySyncAt < 1500) return false;
+      runningHistoryThreadId = selectedThreadId;
+      runningHistorySyncAt = now;
+      runningHistoryRequest = loadHistory(statusData, { preserveScroll: true, silent: true });
+      try {
+        await runningHistoryRequest;
+        return true;
+      } finally {
+        runningHistoryRequest = null;
+      }
+    }
+
+    /**
      * 轮询 Codex 回复状态。
      *
      * @param {{threadId?: string, since?: string}} watch 轮询参数。
@@ -806,17 +835,24 @@
       if (!requestedThreadId) return;
       const data = await fetchStatus({ ...watch, threadId: requestedThreadId });
       if (requestedThreadId !== selectedThreadId || data.threadId !== selectedThreadId) return;
-      currentThreadStatus = data;
-      bindPendingAssistantTurn(data);
-      updateThreadStatus(data);
-      renderProcessPanel(data);
       if (data.status === 'complete' || data.status === 'error') {
+        currentThreadStatus = data;
+        bindPendingAssistantTurn(data);
+        updateThreadStatus(data);
+        renderProcessPanel(data);
         if (pendingWatch?.threadId === data.threadId) pendingWatch = null;
         if (!historyReloadedForCompletion) {
           historyReloadedForCompletion = true;
           await loadHistory(data, { preserveScroll: true });
         }
       } else {
+        const historySynced = await syncRunningHistory(data);
+        if (!historySynced) {
+          currentThreadStatus = data;
+          bindPendingAssistantTurn(data);
+          updateThreadStatus(data);
+          renderProcessPanel(data);
+        }
         historyReloadedForCompletion = false;
         notice(data.preview || 'Codex 正在回复...');
       }
@@ -838,6 +874,9 @@
         currentThreadStatus = null;
         pendingWatch = null;
         historyReloadedForCompletion = false;
+        runningHistoryRequest = null;
+        runningHistorySyncAt = 0;
+        runningHistoryThreadId = '';
         updateThreadStatus();
         await loadHistory(null, { preserveScroll: false, scrollToBottom: true });
       } catch (error) {
@@ -853,6 +892,9 @@
         currentThreadStatus = null;
         pendingWatch = null;
         historyReloadedForCompletion = false;
+        runningHistoryRequest = null;
+        runningHistorySyncAt = 0;
+        runningHistoryThreadId = '';
         renderThreadOptions();
         await loadHistory(null, { preserveScroll: false, scrollToBottom: true });
       } catch (error) {

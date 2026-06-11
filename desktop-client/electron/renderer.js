@@ -2,6 +2,7 @@ const state = {
   current: null,
   busy: false,
 };
+const SILENT_REFRESH_MS = 15000;
 
 const elements = {
   serverUrl: document.getElementById('serverUrl'),
@@ -16,6 +17,7 @@ const elements = {
   refreshButton: document.getElementById('refreshButton'),
   openMobileButton: document.getElementById('openMobileButton'),
   copyMobileButton: document.getElementById('copyMobileButton'),
+  portStatus: document.getElementById('portStatus'),
   mobileUrl: document.getElementById('mobileUrl'),
   agentEnv: document.getElementById('agentEnv'),
   agentLog: document.getElementById('agentLog'),
@@ -87,8 +89,12 @@ function renderState(nextState, options = {}) {
   elements.agentDetail.textContent = nextState.agent.pid ? `同步服务 PID ${nextState.agent.pid}` : '手机端暂时不能控制这台电脑';
 
   setCard(elements.codexCard, nextState.codex.ok);
+  const cloudPort = nextState.ports.cloud || '未配置';
   elements.codexStatus.textContent = nextState.codex.ok ? '可用' : '需重启 Codex 生效 CDP';
-  elements.codexDetail.textContent = nextState.codex.ok ? `可控制目标 ${nextState.codex.targetCount}` : (nextState.codex.message || '点击“重启 Codex 生效 CDP”');
+  elements.codexDetail.textContent = nextState.codex.ok
+    ? `CDP 端口 ${nextState.ports.codexDebug}，Codex App 目标 ${nextState.codex.appTargetCount || 1}`
+    : (nextState.codex.message || `点击“重启 Codex 生效 CDP”，端口 ${nextState.ports.codexDebug}`);
+  elements.portStatus.textContent = `云端 ${cloudPort} / CDP ${nextState.ports.codexDebug}`;
 
   elements.mobileUrl.textContent = nextState.mobileUrl || '请先填写云端服务器地址和固定 Token。';
   elements.agentEnv.textContent = [
@@ -124,7 +130,7 @@ async function refresh(options = {}) {
 }
 
 async function refreshSilently() {
-  if (state.busy) return;
+  if (state.busy || document.visibilityState !== 'visible') return;
   await refresh({ interactive: false, renderConfig: false });
 }
 
@@ -169,4 +175,7 @@ elements.copyMobileButton.addEventListener('click', async () => {
 });
 
 refresh();
-setInterval(refreshSilently, 5000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') refreshSilently();
+});
+setInterval(refreshSilently, SILENT_REFRESH_MS);

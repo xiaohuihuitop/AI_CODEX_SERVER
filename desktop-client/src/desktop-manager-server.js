@@ -101,19 +101,24 @@ async function probeCloud(config) {
 /**
  * 探测 Codex Desktop CDP 端口状态。
  *
- * @returns {Promise<{ok: boolean, targetCount: number, message?: string}>} CDP 状态。
+ * @returns {Promise<{ok: boolean, targetCount: number, appTargetCount: number, port: number, message?: string}>} CDP 状态。
  */
-async function probeCodexDebug() {
+async function probeCodexDebug(options = {}) {
+  const port = Number(process.env.CODEX_DEBUG_PORT || 9229);
   try {
-    const res = await fetchWithTimeout('http://127.0.0.1:9229/json/list', STATUS_TIMEOUT_MS);
+    const fetcher = options.fetchWithTimeout || fetchWithTimeout;
+    const res = await fetcher(`http://127.0.0.1:${port}/json/list`, STATUS_TIMEOUT_MS);
     const targets = await res.json();
+    const appTargets = Array.isArray(targets) ? targets.filter(target => target && target.url === 'app://-/index.html') : [];
     return {
-      ok: Array.isArray(targets) && targets.some(target => target.url === 'app://-/index.html'),
+      ok: appTargets.length > 0,
       targetCount: Array.isArray(targets) ? targets.length : 0,
+      appTargetCount: appTargets.length,
+      port,
       message: '',
     };
   } catch (error) {
-    return { ok: false, targetCount: 0, message: error.message };
+    return { ok: false, targetCount: 0, appTargetCount: 0, port, message: error.message };
   }
 }
 
@@ -243,7 +248,7 @@ function renderHtml(config, agentStatus) {
     document.getElementById('stopAgent').addEventListener('click', () => postAction('/agent/stop'));
     document.getElementById('refreshStatus').addEventListener('click', refreshStatus);
     refreshStatus();
-    setInterval(refreshStatus, 5000);
+    setInterval(refreshStatus, 15000);
   </script>
 </body>
 </html>`;

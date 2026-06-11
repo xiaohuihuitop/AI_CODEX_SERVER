@@ -63,6 +63,8 @@ function Invoke-Cdp {
 }
 
 function Get-CodexSocket {
+  param([switch]$BringToFront)
+
   $targets = Invoke-RestMethod -Uri $DebugListUrl -TimeoutSec 5
   $target = @($targets | Where-Object { $_.url -eq 'app://-/index.html' } | Select-Object -First 1)[0]
   if (-not $target) { throw 'CODEX_DEBUG_TARGET_NOT_FOUND' }
@@ -70,7 +72,9 @@ function Get-CodexSocket {
   $socket.ConnectAsync([Uri]$target.webSocketDebuggerUrl, [Threading.CancellationToken]::None).GetAwaiter().GetResult() | Out-Null
   $script:NextCdpId = 0
   Invoke-Cdp -Socket $socket -Method 'Runtime.enable' | Out-Null
-  Invoke-Cdp -Socket $socket -Method 'Page.bringToFront' | Out-Null
+  if ($BringToFront) {
+    Invoke-Cdp -Socket $socket -Method 'Page.bringToFront' | Out-Null
+  }
   $socket
 }
 
@@ -249,7 +253,7 @@ function Send-ToThread {
   $text = [System.IO.File]::ReadAllText($TextFile, [System.Text.Encoding]::UTF8)
   if (-not $text.Trim()) { throw 'EMPTY_TEXT' }
 
-  $socket = Get-CodexSocket
+  $socket = Get-CodexSocket -BringToFront
   try {
     $row = Get-ThreadRow -Socket $socket -Project $ProjectName -Thread $ThreadName
     $rect = $row.rect
@@ -281,7 +285,7 @@ function Send-ToThread {
 }
 
 function Stop-CodexResponse {
-  $socket = Get-CodexSocket
+  $socket = Get-CodexSocket -BringToFront
   try {
     Invoke-Cdp -Socket $socket -Method 'Input.dispatchKeyEvent' -Params @{
       type = 'keyDown'

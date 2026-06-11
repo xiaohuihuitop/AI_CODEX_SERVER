@@ -16,16 +16,14 @@ const controller = new WindowsCodexController();
 const reader = new CodexSessionReader();
 const api = createDesktopAgentApi({ reader, controller });
 const syncOffsets = new Map();
-const discoveryIntervalMs = Math.max(5000, Number(process.env.CODEX_AGENT_DISCOVERY_INTERVAL_MS || 10000));
+const discoveryIntervalMs = Math.max(5000, Number(process.env.CODEX_AGENT_DISCOVERY_INTERVAL_MS || 30000));
 let knownThreadTargets = [];
 let lastDiscoveryAt = 0;
 
 async function syncProvider() {
-  if (api.isBusy()) {
-    return null;
-  }
+  const busy = api.isBusy();
   const now = Date.now();
-  if (now - lastDiscoveryAt >= discoveryIntervalMs) {
+  if (!busy && now - lastDiscoveryAt >= discoveryIntervalMs) {
     lastDiscoveryAt = now;
     const openThreads = await controller.listOpenThreads();
     knownThreadTargets = reader.discoverOpenThreadSessions(openThreads);

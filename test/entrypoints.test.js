@@ -19,10 +19,14 @@ test('云端和桌面端入口文件存在并使用固定 token 环境变量', (
   assert.match(agent, /CODEX_DEVICE_TOKEN/);
   assert.match(agent, /function syncProvider\(\)/);
   assert.match(agent, /api\.isBusy\(\)/);
+  assert.match(agent, /const busy = api\.isBusy\(\)/);
+  assert.match(agent, /if \(!busy && now - lastDiscoveryAt >= discoveryIntervalMs\)/);
+  assert.doesNotMatch(agent, /if \(api\.isBusy\(\)\) \{\s*return null;\s*\}/);
   assert.match(agent, /discoverOpenThreadSessions/);
   assert.match(agent, /readKnownThreadSync/);
   assert.match(agent, /CODEX_AGENT_SYNC_INTERVAL_MS/);
   assert.match(agent, /CODEX_AGENT_DISCOVERY_INTERVAL_MS/);
+  assert.match(agent, /CODEX_AGENT_DISCOVERY_INTERVAL_MS \|\| 30000/);
 });
 
 test('桌面管理小软件入口使用本地管理端口和配置模块', () => {
@@ -47,6 +51,11 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(gui, /function Get-AgentProcess/);
   assert.match(gui, /\$AgentScriptPath/);
   assert.match(electronMain, /BrowserWindow/);
+  assert.match(electronMain, /requestSingleInstanceLock/);
+  assert.match(electronMain, /second-instance/);
+  assert.match(electronMain, /mainWindow\.hide\(\)/);
+  assert.match(electronMain, /app\.isQuitting/);
+  assert.doesNotMatch(electronMain, /if \(process\.platform !== 'darwin'\) app\.quit\(\)/);
   assert.doesNotMatch(electronMain, /manager:start-agent/);
   assert.match(electronMain, /manager:restart-agent/);
   assert.match(electronMain, /manager:pause-feature/);
@@ -57,6 +66,8 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(electronMain, /agentController\.restart\(normalized\)/);
   assert.match(electronMain, /autoStart: true/);
   assert.match(electronMain, /autoStart: false/);
+  assert.match(electronMain, /function serverPortFromUrl\(serverUrl\)/);
+  assert.match(electronMain, /ports:\s*\{[\s\S]*cloud: serverPortFromUrl\(normalized\.serverUrl\),[\s\S]*codexDebug: codex\.port \|\| CODEX_DEBUG_PORT,/);
   assert.match(electronPreload, /contextBridge/);
   assert.doesNotMatch(electronPreload, /\bstartAgent:\s*\(/);
   assert.match(electronPreload, /pauseFeature/);
@@ -71,9 +82,14 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(electronHtml, /启动功能/);
   assert.match(electronHtml, /停止功能/);
   assert.match(electronHtml, /重启 Codex 生效 CDP/);
+  assert.match(electronHtml, /id="portStatus"/);
   assert.match(electronHtml, /功能状态/);
   assert.match(electronHtml, /云端连接/);
   assert.match(electronHtml, /Codex 控制/);
+  assert.match(electronRenderer, /const cloudPort = nextState\.ports\.cloud \|\| '未配置'/);
+  assert.match(electronRenderer, /云端 \$\{cloudPort\} \/ CDP \$\{nextState\.ports\.codexDebug\}/);
+  assert.match(electronRenderer, /Codex App 目标/);
+  assert.doesNotMatch(electronRenderer, /可控制目标 \$\{nextState\.codex\.targetCount\}/);
   assert.match(electronRenderer, /function isConfigured\(config\)/);
   assert.match(electronRenderer, /featureStarted/);
   assert.match(electronRenderer, /已启动/);
@@ -82,7 +98,9 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(electronRenderer, /需重启 Codex 生效 CDP/);
   assert.match(electronRenderer, /window\.codexManager\.pauseFeature\(\)/);
   assert.match(electronRenderer, /async function refreshSilently\(\)/);
-  assert.match(electronRenderer, /setInterval\(refreshSilently, 5000\)/);
+  assert.match(electronRenderer, /const SILENT_REFRESH_MS = 15000/);
+  assert.match(electronRenderer, /document\.visibilityState !== 'visible'/);
+  assert.match(electronRenderer, /setInterval\(refreshSilently, SILENT_REFRESH_MS\)/);
   assert.match(electronRenderer, /refresh\(\{ interactive: false, renderConfig: false \}\)/);
   assert.match(electronRenderer, /if \(interactive\) setBusy\(true\)/);
   assert.match(electronRenderer, /if \(interactive\) setBusy\(false\)/);

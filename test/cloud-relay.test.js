@@ -204,6 +204,41 @@ test('云端 relay 从服务器缓存返回历史和状态', async () => {
   await close(server);
 });
 
+test('云端缓存支持渲染为用户消息、处理过程、最终回复顺序', () => {
+  const cache = createCloudSessionCache();
+  cache.applySync('order-token', {
+    openThreadIds: ['thread-order'],
+    sessions: [{
+      threadId: 'thread-order',
+      threadName: '顺序线程',
+      projectName: 'demo',
+      reset: true,
+      lines: [
+        JSON.stringify({ timestamp: '2026-06-08T00:00:00.000Z', type: 'turn_context', payload: { turn_id: 'turn-order' } }),
+        JSON.stringify({ timestamp: '2026-06-08T00:00:01.000Z', type: 'event_msg', payload: { type: 'user_message', message: '先显示用户消息' } }),
+        JSON.stringify({ timestamp: '2026-06-08T00:00:02.000Z', type: 'event_msg', payload: { type: 'agent_message', phase: 'commentary', message: '中间显示处理过程' } }),
+        JSON.stringify({ timestamp: '2026-06-08T00:00:03.000Z', type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ text: '最后显示结果' }] } }),
+      ],
+    }],
+  });
+
+  const history = cache.history('order-token', 'thread-order');
+  const status = cache.status('order-token', 'thread-order');
+  const turnsById = {};
+  for (const turn of status.turns) turnsById[turn.turnId] = turn;
+  const timeline = [];
+  for (const row of history.messages) {
+    if (row.role === 'assistant' && row.turnId && turnsById[row.turnId]) timeline.push(`process:${turnsById[row.turnId].steps[0].text}`);
+    timeline.push(`${row.role}:${row.text}`);
+  }
+
+  assert.deepEqual(timeline, [
+    'user:先显示用户消息',
+    'process:中间显示处理过程',
+    'assistant:最后显示结果',
+  ]);
+});
+
 test('云端会话缓存只在同步入站时解析常规历史和状态', () => {
   let parseCount = 0;
   const cache = createCloudSessionCache({
