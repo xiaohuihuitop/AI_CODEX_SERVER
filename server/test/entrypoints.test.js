@@ -50,8 +50,17 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(gui, /function Get-AgentProcess/);
   assert.match(gui, /\$AgentScriptPath/);
   assert.match(electronMain, /BrowserWindow/);
+  assert.match(electronMain, /Tray/);
+  assert.match(electronMain, /nativeImage/);
+  assert.match(electronMain, /TRAY_ICON_PNG_BASE64/);
+  assert.match(electronMain, /nativeImage\.createFromBuffer/);
+  assert.doesNotMatch(electronMain, /data:image\/svg\+xml/);
   assert.match(electronMain, /requestSingleInstanceLock/);
   assert.match(electronMain, /second-instance/);
+  assert.match(electronMain, /function createTray\(\)/);
+  assert.match(electronMain, /显示管理器/);
+  assert.match(electronMain, /退出管理器/);
+  assert.match(electronMain, /mainWindow\.on\('minimize'/);
   assert.match(electronMain, /mainWindow\.hide\(\)/);
   assert.match(electronMain, /app\.isQuitting/);
   assert.doesNotMatch(electronMain, /if \(process\.platform !== 'darwin'\) app\.quit\(\)/);

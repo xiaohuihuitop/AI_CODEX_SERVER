@@ -5,7 +5,7 @@ if (process.argv.includes('--codex-manager-agent-child') || process.env.CODEX_MA
   return;
 }
 
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, Tray, nativeImage } = require('electron');
 const {
   buildAgentEnv,
   buildMobileUrl,
@@ -24,6 +24,7 @@ const { restartCodexDesktopWithDebug } = require('../src/codex-desktop-process')
 const PROJECT_ROOT = path.join(__dirname, '..');
 const CONFIG_PATH = getDefaultConfigPath();
 const CODEX_DEBUG_PORT = Number(process.env.CODEX_DEBUG_PORT || 9229);
+const TRAY_ICON_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAUUlEQVR4nGMQlFD/P5CYYdQBow4YdQA+SYu9P6iCh74D+Ja+JAsPTwcQA0YdQDcHDHgaGHXAqANGHTDg5QDdHICMiQHDpz1ADzzqgFEHjDoAAFZ6baw6ZLM1AAAAAElFTkSuQmCC';
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -46,17 +47,69 @@ const agentController = createAgentController();
 
 let config = loadConfig(CONFIG_PATH);
 let mainWindow = null;
+let tray = null;
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 }
 
 app.on('second-instance', () => {
-  if (!mainWindow) return;
+  if (!mainWindow) {
+    createWindow();
+    return;
+  }
+  showMainWindow();
+});
+
+/**
+ * AI:创建系统托盘图标，避免隐藏窗口后无法从桌面恢复。
+ *
+ * @returns {Electron.NativeImage} 托盘图标。
+ */
+function createTrayIcon() {
+  const icon = nativeImage.createFromBuffer(Buffer.from(TRAY_ICON_PNG_BASE64, 'base64'));
+  return icon.resize({ width: 16, height: 16 });
+}
+
+/**
+ * AI:恢复并聚焦主窗口，供托盘和二次启动复用。
+ *
+ * @returns {void}
+ */
+function showMainWindow() {
+  if (!mainWindow) {
+    createWindow();
+    return;
+  }
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   mainWindow.focus();
-});
+}
+
+/**
+ * AI:初始化 Windows 系统托盘入口。
+ *
+ * @returns {Tray} 系统托盘实例。
+ */
+function createTray() {
+  if (tray) return tray;
+  tray = new Tray(createTrayIcon());
+  tray.setToolTip('Codex Desktop 管理器');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: '显示管理器', click: showMainWindow },
+    { type: 'separator' },
+    {
+      label: '退出管理器',
+      click: () => {
+        app.isQuitting = true;
+        app.quit();
+      },
+    },
+  ]));
+  tray.on('click', showMainWindow);
+  tray.on('double-click', showMainWindow);
+  return tray;
+}
 
 function serverPortFromUrl(serverUrl) {
   try {
@@ -126,6 +179,10 @@ function createWindow() {
     },
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer.html'));
+  mainWindow.on('minimize', event => {
+    event.preventDefault();
+    mainWindow.hide();
+  });
   mainWindow.on('close', event => {
     if (app.isQuitting) return;
     event.preventDefault();
@@ -179,6 +236,7 @@ app.whenReady().then(() => {
   startAgentIfEnabled().catch(error => {
     console.error(`Codex manager auto start agent failed: ${error.message}`);
   });
+  createTray();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
