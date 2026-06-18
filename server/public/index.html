@@ -631,12 +631,15 @@
      */
     function processTurns(status) {
       return (status?.turns || [])
-        .map(turn => ({
-          turnId: turn?.turnId || '',
-          status: turn?.status || '',
-          steps: (turn?.steps || []).filter(step => step?.text && step.kind !== 'start' && step.kind !== 'final' && step.kind !== 'complete'),
-          durationText: formatElapsedTime(turn?.startedAt || '', turn?.completedAt || ''),
-        }))
+        .map(turn => {
+          const interrupted = Boolean(turn?.status === 'running' && !agentOnline);
+          return {
+            turnId: turn?.turnId || '',
+            status: interrupted ? 'interrupted' : turn?.status || '',
+            steps: (turn?.steps || []).filter(step => step?.text && step.kind !== 'start' && step.kind !== 'final' && step.kind !== 'complete'),
+            durationText: interrupted ? '' : formatElapsedTime(turn?.startedAt || '', turn?.completedAt || ''),
+          };
+        })
         .filter(turn => turn.turnId && turn.steps.length);
     }
 
@@ -667,6 +670,7 @@
     function processSummaryText(turn) {
       const count = turn?.steps?.length || 0;
       const prefix = '处理过程已折叠';
+      if (turn?.status === 'interrupted') return `${prefix} · Agent 未在线（${count}）`;
       const duration = turn.durationText ? ` · ${turn.durationText}` : '';
       return `${prefix}${duration}（${count}）`;
     }
@@ -743,7 +747,7 @@
      * @returns {boolean} 只有当前运行轮次允许追加。
      */
     function shouldAppendUnmatchedProcess(turn) {
-      return Boolean(turn && turn.status === 'running');
+      return Boolean(turn && (turn.status === 'running' || turn.status === 'interrupted'));
     }
 
     /**

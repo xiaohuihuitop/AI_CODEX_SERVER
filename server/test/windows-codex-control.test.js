@@ -308,7 +308,7 @@ test('手机端处理过程默认折叠且只通过手动展开', () => {
   assert.match(html, /processSummaryText\(turn\)/);
   assert.match(html, /findAssistantMessageByTurn\(turn\.turnId\)/);
   assert.match(html, /function shouldAppendUnmatchedProcess\(turn\)/);
-  assert.match(html, /turn && turn\.status === 'running'/);
+  assert.match(html, /turn && \(turn\.status === 'running' \|\| turn\.status === 'interrupted'\)/);
   assert.match(html, /else if \(shouldAppendUnmatchedProcess\(turn\)\) messagesEl\.appendChild\(card\)/);
   assert.match(html, /bindPendingAssistantTurn\(data\)/);
   assert.match(html, /处理过程已折叠/);
@@ -318,6 +318,18 @@ test('手机端处理过程默认折叠且只通过手动展开', () => {
   assert.match(html, /setInterval\(\(\) => pollStatus\(\)/);
   assert.match(html, /if \(!requestedThreadId\) return/);
   assert.match(html, /data\.threadId !== selectedThreadId/);
+});
+
+test('网页端 Agent 离线时不中断轮次不继续累计处理时长', () => {
+  const html = fs.readFileSync(indexPath, 'utf8');
+  const processTurnsFunction = html.match(/function processTurns\(status\) \{([\s\S]*?)\n    \}/)?.[1] || '';
+  const summaryFunction = html.match(/function processSummaryText\(turn\) \{([\s\S]*?)\n    \}/)?.[1] || '';
+
+  assert.match(processTurnsFunction, /const interrupted = Boolean\(turn\?\.status === 'running' && !agentOnline\)/);
+  assert.match(processTurnsFunction, /status: interrupted \? 'interrupted'/);
+  assert.match(processTurnsFunction, /durationText: interrupted \? '' : formatElapsedTime/);
+  assert.match(summaryFunction, /turn\?\.status === 'interrupted'/);
+  assert.match(summaryFunction, /Agent 未在线/);
 });
 
 test('网页端运行中同步电脑端新增用户消息', () => {

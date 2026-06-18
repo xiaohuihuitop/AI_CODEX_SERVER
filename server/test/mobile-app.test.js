@@ -121,6 +121,19 @@ test('uni-app Android 手机端按每轮对话渲染处理过程', () => {
   assert.doesNotMatch(index, /messagesAfterProcess/);
 });
 
+test('uni-app Android 手机端 Agent 离线时不中断轮次不继续累计处理时长', () => {
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+  const normalizeFunction = index.match(/function normalizeProcessTurns\(status\) \{([\s\S]*?)\n\}/)?.[1] || '';
+  const titleFunction = index.match(/function processTitle\(turn, open\) \{([\s\S]*?)\n\}/)?.[1] || '';
+
+  assert.match(normalizeFunction, /const interrupted = Boolean\(turn && turn\.status === 'running' && !agentState\.value\.online\);/);
+  assert.match(normalizeFunction, /status: interrupted \? 'interrupted'/);
+  assert.match(normalizeFunction, /durationText: interrupted \? '' : formatElapsedTime/);
+  assert.match(titleFunction, /turn && turn\.status === 'interrupted'/);
+  assert.match(titleFunction, /Agent 未在线/);
+  assert.match(index, /turn && \(turn\.status === 'running' \|\| turn\.status === 'interrupted'\)/);
+});
+
 test('uni-app Android 手机端展示前会清理 Codex UI 上下文', () => {
   const markdown = fs.readFileSync(path.join(appDir, 'utils', 'markdown.js'), 'utf8');
   const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');

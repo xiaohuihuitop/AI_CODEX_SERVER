@@ -276,7 +276,10 @@ function formatElapsedTime(startedAt, completedAt) {
 function processTitle(turn, open) {
   const count = turn && turn.steps ? turn.steps.length : 0;
   const prefix = open ? '处理过程' : '处理过程已折叠';
-  const duration = turn && turn.durationText ? ` · ${turn.durationText}` : '';
+  const interrupted = turn && turn.status === 'interrupted';
+  const statusText = interrupted ? ' · Agent 未在线' : '';
+  const duration = !interrupted && turn && turn.durationText ? ` · ${turn.durationText}` : '';
+  if (interrupted) return `${prefix}${statusText}（${count}）`;
   return `${prefix}${duration}（${count}）`;
 }
 
@@ -287,7 +290,7 @@ function processTitle(turn, open) {
  * @returns {boolean} 只有当前运行轮次允许追加。
  */
 function shouldAppendUnmatchedProcess(turn) {
-  return Boolean(turn && turn.status === 'running');
+  return Boolean(turn && (turn.status === 'running' || turn.status === 'interrupted'));
 }
 
 /**
@@ -325,13 +328,14 @@ function normalizeProcessTurns(status) {
   return ((status && status.turns) || [])
     .map(turn => {
       const steps = visibleProcessSteps(turn);
+      const interrupted = Boolean(turn && turn.status === 'running' && !agentState.value.online);
       return {
         turnId: turn && turn.turnId ? turn.turnId : '',
         processKey: processStateKey(turn, steps),
-        status: turn && turn.status ? turn.status : '',
+        status: interrupted ? 'interrupted' : turn && turn.status ? turn.status : '',
         steps,
         final: turn && turn.final ? turn.final : '',
-        durationText: formatElapsedTime(turn && turn.startedAt, turn && turn.completedAt),
+        durationText: interrupted ? '' : formatElapsedTime(turn && turn.startedAt, turn && turn.completedAt),
       };
     })
     .filter(turn => turn.turnId && turn.steps.length);
