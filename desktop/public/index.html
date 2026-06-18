@@ -328,6 +328,7 @@
     let runningHistorySyncAt = 0;
     let runningHistoryThreadId = '';
     let agentOnline = false;
+    let pendingLocalSends = [];
 
     /**
      * 调用本机桥接 API。
@@ -495,10 +496,131 @@
       div.className = `message ${role}`;
       if (options.turnId) div.dataset.turnId = options.turnId;
       if (options.pending) div.dataset.pending = 'true';
+      if (options.id) div.dataset.messageId = options.id;
       div.innerHTML = renderCleanMarkdown(text);
       messagesEl.appendChild(div);
       if (options.scrollToBottom !== false) scrollToBottom();
       return div;
+    }
+
+    /**
+     * AI:记录网页端已发送但尚未被电脑端历史确认的消息。
+     *
+     * @param {string} threadId Codex 线程 ID。
+     * @param {string} text 用户发送文本。
+     * @param {number} sentAt 本地发送时间戳。
+     * @param {number} baseMessageCount 发送前历史消息数量。
+     * @returns {object} 本地待确认消息。
+     */
+    function registerPendingLocalSend(threadId, text, sentAt, baseMessageCount) {
+      const row = {
+        threadId,
+        text,
+        userId: `local-user-${sentAt}`,
+        assistantId: `local-assistant-${sentAt}`,
+        baseMessageCount,
+        turnId: '',
+      };
+      pendingLocalSends = pendingLocalSends.concat([row]);
+      return row;
+    }
+
+    /**
+     * AI:发送失败后移除本地待确认消息。
+     *
+     * @param {object} pending 本地待确认消息。
+     * @returns {void}
+     */
+    function removePendingLocalSend(pending) {
+      const rows = [];
+      for (const row of pendingLocalSends) {
+        if (row !== pending) rows.push(row);
+      }
+      pendingLocalSends = rows;
+    }
+
+    /**
+     * AI:把运行轮次绑定到本地待确认消息，保证处理过程插入用户消息之后。
+     *
+     * @param {string} turnId Codex 轮次 ID。
+     * @returns {void}
+     */
+    function bindPendingLocalSendTurn(turnId) {
+      if (!turnId) return;
+      const rows = pendingLocalSends.slice();
+      for (let index = rows.length - 1; index >= 0; index -= 1) {
+        if (!rows[index].turnId && rows[index].threadId === selectedThreadId) {
+          rows[index] = Object.assign({}, rows[index], { turnId });
+          pendingLocalSends = rows;
+          return;
+        }
+      }
+    }
+
+    /**
+     * AI:判断历史中是否已出现指定消息。
+     *
+     * @param {Array<object>} rows 历史消息。
+     * @param {string} role 消息角色。
+     * @param {string} text 消息文本。
+     * @param {number} startIndex 起始检查位置。
+     * @returns {boolean} 已出现返回 true。
+     */
+    function hasHistoryMessage(rows, role, text, startIndex = 0) {
+      for (let index = Math.max(0, Number(startIndex) || 0); index < (rows || []).length; index += 1) {
+        const row = rows[index];
+        if (row && row.role === role && String(row.text || '') === text) return true;
+      }
+      return false;
+    }
+
+    /**
+     * AI:判断待确认消息之后是否已经有电脑端回复。
+     *
+     * @param {Array<object>} rows 历史消息。
+     * @param {object} pending 本地待确认消息。
+     * @returns {boolean} 已有回复返回 true。
+     */
+    function hasAssistantAfterPendingBase(rows, pending) {
+      const start = Math.max(0, Number(pending && pending.baseMessageCount) || 0);
+      for (let index = start; index < (rows || []).length; index += 1) {
+        const row = rows[index];
+        if (row && row.role === 'assistant') return true;
+      }
+      return false;
+    }
+
+    /**
+     * AI:合并电脑端历史和网页端待确认消息，避免刷新覆盖刚发送的用户消息。
+     *
+     * @param {string} threadId Codex 线程 ID。
+     * @param {Array<object>} historyRows 电脑端历史消息。
+     * @returns {Array<object>} 可展示消息。
+     */
+    function mergePendingLocalMessages(threadId, historyRows) {
+      const rows = (historyRows || []).slice();
+      const nextPending = [];
+      let insertedCount = 0;
+      for (const pending of pendingLocalSends) {
+        if (!pending || pending.threadId !== threadId) {
+          nextPending.push(pending);
+          continue;
+        }
+        if (hasHistoryMessage(rows, 'user', pending.text, pending.baseMessageCount)) continue;
+        nextPending.push(pending);
+        const localRows = [];
+        localRows.push({ role: 'user', text: pending.text, id: pending.userId });
+        if (!hasAssistantAfterPendingBase(rows, pending)) {
+          localRows.push({ role: 'assistant', text: '已发送，等待 Codex 回复...', pending: true, id: pending.assistantId, turnId: pending.turnId });
+        }
+        const insertAt = Math.min(rows.length, Math.max(0, (Number(pending.baseMessageCount) || 0) + insertedCount));
+        for (let localIndex = 0; localIndex < localRows.length; localIndex += 1) {
+          rows.splice(insertAt + localIndex, 0, localRows[localIndex]);
+        }
+        insertedCount += localRows.length;
+      }
+      pendingLocalSends = nextPending;
+      return rows;
     }
 
     /**
@@ -563,6 +685,7 @@
       }
       if (!runningTurn && status?.active && turns.length) runningTurn = turns[turns.length - 1];
       if (!runningTurn) return;
+      bindPendingLocalSendTurn(runningTurn.turnId);
       const pendingRows = messagesEl.querySelectorAll('.message.assistant[data-pending="true"]');
       const pending = pendingRows[pendingRows.length - 1];
       if (pending) pending.dataset.turnId = runningTurn.turnId;
@@ -788,11 +911,12 @@
         return;
       }
       const scroll = options.preserveScroll === false ? null : captureScroll();
-      messagesEl.innerHTML = '';
       const res = await api(`/codex/history?thread=${encodeURIComponent(selectedThreadId)}&limit=120&token=${encodeURIComponent(token)}`);
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.message || '读取历史失败');
-      for (const row of data.messages || []) message(row.role, row.text || '', { scrollToBottom: false, turnId: row.turnId || '' });
+      const rows = mergePendingLocalMessages(selectedThreadId, data.messages || []);
+      messagesEl.innerHTML = '';
+      for (const row of rows) message(row.role, row.text || '', { scrollToBottom: false, turnId: row.turnId || '', pending: Boolean(row.pending), id: row.id || '' });
       if (data.available) {
         const snapshot = statusData || await fetchStatus({ threadId: selectedThreadId });
         currentThreadStatus = snapshot;
@@ -929,10 +1053,13 @@
       const text = textEl.value;
       if (!text.trim()) return;
       textEl.value = '';
-      message('user', text);
-      const pending = message('assistant', '已发送，等待 Codex 回复...', { pending: true });
+      const sentAt = Date.now();
+      const pendingLocal = registerPendingLocalSend(selectedThreadId, text, sentAt, messagesEl.querySelectorAll('.message').length);
+      message('user', text, { id: pendingLocal.userId });
+      const pending = message('assistant', '已发送，等待 Codex 回复...', { pending: true, id: pendingLocal.assistantId });
       setRunning(true);
       historyReloadedForCompletion = false;
+      let sendAccepted = false;
       try {
         const res = await api('/send', {
           method: 'POST',
@@ -941,9 +1068,11 @@
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || '发送失败');
+        sendAccepted = true;
         pendingWatch = data.watch || { threadId: selectedThreadId };
         await pollStatus(pendingWatch);
       } catch (error) {
+        if (!sendAccepted) removePendingLocalSend(pendingLocal);
         pending.textContent = error.message;
         setRunning(false);
       }

@@ -159,10 +159,32 @@ test('uni-app Android 手机端发送后立即追加本地消息', () => {
   const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
 
   assert.match(index, /const sentAt = Date\.now\(\);/);
+  assert.match(index, /const pending = registerPendingLocalSend\(selectedThreadId\.value, text, sentAt, messages\.value\.length\);/);
   assert.match(index, /messages\.value = messages\.value\.concat\(\[/);
-  assert.match(index, /\{ role: 'user', text, id: `local-user-\$\{sentAt\}` \}/);
-  assert.match(index, /\{ role: 'assistant', text: '已发送，等待 Codex 回复\.\.\.', pending: true, id: `local-assistant-\$\{sentAt\}` \}/);
+  assert.match(index, /\{ role: 'user', text, id: pending\.userId \}/);
+  assert.match(index, /\{ role: 'assistant', text: '已发送，等待 Codex 回复\.\.\.', pending: true, id: pending\.assistantId \}/);
   assert.match(index, /await scrollToBottom\(\);/);
+});
+
+test('uni-app Android 手机端历史刷新保留未确认本地用户消息', () => {
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+  const mergeFunction = index.match(/function mergePendingLocalMessages\(threadId, historyRows\) \{([\s\S]*?)\n\}/)?.[1] || '';
+
+  assert.match(index, /const pendingLocalSends = ref\(\[\]\);/);
+  assert.match(index, /function registerPendingLocalSend\(threadId, text, sentAt, baseMessageCount\)/);
+  assert.match(index, /function removePendingLocalSend\(pending\)/);
+  assert.match(index, /function bindPendingLocalSendTurn\(turnId\)/);
+  assert.match(index, /function hasHistoryMessage\(rows, role, text, startIndex = 0\)/);
+  assert.match(index, /function hasAssistantAfterPendingBase\(rows, pending\)/);
+  assert.match(index, /function mergePendingLocalMessages\(threadId, historyRows\)/);
+  assert.match(mergeFunction, /if \(hasHistoryMessage\(rows, 'user', pending\.text, pending\.baseMessageCount\)\) continue;/);
+  assert.match(mergeFunction, /localRows\.push\(\{ role: 'user', text: pending\.text, id: pending\.userId \}\);/);
+  assert.match(mergeFunction, /const insertAt = Math\.min\(rows\.length, Math\.max\(0, \(Number\(pending\.baseMessageCount\) \|\| 0\) \+ insertedCount\)\);/);
+  assert.match(mergeFunction, /for \(let localIndex = 0; localIndex < localRows\.length; localIndex \+= 1\)/);
+  assert.match(mergeFunction, /rows\.splice\(insertAt \+ localIndex, 0, localRows\[localIndex\]\);/);
+  assert.match(index, /messages\.value = mergePendingLocalMessages\(requestedThreadId, data\.messages \|\| \[\]\);/);
+  assert.match(index, /catch \(error\) \{[\s\S]*removePendingLocalSend\(pending\);[\s\S]*setNotice\(error\.message\);/);
+  assert.match(index, /bindPendingLocalSendTurn\(runningTurn\.turnId\);/);
 });
 
 test('uni-app Android 手机端运行中同步电脑端新增用户消息', () => {

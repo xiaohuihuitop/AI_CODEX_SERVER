@@ -157,6 +157,34 @@ test('云端 relay 将手机发送请求转发给 Agent', async () => {
   await close(server);
 });
 
+test('云端 relay 在 Agent 断开时立即结束待转发请求', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['disconnect-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+  });
+  const port = await listen(server);
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=disconnect-token`);
+
+  agent.on('message', () => {
+    agent.close();
+  });
+  await new Promise(resolve => agent.once('open', resolve));
+
+  const res = await fetch(`http://127.0.0.1:${port}/send?token=disconnect-token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: '你好', threadId: 'thread-1' }),
+  });
+  const body = await readJson(res);
+
+  assert.equal(res.status, 503);
+  assert.equal(body.ok, false);
+  assert.equal(body.code, 'AGENT_DISCONNECTED');
+
+  await close(server);
+});
+
 test('云端 relay 从服务器缓存返回历史和状态', async () => {
   const server = createCloudRelayServer({
     tokens: ['cache-token'],

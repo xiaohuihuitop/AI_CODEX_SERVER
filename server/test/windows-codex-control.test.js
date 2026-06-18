@@ -249,7 +249,8 @@ test('手机端自动刷新保留滚动位置', () => {
   assert.match(html, /id="refresh"[^>]+title="重新读取对话列表和当前对话历史"[^>]*>刷新<\/button>/);
   assert.match(html, /function captureScroll/);
   assert.match(html, /function restoreScroll/);
-  assert.match(html, /message\(row\.role, row\.text \|\| '', \{ scrollToBottom: false, turnId: row\.turnId \|\| '' \}\)/);
+  assert.match(html, /const rows = mergePendingLocalMessages\(selectedThreadId, data\.messages \|\| \[\]\)/);
+  assert.match(html, /message\(row\.role, row\.text \|\| '', \{ scrollToBottom: false, turnId: row\.turnId \|\| '', pending: Boolean\(row\.pending\), id: row\.id \|\| '' \}\)/);
   assert.match(html, /await loadHistory\(data, \{ preserveScroll: true \}\)/);
   assert.match(html, /await loadHistory\(null, \{ preserveScroll: true \}\)/);
 });
@@ -342,6 +343,24 @@ test('网页端消息顺序固定为用户消息、处理过程、最终回复',
   assert.match(html, /if \(assistant\) messagesEl\.insertBefore\(card, assistant\)/);
   assert.match(html, /else if \(shouldAppendUnmatchedProcess\(turn\)\) messagesEl\.appendChild\(card\)/);
   assert.match(html, /const historySynced = await syncRunningHistory\(data\);[\s\S]*if \(!historySynced\) \{[\s\S]*renderProcessPanel\(data\);[\s\S]*\}/);
+});
+
+test('网页端历史刷新保留未确认本地用户消息', () => {
+  const html = fs.readFileSync(indexPath, 'utf8');
+  const mergeFunction = html.match(/function mergePendingLocalMessages\(threadId, historyRows\) \{([\s\S]*?)\n    \}/)?.[1] || '';
+
+  assert.match(html, /let pendingLocalSends = \[\]/);
+  assert.match(html, /function registerPendingLocalSend\(threadId, text, sentAt, baseMessageCount\)/);
+  assert.match(html, /function removePendingLocalSend\(pending\)/);
+  assert.match(html, /function bindPendingLocalSendTurn\(turnId\)/);
+  assert.match(html, /function mergePendingLocalMessages\(threadId, historyRows\)/);
+  assert.match(mergeFunction, /if \(hasHistoryMessage\(rows, 'user', pending\.text, pending\.baseMessageCount\)\) continue/);
+  assert.match(mergeFunction, /localRows\.push\(\{ role: 'user', text: pending\.text, id: pending\.userId \}\)/);
+  assert.match(mergeFunction, /rows\.splice\(insertAt \+ localIndex, 0, localRows\[localIndex\]\)/);
+  assert.match(html, /const rows = mergePendingLocalMessages\(selectedThreadId, data\.messages \|\| \[\]\)/);
+  assert.match(html, /bindPendingLocalSendTurn\(runningTurn\.turnId\)/);
+  assert.match(html, /let sendAccepted = false/);
+  assert.match(html, /if \(!sendAccepted\) removePendingLocalSend\(pendingLocal\)/);
 });
 
 test('网页端线程选择控件使用底部直线样式', () => {

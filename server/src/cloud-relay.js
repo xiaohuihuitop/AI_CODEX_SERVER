@@ -32,6 +32,25 @@ function rejectAgent(ws, code, reason) {
   ws.close(code, reason);
 }
 
+/**
+ * AI:Agent 断开时结束同 token 的待转发请求，避免手机端等到超时。
+ *
+ * @param {object} state Relay 运行状态。
+ * @param {string} token 设备 token。
+ * @returns {void}
+ */
+function rejectPendingForToken(state, token) {
+  for (const [id, pending] of state.pending.entries()) {
+    if (!pending || pending.token !== token) continue;
+    clearTimeout(pending.timer);
+    state.pending.delete(id);
+    pending.reject(Object.assign(new Error('电脑 Agent 连接已断开。'), {
+      status: 503,
+      code: 'AGENT_DISCONNECTED',
+    }));
+  }
+}
+
 function attachAgent(state, ws, token) {
   if (isAgentOnline(state, token)) {
     rejectAgent(ws, 1008, 'TOKEN_ALREADY_ONLINE');
@@ -60,7 +79,10 @@ function attachAgent(state, ws, token) {
     }));
   });
   ws.on('close', () => {
-    if (state.agents.get(token) === ws) state.agents.delete(token);
+    if (state.agents.get(token) === ws) {
+      state.agents.delete(token);
+      rejectPendingForToken(state, token);
+    }
   });
 }
 
@@ -87,7 +109,7 @@ function forwardToAgent(state, token, action, payload, timeoutMs) {
         code: 'AGENT_TIMEOUT',
       }));
     }, timeoutMs);
-    state.pending.set(id, { resolve, reject, timer });
+    state.pending.set(id, { token, resolve, reject, timer });
     ws.send(JSON.stringify({ id, action, payload }));
   });
 }
@@ -185,4 +207,5 @@ function createCloudRelayServer(options = {}) {
 module.exports = {
   createCloudRelayServer,
   forwardToAgent,
+  rejectPendingForToken,
 };

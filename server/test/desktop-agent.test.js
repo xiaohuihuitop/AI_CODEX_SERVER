@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const EventEmitter = require('node:events');
 const test = require('node:test');
-const { agentUrlFromServerUrl, createDesktopAgentClient, handleAgentRequest, withTimeout } = require('../../desktop/src/desktop-agent-client');
+const { agentUrlFromServerUrl, createDesktopAgentClient, handleAgentRequest, isRecoverableSocketError, withTimeout } = require('../../desktop/src/desktop-agent-client');
 const { DesktopAgentApi } = require('../../desktop/src/desktop-agent-api');
 
 test('desktop-agent 将 HTTPS 云端地址转换为 WSS Agent 地址', () => {
@@ -93,6 +93,46 @@ test('desktop-agent 断线后自动重连', async () => {
   assert.equal(sockets.length, 2);
   assert.equal(sockets[1].url, 'ws://127.0.0.1:8008/agent?token=token-1');
   client.close();
+});
+
+test('desktop-agent 连接后对 socket hang up 只发出重连提示', async () => {
+  const sockets = [];
+  class FakeWebSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.readyState = 1;
+      this.OPEN = 1;
+      this.CLOSED = 3;
+      sockets.push(this);
+      setImmediate(() => this.emit('open'));
+    }
+
+    send() {}
+
+    close() {
+      this.readyState = this.CLOSED;
+      this.emit('close', 1000, Buffer.from(''));
+    }
+  }
+
+  const errors = [];
+  const warnings = [];
+  const client = createDesktopAgentClient({
+    serverUrl: 'http://example.test',
+    token: 'token',
+    api: { handle: async () => ({ ok: true }) },
+    WebSocket: FakeWebSocket,
+  });
+  client.on('error', error => errors.push(error));
+  client.on('reconnect-warning', error => warnings.push(error));
+
+  await new Promise(resolve => setImmediate(resolve));
+  sockets[0].emit('error', new Error('socket hang up'));
+  client.close();
+
+  assert.equal(errors.length, 0);
+  assert.equal(warnings.length, 1);
+  assert.equal(isRecoverableSocketError(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' })), true);
 });
 
 test('desktop-agent 连接后主动上传会话同步快照', async () => {

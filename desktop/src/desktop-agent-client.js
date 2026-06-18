@@ -30,6 +30,18 @@ function withTimeout(promise, timeoutMs, message) {
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+/**
+ * AI:判断 WebSocket 错误是否属于断线重连路径，避免重复打印同一类临时断链。
+ *
+ * @param {Error} error WebSocket 错误。
+ * @returns {boolean} 可通过 close/reconnect 表达的断链错误返回 true。
+ */
+function isRecoverableSocketError(error) {
+  const code = String(error && error.code || '');
+  const message = String(error && error.message || '').toLowerCase();
+  return code === 'ECONNRESET' || message === 'socket hang up';
+}
+
 async function handleAgentRequest(api, message) {
   if (!message || typeof message.id !== 'string' || typeof message.action !== 'string') {
     return {
@@ -71,6 +83,7 @@ function createDesktopAgentClient(options) {
   let syncTimer = null;
   let syncing = false;
   let stopped = false;
+  let connectedOnce = false;
 
   async function syncSessions() {
     if (!syncProvider || syncing || stopped || !socket || socket.readyState !== socket.OPEN) return;
@@ -111,6 +124,7 @@ function createDesktopAgentClient(options) {
     socket = new WebSocketClass(url);
     client.socket = socket;
     socket.on('open', () => {
+      connectedOnce = true;
       client.emit('open');
       startSyncTimer();
     });
@@ -130,6 +144,10 @@ function createDesktopAgentClient(options) {
       scheduleReconnect();
     });
     socket.on('error', error => {
+      if (connectedOnce && isRecoverableSocketError(error)) {
+        if (client.listenerCount('reconnect-warning') > 0) client.emit('reconnect-warning', error);
+        return;
+      }
       if (client.listenerCount('error') > 0) client.emit('error', error);
     });
   }
@@ -151,5 +169,6 @@ module.exports = {
   agentUrlFromServerUrl,
   createDesktopAgentClient,
   handleAgentRequest,
+  isRecoverableSocketError,
   withTimeout,
 };

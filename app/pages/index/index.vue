@@ -117,6 +117,7 @@ const serverState = ref({ online: false, offline: false, message: '服务器检�
 const agentState = ref({ online: false, offline: false, message: 'Agent 检测中' });
 const currentThreadStatus = ref(null);
 const pendingWatch = ref(null);
+const pendingLocalSends = ref([]);
 const historyReloadedForCompletion = ref(false);
 const followBottom = ref(false);
 const manualProcessOpenState = ref({});
@@ -523,6 +524,7 @@ function bindPendingAssistantTurn(status) {
     if (turn && turn.turnId && (turn.status === 'running' || status.active)) runningTurn = turn;
   }
   if (!runningTurn) return;
+  bindPendingLocalSendTurn(runningTurn.turnId);
   const rows = messages.value.slice();
   for (let index = rows.length - 1; index >= 0; index -= 1) {
     const row = rows[index];
@@ -532,6 +534,128 @@ function bindPendingAssistantTurn(status) {
       return;
     }
   }
+}
+
+/**
+ * AI:记录手机端已发送但尚未被电脑端历史确认的消息。
+ *
+ * @param {string} threadId Codex 线程 ID。
+ * @param {string} text 用户发送的文本。
+ * @param {number} sentAt 本地发送时间戳。
+ * @param {number} baseMessageCount 发送前已确认的历史消息数量。
+ * @returns {object} 本地待确认消息记录。
+ */
+function registerPendingLocalSend(threadId, text, sentAt, baseMessageCount) {
+  const row = {
+    threadId,
+    text,
+    userId: `local-user-${sentAt}`,
+    assistantId: `local-assistant-${sentAt}`,
+    baseMessageCount,
+    turnId: '',
+  };
+  pendingLocalSends.value = pendingLocalSends.value.concat([row]);
+  return row;
+}
+
+/**
+ * AI:发送失败后移除本地待确认记录，避免后续历史刷新重复插入未送达消息。
+ *
+ * @param {object} pending 本地待确认消息记录。
+ * @returns {void}
+ */
+function removePendingLocalSend(pending) {
+  const rows = [];
+  for (const row of pendingLocalSends.value) {
+    if (row !== pending) rows.push(row);
+  }
+  pendingLocalSends.value = rows;
+}
+
+/**
+ * AI:把最新运行轮次绑定到本地待确认回复占位，保证处理过程插在用户消息之后。
+ *
+ * @param {string} turnId Codex 轮次 ID。
+ * @returns {void}
+ */
+function bindPendingLocalSendTurn(turnId) {
+  if (!turnId) return;
+  const rows = pendingLocalSends.value.slice();
+  for (let index = rows.length - 1; index >= 0; index -= 1) {
+    if (!rows[index].turnId && rows[index].threadId === selectedThreadId.value) {
+      rows[index] = Object.assign({}, rows[index], { turnId });
+      pendingLocalSends.value = rows;
+      return;
+    }
+  }
+}
+
+/**
+ * AI:判断历史中是否已经出现指定角色和文本的消息。
+ *
+ * @param {Array<object>} rows 历史消息。
+ * @param {string} role 消息角色。
+ * @param {string} text 消息文本。
+ * @param {number} startIndex 起始检查位置。
+ * @returns {boolean} 已出现返回 true。
+ */
+function hasHistoryMessage(rows, role, text, startIndex = 0) {
+  for (let index = Math.max(0, Number(startIndex) || 0); index < (rows || []).length; index += 1) {
+    const row = rows[index];
+    if (row && row.role === role && String(row.text || '') === text) return true;
+  }
+  return false;
+}
+
+/**
+ * AI:判断待确认消息之后是否已经有电脑端回复，避免继续显示等待占位。
+ *
+ * @param {Array<object>} rows 历史消息。
+ * @param {object} pending 本地待确认消息。
+ * @returns {boolean} 已有新回复返回 true。
+ */
+function hasAssistantAfterPendingBase(rows, pending) {
+  const start = Math.max(0, Number(pending && pending.baseMessageCount) || 0);
+  for (let index = start; index < (rows || []).length; index += 1) {
+    const row = rows[index];
+    if (row && row.role === 'assistant') return true;
+  }
+  return false;
+}
+
+/**
+ * AI:合并电脑端历史和手机端待确认消息，避免缓存刷新覆盖刚发送的用户消息。
+ *
+ * @param {string} threadId Codex 线程 ID。
+ * @param {Array<object>} historyRows 电脑端历史消息。
+ * @returns {Array<object>} 可展示消息列表。
+ */
+function mergePendingLocalMessages(threadId, historyRows) {
+  const rows = (historyRows || []).slice();
+  const nextPending = [];
+  let insertedCount = 0;
+  for (const pending of pendingLocalSends.value) {
+    if (!pending || pending.threadId !== threadId) {
+      nextPending.push(pending);
+      continue;
+    }
+    if (hasHistoryMessage(rows, 'user', pending.text, pending.baseMessageCount)) continue;
+    nextPending.push(pending);
+    const localRows = [];
+    localRows.push({ role: 'user', text: pending.text, id: pending.userId });
+    if (!hasAssistantAfterPendingBase(rows, pending)) {
+      const assistant = { role: 'assistant', text: '已发送，等待 Codex 回复...', pending: true, id: pending.assistantId };
+      if (pending.turnId) assistant.turnId = pending.turnId;
+      localRows.push(assistant);
+    }
+    const insertAt = Math.min(rows.length, Math.max(0, (Number(pending.baseMessageCount) || 0) + insertedCount));
+    for (let localIndex = 0; localIndex < localRows.length; localIndex += 1) {
+      rows.splice(insertAt + localIndex, 0, localRows[localIndex]);
+    }
+    insertedCount += localRows.length;
+  }
+  pendingLocalSends.value = nextPending;
+  return rows;
 }
 
 /**
@@ -692,7 +816,7 @@ async function loadHistory(statusData = null, options = {}) {
   }
   const data = await getHistory(config.value, requestedThreadId, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
   if (!canUpdateTask(token) || selectedThreadId.value !== requestedThreadId) return;
-  messages.value = data.messages || [];
+  messages.value = mergePendingLocalMessages(requestedThreadId, data.messages || []);
   if (data.available) {
     const snapshot = statusData || await getStatus(config.value, { threadId: requestedThreadId }, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token) || selectedThreadId.value !== requestedThreadId) return;
@@ -866,17 +990,21 @@ async function send() {
   followBottom.value = true;
   historyReloadedForCompletion.value = false;
   const sentAt = Date.now();
+  const pending = registerPendingLocalSend(selectedThreadId.value, text, sentAt, messages.value.length);
   messages.value = messages.value.concat([
-    { role: 'user', text, id: `local-user-${sentAt}` },
-    { role: 'assistant', text: '已发送，等待 Codex 回复...', pending: true, id: `local-assistant-${sentAt}` },
+    { role: 'user', text, id: pending.userId },
+    { role: 'assistant', text: '已发送，等待 Codex 回复...', pending: true, id: pending.assistantId },
   ]);
   await scrollToBottom();
+  let sendAccepted = false;
   try {
     const data = await sendMessage(config.value, { threadId: selectedThreadId.value, text }, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token)) return;
+    sendAccepted = true;
     pendingWatch.value = data.watch || { threadId: selectedThreadId.value };
     await pollStatus(pendingWatch.value);
   } catch (error) {
+    if (!sendAccepted) removePendingLocalSend(pending);
     setNotice(error.message);
   } finally {
     if (canUpdateTask(token)) sending.value = false;
