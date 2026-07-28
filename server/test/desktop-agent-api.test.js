@@ -46,6 +46,24 @@ test('desktop-agent API 将 send 动作映射到本机发送', async () => {
   });
 });
 
+test('desktop-agent API 按指定线程停止本机回复', async () => {
+  const calls = [];
+  const target = { available: true, threadId: 'thread-1', projectName: 'demo', threadName: '线程' };
+  const api = createDesktopAgentApi({
+    reader: { getThreadTarget: threadId => threadId === 'thread-1' ? target : null },
+    controller: { stopResponse: async value => calls.push(value) },
+  });
+
+  await assert.rejects(
+    () => api.handle('stop', {}),
+    error => error.code === 'THREAD_ID_REQUIRED' && error.status === 400,
+  );
+  const result = await api.handle('stop', { threadId: 'thread-1' });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, [target]);
+});
+
 test('desktop-agent API 拒绝未知动作和空发送内容', async () => {
   const api = createDesktopAgentApi({ reader: {}, controller: {} });
 

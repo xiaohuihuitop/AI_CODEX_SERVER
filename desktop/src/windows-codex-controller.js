@@ -109,8 +109,13 @@ class WindowsCodexController {
    *
    * @returns {Promise<{stdout: string, stderr: string}>} 脚本输出。
    */
-  stopResponse() {
-    return this.run('stop');
+  stopResponse(target) {
+    return this.run('stop', [
+      '-ProjectName',
+      target.projectName,
+      '-ThreadName',
+      target.threadName,
+    ]);
   }
 }
 

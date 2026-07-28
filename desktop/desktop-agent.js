@@ -44,7 +44,7 @@ const ws = createDesktopAgentClient({
   token,
   api,
   syncProvider,
-  syncIntervalMs: Number(process.env.CODEX_AGENT_SYNC_INTERVAL_MS || 2000),
+  syncIntervalMs: Number(process.env.CODEX_AGENT_SYNC_INTERVAL_MS || 1000),
   syncTimeoutMs: Number(process.env.CODEX_AGENT_SYNC_TIMEOUT_MS || 15000),
 });
 

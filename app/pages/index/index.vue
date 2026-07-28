@@ -101,7 +101,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { onBackPress, onHide, onShow, onUnload } from '@dcloudio/uni-app';
-import { getHealth, getHistory, getStatus, getThreads, sendMessage, stopCodex } from '../../utils/api';
+import { createRealtimeSocket, getHealth, getHistory, getStatus, getThreads, sendMessage, stopCodex } from '../../utils/api';
 import { loadConfig, loadSelection, saveSelection } from '../../utils/config';
 import { renderMarkdownToHtml } from '../../utils/markdown';
 
@@ -115,6 +115,7 @@ const notice = ref('正在连接服务器...');
 const messageText = ref('');
 const serverState = ref({ online: false, offline: false, message: '服务器检测中' });
 const agentState = ref({ online: false, offline: false, message: 'Agent 检测中' });
+const syncState = ref({ fresh: false, version: 0, lastSyncedAt: '' });
 const currentThreadStatus = ref(null);
 const pendingWatch = ref(null);
 const pendingLocalSends = ref([]);
@@ -128,9 +129,10 @@ const threadPopupOpen = ref(false);
 const scrollTarget = ref('');
 let threadListRequest = null;
 let switchRequestSeq = 0;
-let connectionTimer = null;
-let threadTimer = null;
-let pollTimer = null;
+let realtimeSocket = null;
+let realtimeReconnectTimer = null;
+let realtimeRefreshTimer = null;
+let commandConfirmTimer = null;
 let mountedOnce = false;
 let pageActive = false;
 let timersStarted = false;
@@ -173,8 +175,7 @@ const processTurns = computed(() => normalizeProcessTurns(currentThreadStatus.va
 const running = computed(() => {
   const status = (currentThreadStatus.value && currentThreadStatus.value.status) || (selectedThread.value && selectedThread.value.status);
   const activeStatus = Boolean(currentThreadStatus.value && currentThreadStatus.value.active) || Boolean(selectedThread.value && selectedThread.value.active);
-  const pendingThreadId = pendingWatch.value && pendingWatch.value.threadId;
-  return agentState.value.online && (activeStatus || status === 'running' || pendingThreadId === selectedThreadId.value);
+  return agentState.value.online && syncState.value.fresh && (activeStatus || status === 'running');
 });
 const complete = computed(() => {
   const currentStatus = currentThreadStatus.value && currentThreadStatus.value.status;
@@ -187,7 +188,11 @@ const agentDotClass = computed(() => agentState.value.online ? 'dot-green' : 'do
 const threadDotClass = computed(() => running.value ? 'dot-blue' : complete.value ? 'dot-green' : 'dot-gray');
 const serverText = computed(() => serverState.value.online ? '服务器已连' : serverState.value.message || '服务器未知');
 const agentText = computed(() => agentState.value.online ? 'Agent 在线' : agentState.value.message || 'Agent 未知');
-const threadText = computed(() => running.value ? '对话进行中' : complete.value ? '对话已完成' : '对话空闲');
+const threadText = computed(() => {
+  if (!syncState.value.fresh && agentState.value.online) return '状态未确认';
+  if (pendingWatch.value && pendingWatch.value.threadId === selectedThreadId.value) return '等待电脑确认';
+  return running.value ? '对话进行中' : complete.value ? '对话已完成' : '对话空闲';
+});
 const timelineItems = computed(() => {
   const items = [];
   const pendingTurns = [];
@@ -198,6 +203,14 @@ const timelineItems = computed(() => {
   }
   for (let index = 0; index < messages.value.length; index += 1) {
     const row = messages.value[index];
+    const userTurn = row && row.role === 'user' && row.turnId ? turnsById[row.turnId] : null;
+    if (userTurn) {
+      items.push({ type: 'message', key: row.id || `message-${row.role}-${index}`, row });
+      items.push({ type: 'process', key: `process-${userTurn.turnId}`, turn: userTurn });
+      const pendingIndex = pendingTurns.findIndex(turn => turn.turnId === userTurn.turnId);
+      if (pendingIndex !== -1) pendingTurns.splice(pendingIndex, 1);
+      continue;
+    }
     const exactTurn = row && row.role === 'assistant' && row.turnId ? turnsById[row.turnId] : null;
     if (exactTurn) {
       items.push({ type: 'process', key: `process-${exactTurn.turnId}`, turn: exactTurn });
@@ -255,10 +268,10 @@ function renderMarkdown(text) {
  * @param {string} completedAt 完成时间。
  * @returns {string} 已处理时间文本。
  */
-function formatElapsedTime(startedAt, completedAt) {
+function formatElapsedTime(startedAt, completedAt, observedAt = '') {
   const start = Date.parse(startedAt || '');
   if (Number.isNaN(start)) return '';
-  const end = Date.parse(completedAt || '') || Date.now();
+  const end = Date.parse(completedAt || observedAt || '') || Date.now();
   const totalSeconds = Math.max(0, Math.floor((end - start) / 1000));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
@@ -277,9 +290,9 @@ function processTitle(turn, open) {
   const count = turn && turn.steps ? turn.steps.length : 0;
   const prefix = open ? '处理过程' : '处理过程已折叠';
   const interrupted = turn && turn.status === 'interrupted';
-  const statusText = interrupted ? ' · Agent 未在线' : '';
-  const duration = !interrupted && turn && turn.durationText ? ` · ${turn.durationText}` : '';
-  if (interrupted) return `${prefix}${statusText}（${count}）`;
+  const statusText = interrupted ? ` · ${turn.interruptionReason || '状态未确认'}` : '';
+  const duration = turn && turn.durationText ? ` · ${turn.durationText}` : '';
+  if (interrupted) return `${prefix}${statusText}${duration}（${count}）`;
   return `${prefix}${duration}（${count}）`;
 }
 
@@ -290,7 +303,7 @@ function processTitle(turn, open) {
  * @returns {boolean} 只有当前运行轮次允许追加。
  */
 function shouldAppendUnmatchedProcess(turn) {
-  return Boolean(turn && (turn.status === 'running' || turn.status === 'interrupted'));
+  return false;
 }
 
 /**
@@ -328,14 +341,15 @@ function normalizeProcessTurns(status) {
   return ((status && status.turns) || [])
     .map(turn => {
       const steps = visibleProcessSteps(turn);
-      const interrupted = Boolean(turn && turn.status === 'running' && !agentState.value.online);
+      const interrupted = Boolean(turn && turn.status === 'running' && (!agentState.value.online || !syncState.value.fresh));
       return {
         turnId: turn && turn.turnId ? turn.turnId : '',
         processKey: processStateKey(turn, steps),
         status: interrupted ? 'interrupted' : turn && turn.status ? turn.status : '',
+        interruptionReason: !agentState.value.online ? 'Agent 未在线' : '状态未确认',
         steps,
         final: turn && turn.final ? turn.final : '',
-        durationText: interrupted ? '' : formatElapsedTime(turn && turn.startedAt, turn && turn.completedAt),
+        durationText: formatElapsedTime(turn && turn.startedAt, turn && turn.completedAt, interrupted ? syncState.value.lastSyncedAt : ''),
       };
     })
     .filter(turn => turn.turnId && turn.steps.length);
@@ -435,6 +449,8 @@ function deactivatePage() {
   switchingThread.value = false;
   threadListRequest = null;
   runningHistoryRequest = null;
+  if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
+  commandConfirmTimer = null;
   stopTimers();
   abortRequestTasks();
 }
@@ -717,7 +733,7 @@ async function refreshConnectionStatus() {
     const data = await getHealth(config.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token)) return;
     serverState.value = { online: true, offline: false, message: '服务器已连' };
-    applyAgentOnline({ agentOnline: Boolean(data.online) });
+    applyRelayState(Object.assign({}, data, { agentOnline: Boolean(data.online) }));
   } catch (error) {
     if (!canUpdateTask(token)) return;
     serverState.value = { online: false, offline: true, message: '服务器断开' };
@@ -743,6 +759,46 @@ function applyAgentOnline(data) {
 }
 
 /**
+ * AI:应用 Relay 的版本化同步状态，拒绝旧快照回写页面。
+ *
+ * @param {object} data Relay 响应或实时事件。
+ * @returns {boolean} 快照是否可用于更新页面。
+ */
+function applyRelayState(data) {
+  if (!data || typeof data !== 'object') return true;
+  const nextVersion = Number(data.syncVersion);
+  if (Number.isFinite(nextVersion) && nextVersion < syncState.value.version) return false;
+  if (Number.isFinite(nextVersion)) syncState.value = {
+    fresh: Boolean(data.syncFresh),
+    version: nextVersion,
+    lastSyncedAt: typeof data.lastSyncedAt === 'string' ? data.lastSyncedAt : syncState.value.lastSyncedAt,
+  };
+  applyAgentOnline(data);
+  if (!syncState.value.fresh && pendingWatch.value && (data.type === 'sync-status' || data.agentOnline === false)) {
+    pendingWatch.value = null;
+    if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
+    commandConfirmTimer = null;
+    setNotice('电脑同步超时，发送结果未确认。');
+  }
+  return true;
+}
+
+/**
+ * AI:等待命令对应的新快照确认，超时后收敛为未确认而非无限运行。
+ *
+ * @param {object} watch 命令观察窗口。
+ * @returns {void}
+ */
+function waitForCommandConfirmation(watch) {
+  if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
+  commandConfirmTimer = setTimeout(() => {
+    if (!pendingWatch.value || pendingWatch.value.threadId !== watch.threadId) return;
+    pendingWatch.value = null;
+    setNotice('电脑尚未确认本次操作，请手动刷新后核对。');
+  }, 12000);
+}
+
+/**
  * AI:读取当前打开的对话列表，并复用进行中的同类请求。
  *
  * @returns {Promise<Array<object>>} 对话列表。
@@ -758,7 +814,7 @@ async function fetchThreadRows() {
   const request = (async () => {
     const data = await getThreads(config.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token)) return threadRows.value;
-    applyAgentOnline(data);
+    if (!applyRelayState(data)) return threadRows.value;
     return data.threads || [];
   })();
   threadListRequest = request;
@@ -794,10 +850,21 @@ async function loadThreads() {
  * @returns {void}
  */
 function applyThreadStatus(status) {
-  applyAgentOnline(status);
+  if (!applyRelayState(status)) return false;
   currentThreadStatus.value = status;
   bindPendingAssistantTurn(status);
   syncManualProcessOpenState(status);
+  const commandConfirmed = pendingWatch.value
+    && pendingWatch.value.threadId === status.threadId
+    && Number(status.syncVersion) > Number(pendingWatch.value.acceptedSyncVersion)
+    && (status.active || status.status === 'running' || status.status === 'complete'
+      || (pendingWatch.value.kind === 'stop' && !status.active && status.status !== 'running'));
+  if (commandConfirmed) {
+    pendingWatch.value = null;
+    if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
+    commandConfirmTimer = null;
+  }
+  return true;
 }
 
 /**
@@ -820,11 +887,12 @@ async function loadHistory(statusData = null, options = {}) {
   }
   const data = await getHistory(config.value, requestedThreadId, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
   if (!canUpdateTask(token) || selectedThreadId.value !== requestedThreadId) return;
+  if (!applyRelayState(data)) return;
   messages.value = mergePendingLocalMessages(requestedThreadId, data.messages || []);
   if (data.available) {
     const snapshot = statusData || await getStatus(config.value, { threadId: requestedThreadId }, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token) || selectedThreadId.value !== requestedThreadId) return;
-    applyThreadStatus(snapshot);
+    if (!applyThreadStatus(snapshot)) return;
   }
   if (!options.silent) setNotice(data.available ? '已同步电脑端 Codex 对话' : '这个对话暂时没有可加载的本机记录');
   if (options.scrollToBottom) await scrollToBottom();
@@ -963,9 +1031,11 @@ async function pollStatus(watch = pendingWatch.value || {}) {
   if (!canUpdateTask(token)) return;
   if (requestedThreadId !== selectedThreadId.value || data.threadId !== selectedThreadId.value) return;
   if (data.status === 'complete' || data.status === 'error') {
-    applyThreadStatus(data);
+    if (!applyThreadStatus(data)) return;
     const shouldScroll = followBottom.value;
     if (pendingWatch.value && pendingWatch.value.threadId === data.threadId) pendingWatch.value = null;
+    if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
+    commandConfirmTimer = null;
     followBottom.value = false;
     if (!historyReloadedForCompletion.value) {
       historyReloadedForCompletion.value = true;
@@ -974,7 +1044,7 @@ async function pollStatus(watch = pendingWatch.value || {}) {
     return;
   }
   const historySynced = await syncRunningHistory(data);
-  if (!historySynced) applyThreadStatus(data);
+  if (!historySynced && !applyThreadStatus(data)) return;
   historyReloadedForCompletion.value = false;
   setNotice(data.preview || 'Codex 正在回复...');
 }
@@ -1005,7 +1075,10 @@ async function send() {
     const data = await sendMessage(config.value, { threadId: selectedThreadId.value, text }, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token)) return;
     sendAccepted = true;
-    pendingWatch.value = data.watch || { threadId: selectedThreadId.value };
+    pendingWatch.value = Object.assign({}, data.watch || { threadId: selectedThreadId.value }, {
+      acceptedSyncVersion: Number(data.acceptedSyncVersion) || syncState.value.version,
+    });
+    waitForCommandConfirmation(pendingWatch.value);
     await pollStatus(pendingWatch.value);
   } catch (error) {
     if (!sendAccepted) removePendingLocalSend(pending);
@@ -1025,45 +1098,120 @@ async function stop() {
   if (!canUpdateTask(token)) return;
   if (!canStop.value) return;
   try {
-    const data = await stopCodex(config.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+    const data = await stopCodex(config.value, selectedThreadId.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token)) return;
-    setNotice(data.message || '已发送停止指令');
+    pendingWatch.value = {
+      threadId: selectedThreadId.value,
+      kind: 'stop',
+      acceptedSyncVersion: Number(data.acceptedSyncVersion) || syncState.value.version,
+    };
+    waitForCommandConfirmation(pendingWatch.value);
+    setNotice(data.message || '已发送停止指令，等待电脑确认');
+    await pollStatus(pendingWatch.value);
   } catch (error) {
     setNotice(error.message);
   }
 }
 
 /**
- * AI:启动页面定时刷新任务。
+ * AI:处理实时通道事件后的缓存刷新，合并短时间内连续到达的同步事件。
+ *
+ * @returns {void}
+ */
+function scheduleRealtimeRefresh() {
+  if (realtimeRefreshTimer || !canUpdatePage()) return;
+  realtimeRefreshTimer = setTimeout(async () => {
+    realtimeRefreshTimer = null;
+    try {
+      await loadThreads();
+      if (selectedThreadId.value) await loadHistory(null, { scrollToBottom: followBottom.value, silent: true });
+    } catch (error) {
+      setNotice(error.message);
+    }
+  }, 180);
+}
+
+/**
+ * AI:安排实时通道重连，不降级为 HTTP 轮询。
+ *
+ * @returns {void}
+ */
+function scheduleRealtimeReconnect() {
+  if (!canUpdatePage() || realtimeReconnectTimer) return;
+  realtimeReconnectTimer = setTimeout(() => {
+    realtimeReconnectTimer = null;
+    openRealtimeSocket();
+  }, 2000);
+}
+
+/**
+ * AI:处理服务端实时状态事件。
+ *
+ * @param {object} event Relay 推送的事件。
+ * @returns {void}
+ */
+function handleRealtimeEvent(event) {
+  if (!event || typeof event !== 'object') return;
+  if (!applyRelayState(event)) return;
+  if (event.type === 'session-updated') scheduleRealtimeRefresh();
+}
+
+/**
+ * AI:建立手机到云端 Relay 的实时状态订阅。
+ *
+ * @returns {void}
+ */
+function openRealtimeSocket() {
+  if (!canUpdatePage() || !hasConnectionConfig() || realtimeSocket) return;
+  realtimeSocket = createRealtimeSocket(config.value, {
+    open() {
+      if (!canUpdatePage()) return;
+      serverState.value = { online: true, offline: false, message: '服务器已连' };
+    },
+    message(event) {
+      try {
+        handleRealtimeEvent(JSON.parse(event.data || '{}'));
+      } catch (error) {
+        setNotice('服务器实时事件格式不正确');
+      }
+    },
+    close() {
+      realtimeSocket = null;
+      if (!canUpdatePage()) return;
+      serverState.value = { online: false, offline: true, message: '服务器实时连接断开' };
+      agentState.value = { online: false, offline: true, message: 'Agent 状态未知' };
+      scheduleRealtimeReconnect();
+    },
+    error(event) {
+      if (canUpdatePage()) setNotice(event.errMsg || '服务器实时连接失败');
+    },
+  });
+}
+
+/**
+ * AI:启动页面实时状态订阅。
  *
  * @returns {void}
  */
 function startTimers() {
   if (timersStarted) return;
   timersStarted = true;
-  connectionTimer = setInterval(() => {
-    if (canUpdatePage()) refreshConnectionStatus().catch(error => { setNotice(error.message); });
-  }, 1500);
-  threadTimer = setInterval(() => {
-    if (canUpdatePage()) loadThreads().catch(error => { setNotice(error.message); });
-  }, 2000);
-  pollTimer = setInterval(() => {
-    if (canUpdatePage()) pollStatus().catch(error => { setNotice(error.message); });
-  }, 900);
+  openRealtimeSocket();
 }
 
 /**
- * AI:停止页面定时刷新任务。
+ * AI:停止页面实时状态订阅和待执行刷新。
  *
  * @returns {void}
  */
 function stopTimers() {
-  clearInterval(connectionTimer);
-  clearInterval(threadTimer);
-  clearInterval(pollTimer);
-  connectionTimer = null;
-  threadTimer = null;
-  pollTimer = null;
+  if (realtimeReconnectTimer) clearTimeout(realtimeReconnectTimer);
+  if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
+  realtimeReconnectTimer = null;
+  realtimeRefreshTimer = null;
+  const socket = realtimeSocket;
+  realtimeSocket = null;
+  if (socket) socket.close({ code: 1000, reason: 'PAGE_INACTIVE' });
   timersStarted = false;
 }
 
@@ -1092,13 +1240,14 @@ onUnload(() => {
 onShow(() => {
   activatePage();
   if (!mountedOnce) return;
-  startTimers();
   const latest = loadConfig();
   if (latest.serverUrl !== config.value.serverUrl || latest.token !== config.value.token) {
+    stopTimers();
     config.value = latest;
     refreshConnectionStatus();
     refreshAll({ scrollToBottom: true });
   }
+  startTimers();
 });
 
 onBackPress(() => {

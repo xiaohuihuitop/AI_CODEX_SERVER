@@ -12,6 +12,44 @@ function buildUrl(serverUrl, apiPath) {
 }
 
 /**
+ * AI:拼接手机实时状态订阅地址。
+ *
+ * @param {string} serverUrl 服务器根地址。
+ * @returns {string} WebSocket 完整地址。
+ */
+function buildRealtimeUrl(serverUrl) {
+  const base = String(serverUrl || '').trim().replace(/\/+$/, '');
+  return `${base.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:')}/mobile`;
+}
+
+/**
+ * AI:建立手机实时状态订阅，控制命令仍经 HTTP 请求发送。
+ *
+ * @param {{serverUrl: string, token: string}} config 连接配置。
+ * @param {{open?: Function, message?: Function, close?: Function, error?: Function}} handlers 事件处理器。
+ * @returns {object} uni-app SocketTask。
+ */
+export function createRealtimeSocket(config, handlers = {}) {
+  const task = uni.connectSocket({
+    url: buildRealtimeUrl(config.serverUrl),
+    header: { 'x-mobile-typer-token': config.token },
+  });
+  task.onOpen(event => {
+    if (typeof handlers.open === 'function') handlers.open(event);
+  });
+  task.onMessage(event => {
+    if (typeof handlers.message === 'function') handlers.message(event);
+  });
+  task.onClose(event => {
+    if (typeof handlers.close === 'function') handlers.close(event);
+  });
+  task.onError(event => {
+    if (typeof handlers.error === 'function') handlers.error(event);
+  });
+  return task;
+}
+
+/**
  * AI:发起 JSON 请求。
  *
  * @param {{serverUrl: string, token: string}} config 连接配置。
@@ -120,9 +158,10 @@ export function sendMessage(config, payload, options = {}) {
  * @param {{serverUrl: string, token: string}} config 连接配置。
  * @returns {Promise<object>} 停止响应。
  */
-export function stopCodex(config, options = {}) {
+export function stopCodex(config, threadId, options = {}) {
   return requestJson(config, '/codex/stop', {
     method: 'POST',
+    data: { threadId },
     registerTask: options.registerTask,
     unregisterTask: options.unregisterTask,
   });

@@ -326,10 +326,12 @@ function parseSession(lines, threadId, since = '') {
     }
     if (item.type === 'event_msg' && payload.type === 'user_message') {
       const text = stripCodexUiDirectives(payload.message);
-      if (text) messages.push({ role: 'user', label: '你', text, timestamp: item.timestamp || '' });
+      if (text) messages.push({ role: 'user', label: '你', text, timestamp: item.timestamp || '', turnId: currentTurnId });
     }
     if (item.type === 'event_msg' && payload.type === 'task_started') {
       currentTurnId = String(payload.turn_id || payload.turnId || currentTurnId || '').trim();
+      const previousMessage = messages[messages.length - 1];
+      if (previousMessage && previousMessage.role === 'user' && !previousMessage.turnId) previousMessage.turnId = currentTurnId;
       if (visible) {
         active = true;
         completed = false;

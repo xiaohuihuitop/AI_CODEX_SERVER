@@ -11,6 +11,7 @@ class DesktopAgentApi {
     this.controller = options.controller || new WindowsCodexController();
     this.now = options.now || (() => Date.now());
     this.activeControlTasks = 0;
+    this.controlQueue = Promise.resolve();
   }
 
   async handle(action, payload = {}) {
@@ -18,7 +19,7 @@ class DesktopAgentApi {
     if (action === 'history') return this.history(payload);
     if (action === 'status') return this.status(payload);
     if (action === 'send') return this.send(payload);
-    if (action === 'stop') return this.stop();
+    if (action === 'stop') return this.stop(payload);
     throw createHttpError('ACTION_NOT_ALLOWED', '不支持的 Agent 动作。', 400);
   }
 
@@ -57,8 +58,14 @@ class DesktopAgentApi {
     };
   }
 
-  async stop() {
-    await this.runControlTask(() => this.controller.stopResponse());
+  async stop(payload) {
+    const threadId = typeof payload.threadId === 'string' ? payload.threadId : '';
+    if (!threadId) throw createHttpError('THREAD_ID_REQUIRED', '请选择 Codex 线程。', 400);
+    const target = this.reader.getThreadTarget(threadId);
+    if (!target.available || !target.projectName || !target.threadName) {
+      throw createHttpError('THREAD_TARGET_NOT_FOUND', '未找到 Codex Desktop 线程控制目标。', 404);
+    }
+    await this.runControlTask(() => this.controller.stopResponse(target));
     return { ok: true, message: '已向 Codex Desktop 发送停止指令。' };
   }
 
@@ -78,12 +85,17 @@ class DesktopAgentApi {
    * @returns {Promise<*>} 控制任务结果。
    */
   async runControlTask(task) {
-    this.activeControlTasks += 1;
-    try {
-      return await task();
-    } finally {
-      this.activeControlTasks -= 1;
-    }
+    const run = async () => {
+      this.activeControlTasks += 1;
+      try {
+        return await task();
+      } finally {
+        this.activeControlTasks -= 1;
+      }
+    };
+    const queued = this.controlQueue.then(run, run);
+    this.controlQueue = queued.catch(() => undefined);
+    return queued;
   }
 }
 

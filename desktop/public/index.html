@@ -1084,7 +1084,7 @@
 
     stopButton.addEventListener('click', async () => {
       try {
-        const res = await api('/codex/stop', { method: 'POST' });
+        const res = await api('/codex/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId: selectedThreadId }) });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || '停止失败');
         notice(data.message || '已发送停止指令');

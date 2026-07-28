@@ -318,8 +318,9 @@
     let selectedThreadId = localStorage.getItem('codexBridge.threadId') || '';
     let selectedProjectName = localStorage.getItem('codexBridge.projectName') || '';
     let threadRows = [];
-    let connectionStatusTimer = null;
-    let threadStatusTimer = null;
+    let realtimeSocket = null;
+    let realtimeReconnectTimer = null;
+    let realtimeRefreshTimer = null;
     let threadListRequest = null;
     let currentThreadStatus = null;
     let pendingWatch = null;
@@ -328,6 +329,8 @@
     let runningHistorySyncAt = 0;
     let runningHistoryThreadId = '';
     let agentOnline = false;
+    let syncState = { fresh: false, version: 0, lastSyncedAt: '' };
+    let commandConfirmTimer = null;
     let pendingLocalSends = [];
 
     /**
@@ -632,12 +635,13 @@
     function processTurns(status) {
       return (status?.turns || [])
         .map(turn => {
-          const interrupted = Boolean(turn?.status === 'running' && !agentOnline);
+          const interrupted = Boolean(turn?.status === 'running' && (!agentOnline || !syncState.fresh));
           return {
             turnId: turn?.turnId || '',
             status: interrupted ? 'interrupted' : turn?.status || '',
             steps: (turn?.steps || []).filter(step => step?.text && step.kind !== 'start' && step.kind !== 'final' && step.kind !== 'complete'),
-            durationText: interrupted ? '' : formatElapsedTime(turn?.startedAt || '', turn?.completedAt || ''),
+            interruptionReason: !agentOnline ? 'Agent 未在线' : '状态未确认',
+            durationText: formatElapsedTime(turn?.startedAt || '', turn?.completedAt || '', interrupted ? syncState.lastSyncedAt : ''),
           };
         })
         .filter(turn => turn.turnId && turn.steps.length);
@@ -650,10 +654,10 @@
      * @param {string} completedAt 完成时间。
      * @returns {string} 已处理时间文本。
      */
-    function formatElapsedTime(startedAt, completedAt) {
+    function formatElapsedTime(startedAt, completedAt, observedAt = '') {
       const start = Date.parse(startedAt || '');
       if (Number.isNaN(start)) return '';
-      const end = Date.parse(completedAt || '') || Date.now();
+      const end = Date.parse(completedAt || observedAt || '') || Date.now();
       const totalSeconds = Math.max(0, Math.floor((end - start) / 1000));
       const minutes = Math.floor(totalSeconds / 60);
       const seconds = totalSeconds % 60;
@@ -670,7 +674,7 @@
     function processSummaryText(turn) {
       const count = turn?.steps?.length || 0;
       const prefix = '处理过程已折叠';
-      if (turn?.status === 'interrupted') return `${prefix} · Agent 未在线（${count}）`;
+      if (turn?.status === 'interrupted') return `${prefix} · ${turn.interruptionReason || '状态未确认'}${turn.durationText ? ` · ${turn.durationText}` : ''}（${count}）`;
       const duration = turn.durationText ? ` · ${turn.durationText}` : '';
       return `${prefix}${duration}（${count}）`;
     }
@@ -703,6 +707,19 @@
      */
     function findAssistantMessageByTurn(turnId) {
       for (const item of messagesEl.querySelectorAll('.message.assistant')) {
+        if (item.dataset.turnId === turnId) return item;
+      }
+      return null;
+    }
+
+    /**
+     * AI:按轮次查找用户消息，避免依赖旧 Android WebView 未实现的 CSS.escape。
+     *
+     * @param {string} turnId 轮次 ID。
+     * @returns {Element|null} 用户消息元素。
+     */
+    function findUserMessageByTurn(turnId) {
+      for (const item of messagesEl.querySelectorAll('.message.user')) {
         if (item.dataset.turnId === turnId) return item;
       }
       return null;
@@ -747,7 +764,7 @@
      * @returns {boolean} 只有当前运行轮次允许追加。
      */
     function shouldAppendUnmatchedProcess(turn) {
-      return Boolean(turn && (turn.status === 'running' || turn.status === 'interrupted'));
+      return false;
     }
 
     /**
@@ -768,8 +785,9 @@
       for (const turn of turns) {
         const card = createProcessCard(turn);
         const assistant = findAssistantMessageByTurn(turn.turnId);
-        if (assistant) messagesEl.insertBefore(card, assistant);
-        else if (shouldAppendUnmatchedProcess(turn)) messagesEl.appendChild(card);
+        const user = findUserMessageByTurn(turn.turnId);
+        if (user) user.insertAdjacentElement('afterend', card);
+        else if (assistant) messagesEl.insertBefore(card, assistant);
       }
       if (options.scrollToBottom) scrollToBottom();
       else restoreScroll(scroll);
@@ -811,8 +829,7 @@
       const row = threadRows.find(item => item.id === selectedThreadId);
       const scopedStatus = statusData?.threadId === selectedThreadId ? statusData : null;
       const status = scopedStatus?.status || row?.status || 'idle';
-      const pendingCurrent = pendingWatch?.threadId === selectedThreadId && Boolean(pendingWatch?.since);
-      const running = agentOnline && (Boolean(scopedStatus?.active) || !!row?.active || status === 'running' || pendingCurrent);
+      const running = agentOnline && syncState.fresh && (Boolean(scopedStatus?.active) || !!row?.active || status === 'running');
       const complete = !running && status === 'complete';
       threadStatusEl.classList.toggle('thread-status--running', running);
       threadStatusEl.classList.toggle('thread-status--complete', complete);
@@ -857,7 +874,7 @@
           updateConnectionStatus({ offline: true, message: data.message || errorMessage });
           throw new Error(data.message || errorMessage);
         }
-        applyAgentOnline(data);
+        if (!applyRelayState(data)) return threadRows;
         return data.threads || [];
       })();
       try {
@@ -944,7 +961,7 @@
       const res = await api(`/codex/status?${params}`);
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.message || '读取状态失败');
-      applyAgentOnline(data);
+      if (!applyRelayState(data)) return currentThreadStatus || data;
       return data;
     }
 
@@ -985,6 +1002,16 @@
       if (!requestedThreadId) return;
       const data = await fetchStatus({ ...watch, threadId: requestedThreadId });
       if (requestedThreadId !== selectedThreadId || data.threadId !== selectedThreadId) return;
+      const commandConfirmed = pendingWatch
+        && pendingWatch.threadId === data.threadId
+        && Number(data.syncVersion) > Number(pendingWatch.acceptedSyncVersion)
+        && (data.active || data.status === 'running' || data.status === 'complete'
+          || (pendingWatch.kind === 'stop' && !data.active && data.status !== 'running'));
+      if (commandConfirmed) {
+        pendingWatch = null;
+        if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
+        commandConfirmTimer = null;
+      }
       if (data.status === 'complete' || data.status === 'error') {
         currentThreadStatus = data;
         bindPendingAssistantTurn(data);
@@ -1006,6 +1033,103 @@
         historyReloadedForCompletion = false;
         notice(data.preview || 'Codex 正在回复...');
       }
+    }
+
+    /**
+     * AI:合并短时间内的会话同步事件，避免每个增量分别读取历史。
+     *
+     * @returns {void}
+     */
+    function scheduleRealtimeRefresh() {
+      if (realtimeRefreshTimer) return;
+      realtimeRefreshTimer = setTimeout(async () => {
+        realtimeRefreshTimer = null;
+        try {
+          await loadThreads();
+          if (selectedThreadId) await loadHistory(null, { preserveScroll: true });
+        } catch (error) {
+          notice(error.message);
+        }
+      }, 180);
+    }
+
+    /**
+     * AI:连接云端 Relay 的手机状态订阅，不退回定时轮询。
+     *
+     * @returns {void}
+     */
+    function openRealtimeSocket() {
+      if (!token || realtimeSocket) return;
+      const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const url = `${protocol}//${location.host}/mobile?token=${encodeURIComponent(token)}`;
+      const socket = new WebSocket(url);
+      realtimeSocket = socket;
+      socket.addEventListener('open', () => {
+        updateConnectionStatus({ online: agentOnline, message: '服务器实时连接已建立' });
+      });
+      socket.addEventListener('message', event => {
+        try {
+          const data = JSON.parse(event.data || '{}');
+          if (!applyRelayState(data)) return;
+          if (data.type === 'session-updated') scheduleRealtimeRefresh();
+        } catch {
+          notice('服务器实时事件格式不正确');
+        }
+      });
+      socket.addEventListener('close', () => {
+        if (realtimeSocket === socket) realtimeSocket = null;
+        updateConnectionStatus({ offline: true, message: '服务器实时连接断开' });
+        if (realtimeReconnectTimer) return;
+        realtimeReconnectTimer = setTimeout(() => {
+          realtimeReconnectTimer = null;
+          openRealtimeSocket();
+        }, 2000);
+      });
+      socket.addEventListener('error', () => {
+        notice('服务器实时连接失败');
+      });
+    }
+
+    /**
+     * AI:应用版本化同步状态，旧快照不得回写页面。
+     *
+     * @param {object} data Relay 响应或实时事件。
+     * @returns {boolean} 快照是否可用。
+     */
+    function applyRelayState(data) {
+      if (!data || typeof data !== 'object') return true;
+      const version = Number(data.syncVersion);
+      if (Number.isFinite(version) && version < syncState.version) return false;
+      if (Number.isFinite(version)) {
+        syncState = {
+          fresh: Boolean(data.syncFresh),
+          version,
+          lastSyncedAt: typeof data.lastSyncedAt === 'string' ? data.lastSyncedAt : syncState.lastSyncedAt,
+        };
+      }
+      applyAgentOnline(data);
+      if (!syncState.fresh && pendingWatch && (data.type === 'sync-status' || data.agentOnline === false)) {
+        pendingWatch = null;
+        if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
+        commandConfirmTimer = null;
+        notice('电脑同步超时，操作结果未确认。');
+      }
+      return true;
+    }
+
+    /**
+     * AI:等待命令后的新快照，避免本地等待无限延长。
+     *
+     * @param {object} watch 命令观察窗口。
+     * @returns {void}
+     */
+    function waitForCommandConfirmation(watch) {
+      if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
+      commandConfirmTimer = setTimeout(() => {
+        if (!pendingWatch || pendingWatch.threadId !== watch.threadId) return;
+        pendingWatch = null;
+        notice('电脑尚未确认本次操作，请手动刷新后核对。');
+      }, 12000);
     }
 
     document.getElementById('refresh').addEventListener('click', async () => {
@@ -1073,7 +1197,10 @@
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || '发送失败');
         sendAccepted = true;
-        pendingWatch = data.watch || { threadId: selectedThreadId };
+        pendingWatch = Object.assign({}, data.watch || { threadId: selectedThreadId }, {
+          acceptedSyncVersion: Number(data.acceptedSyncVersion) || syncState.version,
+        });
+        waitForCommandConfirmation(pendingWatch);
         await pollStatus(pendingWatch);
       } catch (error) {
         if (!sendAccepted) removePendingLocalSend(pendingLocal);
@@ -1084,10 +1211,17 @@
 
     stopButton.addEventListener('click', async () => {
       try {
-        const res = await api('/codex/stop', { method: 'POST' });
+        const res = await api('/codex/stop', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ threadId: selectedThreadId }) });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || '停止失败');
-        notice(data.message || '已发送停止指令');
+        pendingWatch = {
+          threadId: selectedThreadId,
+          kind: 'stop',
+          acceptedSyncVersion: Number(data.acceptedSyncVersion) || syncState.version,
+        };
+        waitForCommandConfirmation(pendingWatch);
+        notice(data.message || '已发送停止指令，等待电脑确认');
+        await pollStatus(pendingWatch);
       } catch (error) {
         notice(error.message);
       }
@@ -1097,9 +1231,7 @@
     updateConnectionStatus({ message: '正在检测连接状态' });
     refreshConnectionStatus().catch(() => {});
     loadThreads().then(() => loadHistory(null, { preserveScroll: false, scrollToBottom: true })).catch(error => notice(error.message));
-    connectionStatusTimer = setInterval(() => refreshConnectionStatus().catch(() => {}), 3000);
-    threadStatusTimer = setInterval(() => refreshThreadStatuses().catch(error => notice(error.message)), 3000);
-    setInterval(() => pollStatus().catch(error => notice(error.message)), 900);
+    openRealtimeSocket();
   </script>
 </body>
 </html>

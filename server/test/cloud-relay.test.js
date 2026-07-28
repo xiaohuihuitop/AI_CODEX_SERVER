@@ -1,4 +1,5 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const { WebSocket } = require('ws');
@@ -20,6 +21,16 @@ function close(server) {
 async function readJson(res) {
   return JSON.parse(await res.text());
 }
+
+test('云端手机网页端通过实时通道接收状态更新，不使用固定轮询', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+
+  assert.match(html, /function openRealtimeSocket\(\)/);
+  assert.match(html, /new WebSocket\(url\)/);
+  assert.match(html, /\/mobile\?token=/);
+  assert.match(html, /data\.type === 'session-updated'/);
+  assert.doesNotMatch(html, /setInterval\(/);
+});
 
 test('云端 relay 手机线程请求读取服务器缓存', async () => {
   const server = createCloudRelayServer({
@@ -54,11 +65,77 @@ test('云端 relay 手机线程请求读取服务器缓存', async () => {
   assert.equal(res.status, 200);
   assert.equal(body.cached, true);
   assert.equal(body.agentOnline, true);
+  assert.equal(body.syncFresh, true);
+  assert.equal(body.syncVersion, 1);
+  assert.ok(body.lastSyncedAt);
   assert.deepEqual(body.threads.map(row => ({ id: row.id, name: row.name, projectName: row.projectName })), [
     { id: 'thread-1', name: '远程线程', projectName: 'demo' },
   ]);
 
   agent.close();
+  await close(server);
+});
+
+test('云端 relay 向同 token 手机推送 Agent 状态和会话更新事件', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['realtime-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+  });
+  const port = await listen(server);
+  const events = [];
+  const mobile = new WebSocket(`ws://127.0.0.1:${port}/mobile`, {
+    headers: { 'x-mobile-typer-token': 'realtime-token' },
+  });
+  mobile.on('message', data => events.push(JSON.parse(data.toString())));
+  await new Promise(resolve => mobile.once('open', resolve));
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=realtime-token`);
+  await new Promise(resolve => agent.once('open', resolve));
+  agent.send(JSON.stringify({
+    type: 'session-sync',
+    payload: { openThreadIds: [], sessions: [] },
+  }));
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  assert.equal(events.some(event => event.type === 'relay-ready'), true);
+  assert.equal(events.some(event => event.type === 'agent-status' && event.online === true), true);
+  assert.equal(events.some(event => event.type === 'session-updated' && event.agentOnline === true), true);
+
+  agent.close();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  assert.equal(events.some(event => event.type === 'agent-status' && event.online === false), true);
+
+  mobile.close();
+  await close(server);
+});
+
+test('云端 relay 在 Agent 未继续同步时标记状态过期并冻结版本', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['stale-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+    syncStaleMs: 1000,
+  });
+  const port = await listen(server);
+  const events = [];
+  const mobile = new WebSocket(`ws://127.0.0.1:${port}/mobile?token=stale-token`);
+  mobile.on('message', data => events.push(JSON.parse(data.toString())));
+  await new Promise(resolve => mobile.once('open', resolve));
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=stale-token`);
+  await new Promise(resolve => agent.once('open', resolve));
+  agent.send(JSON.stringify({ type: 'session-sync', payload: { openThreadIds: [], sessions: [] } }));
+  await new Promise(resolve => setTimeout(resolve, 1100));
+
+  const staleEvent = events.find(event => event.type === 'sync-status');
+  assert.ok(staleEvent);
+  assert.equal(staleEvent.syncFresh, false);
+  assert.equal(staleEvent.syncVersion, 1);
+  const health = await readJson(await fetch(`http://127.0.0.1:${port}/codex/health?token=stale-token`));
+  assert.equal(health.syncFresh, false);
+  assert.equal(health.syncVersion, 1);
+
+  agent.close();
+  mobile.close();
   await close(server);
 });
 
@@ -260,8 +337,8 @@ test('云端缓存支持渲染为用户消息、处理过程、最终回复顺�
   for (const turn of status.turns) turnsById[turn.turnId] = turn;
   const timeline = [];
   for (const row of history.messages) {
-    if (row.role === 'assistant' && row.turnId && turnsById[row.turnId]) timeline.push(`process:${turnsById[row.turnId].steps[0].text}`);
     timeline.push(`${row.role}:${row.text}`);
+    if (row.role === 'user' && row.turnId && turnsById[row.turnId]) timeline.push(`process:${turnsById[row.turnId].steps[0].text}`);
   }
 
   assert.deepEqual(timeline, [

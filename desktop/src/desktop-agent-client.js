@@ -76,7 +76,7 @@ function createDesktopAgentClient(options) {
   const reconnectDelayMs = Number.isFinite(Number(options.reconnectDelayMs)) ? Math.max(0, Number(options.reconnectDelayMs)) : 2000;
   const client = new EventEmitter();
   const syncProvider = typeof options.syncProvider === 'function' ? options.syncProvider : null;
-  const syncIntervalMs = Number.isFinite(Number(options.syncIntervalMs)) ? Math.max(1000, Number(options.syncIntervalMs)) : 2000;
+  const syncIntervalMs = Number.isFinite(Number(options.syncIntervalMs)) ? Math.max(1000, Number(options.syncIntervalMs)) : 1000;
   const syncTimeoutMs = Number.isFinite(Number(options.syncTimeoutMs)) ? Math.max(1000, Number(options.syncTimeoutMs)) : 15000;
   let socket = null;
   let reconnectTimer = null;
@@ -137,6 +137,9 @@ function createDesktopAgentClient(options) {
       }
       const response = await handleAgentRequest(api, message);
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(response));
+      if (response.ok && (message.action === 'send' || message.action === 'stop')) {
+        void syncSessions();
+      }
     });
     socket.on('close', (code, reason) => {
       client.emit('close', code, reason);

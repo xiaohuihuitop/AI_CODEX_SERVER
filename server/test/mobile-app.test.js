@@ -101,8 +101,9 @@ test('uni-app Android 手机端按每轮对话渲染处理过程', () => {
   assert.match(index, /const turnsById = \{\};/);
   assert.match(index, /row\.turnId \? turnsById\[row\.turnId\] : null/);
   assert.match(index, /function shouldAppendUnmatchedProcess\(turn\)/);
-  assert.match(index, /turn && turn\.status === 'running'/);
-  assert.match(index, /if \(shouldAppendUnmatchedProcess\(turn\)\) items\.push\(\{ type: 'process'/);
+  assert.match(index, /const userTurn = row && row\.role === 'user' && row\.turnId \? turnsById\[row\.turnId\] : null;/);
+  assert.match(index, /if \(userTurn\) \{[\s\S]*items\.push\(\{ type: 'message'[\s\S]*items\.push\(\{ type: 'process'/);
+  assert.match(index, /return false;/);
   assert.doesNotMatch(index, /pendingTurns\.splice\(0, 1\)/);
   assert.match(index, /items\.push\(\{ type: 'process'/);
   assert.match(index, /items\.push\(\{ type: 'message'/);
@@ -110,7 +111,7 @@ test('uni-app Android 手机端按每轮对话渲染处理过程', () => {
   assert.match(index, /@click="toggleProcess\(item\.turn\)"/);
   assert.match(index, /v-if="isProcessOpen\(item\.turn\)"/);
   assert.match(index, /step\.kind !== 'start'/);
-  assert.match(index, /function formatElapsedTime\(startedAt, completedAt\)/);
+  assert.match(index, /function formatElapsedTime\(startedAt, completedAt, observedAt = ''\)/);
   assert.match(index, /function processTitle\(turn, open\)/);
   assert.match(index, /function isProcessOpen\(turn\)/);
   assert.match(index, /function toggleProcess\(turn\)/);
@@ -126,12 +127,12 @@ test('uni-app Android 手机端 Agent 离线时不中断轮次不继续累计处
   const normalizeFunction = index.match(/function normalizeProcessTurns\(status\) \{([\s\S]*?)\n\}/)?.[1] || '';
   const titleFunction = index.match(/function processTitle\(turn, open\) \{([\s\S]*?)\n\}/)?.[1] || '';
 
-  assert.match(normalizeFunction, /const interrupted = Boolean\(turn && turn\.status === 'running' && !agentState\.value\.online\);/);
+  assert.match(normalizeFunction, /const interrupted = Boolean\(turn && turn\.status === 'running' && \(!agentState\.value\.online \|\| !syncState\.value\.fresh\)\);/);
   assert.match(normalizeFunction, /status: interrupted \? 'interrupted'/);
-  assert.match(normalizeFunction, /durationText: interrupted \? '' : formatElapsedTime/);
+  assert.match(normalizeFunction, /durationText: formatElapsedTime\(turn && turn\.startedAt, turn && turn\.completedAt, interrupted \? syncState\.value\.lastSyncedAt : ''\)/);
   assert.match(titleFunction, /turn && turn\.status === 'interrupted'/);
-  assert.match(titleFunction, /Agent 未在线/);
-  assert.match(index, /turn && \(turn\.status === 'running' \|\| turn\.status === 'interrupted'\)/);
+  assert.match(titleFunction, /interruptionReason/);
+  assert.match(index, /return false;/);
 });
 
 test('uni-app Android 手机端展示前会清理 Codex UI 上下文', () => {
@@ -213,7 +214,7 @@ test('uni-app Android 手机端运行中同步电脑端新增用户消息', () =
   assert.match(index, /now - runningHistorySyncAt < 1500/);
   assert.match(index, /loadHistory\(statusData, \{ scrollToBottom: false, silent: true \}\)/);
   assert.match(index, /const historySynced = await syncRunningHistory\(data\);/);
-  assert.match(index, /if \(!historySynced\) applyThreadStatus\(data\);/);
+  assert.match(index, /if \(!historySynced && !applyThreadStatus\(data\)\) return;/);
   assert.match(index, /if \(!options\.silent\) setNotice/);
   assert.match(index, /runningHistoryRequest = null;/);
 });
@@ -223,9 +224,9 @@ test('uni-app Android 手机端消息顺序固定为用户消息、处理过程�
   const timelineFunction = index.match(/const timelineItems = computed\(\(\) => \{([\s\S]*?)\n\}\);/)?.[1] || '';
   const pollFunction = index.match(/async function pollStatus\(watch = pendingWatch\.value \|\| \{\}\) \{([\s\S]*?)\n\}/)?.[1] || '';
 
-  assert.match(timelineFunction, /if \(exactTurn\) \{[\s\S]*items\.push\(\{ type: 'process'[\s\S]*\}\);[\s\S]*\}[\s\S]*items\.push\(\{ type: 'message'/);
-  assert.match(timelineFunction, /if \(shouldAppendUnmatchedProcess\(turn\)\) items\.push\(\{ type: 'process'/);
-  assert.match(pollFunction, /const historySynced = await syncRunningHistory\(data\);[\s\S]*if \(!historySynced\) applyThreadStatus\(data\);/);
+  assert.match(timelineFunction, /if \(userTurn\) \{[\s\S]*items\.push\(\{ type: 'message'[\s\S]*items\.push\(\{ type: 'process'/);
+  assert.match(timelineFunction, /if \(exactTurn\) \{[\s\S]*items\.push\(\{ type: 'process'[\s\S]*items\.push\(\{ type: 'message'/);
+  assert.match(pollFunction, /const historySynced = await syncRunningHistory\(data\);[\s\S]*if \(!historySynced && !applyThreadStatus\(data\)\) return;/);
 });
 
 test('uni-app Android 手机端使用弹出二级对话列表选择线程', () => {
@@ -256,7 +257,7 @@ test('uni-app Android 手机端使用弹出二级对话列表选择线程', () =
   assert.match(index, /if \(!threadPopupOpen\.value\) return false;/);
 });
 
-test('uni-app Android 手机端连接状态只以 Agent 在线信息为准', () => {
+test('uni-app Android 手机端运行状态同时要求 Agent 在线和同步新鲜', () => {
   const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
   const fetchThreadRowsFunction = index.match(/async function fetchThreadRows\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
   const threadDotFunction = index.match(/function threadDotClassFor\(thread\) \{([\s\S]*?)\n\}/)?.[1] || '';
@@ -265,13 +266,22 @@ test('uni-app Android 手机端连接状态只以 Agent 在线信息为准', () 
   assert.match(index, /function applyAgentOnline\(data\)/);
   assert.match(index, /typeof data\.agentOnline !== 'boolean'/);
   assert.match(index, /message: data\.agentOnline \? 'Agent 在线' : 'Agent 未在线'/);
-  assert.match(index, /return agentState\.value\.online && \(activeStatus \|\| status === 'running' \|\| pendingThreadId === selectedThreadId\.value\);/);
-  assert.match(fetchThreadRowsFunction, /applyAgentOnline\(data\);/);
+  assert.match(index, /return agentState\.value\.online && syncState\.value\.fresh && \(activeStatus \|\| status === 'running'\);/);
+  assert.match(index, /function applyRelayState\(data\)/);
+  assert.match(index, /syncVersion/);
+  assert.match(index, /syncFresh/);
+  assert.match(fetchThreadRowsFunction, /!applyRelayState\(data\)/);
   assert.doesNotMatch(fetchThreadRowsFunction, /agentState\.value = \{ online: true/);
   assert.match(threadDotFunction, /if \(!agentState\.value\.online\) return 'dot-gray';/);
-  assert.match(index, /function applyThreadStatus\(status\) \{[\s\S]*applyAgentOnline\(status\);/);
-  assert.match(startTimersFunction, /}, 1500\);/);
-  assert.match(startTimersFunction, /}, 2000\);/);
+  assert.match(index, /function applyThreadStatus\(status\) \{[\s\S]*!applyRelayState\(status\)/);
+  assert.match(index, /createRealtimeSocket/);
+  assert.match(index, /function scheduleRealtimeRefresh\(\)/);
+  assert.match(index, /function scheduleRealtimeReconnect\(\)/);
+  assert.match(index, /function openRealtimeSocket\(\)/);
+  assert.match(index, /event\.type === 'session-updated'/);
+  assert.doesNotMatch(index, /setInterval\(/);
+  assert.match(startTimersFunction, /openRealtimeSocket\(\);/);
+  assert.doesNotMatch(startTimersFunction, /setInterval\(/);
 });
 
 test('uni-app Android 手机端切换对话时显示等待 UI 并防止旧请求覆盖', () => {
@@ -336,6 +346,9 @@ test('uni-app Android 请求支持页面销毁时取消', () => {
   assert.match(api, /complete\(\) \{[\s\S]*options\.unregisterTask\(task\)/);
   assert.match(api, /export function sendMessage[\s\S]*registerTask: options\.registerTask,[\s\S]*unregisterTask: options\.unregisterTask,/);
   assert.match(api, /export function stopCodex[\s\S]*registerTask: options\.registerTask,[\s\S]*unregisterTask: options\.unregisterTask,/);
+  assert.match(api, /export function createRealtimeSocket/);
+  assert.match(api, /x-mobile-typer-token/);
+  assert.match(api, /\/mobile/);
 });
 
 test('uni-app Android 设置页测试连接离开页面时取消请求', () => {

@@ -141,9 +141,11 @@ function Get-ThreadRow {
   const projectRow = [...document.querySelectorAll('[role="listitem"][aria-label]')]
     .find(el => el.getAttribute('aria-label') === projectName && el.querySelector('[role="list"]'));
   if (!projectRow) return { ok: false, code: 'PROJECT_ROW_NOT_FOUND', bodyText: document.body.innerText.slice(0, 800) };
-  const threadItem = [...projectRow.querySelectorAll('[role="list"] [role="listitem"]')]
-    .find(el => titleOf(el) === threadName);
-  if (!threadItem) return { ok: false, code: 'THREAD_ROW_NOT_FOUND', bodyText: projectRow.innerText.slice(0, 800) };
+  const threadItems = [...projectRow.querySelectorAll('[role="list"] [role="listitem"]')]
+    .filter(el => titleOf(el) === threadName);
+  if (!threadItems.length) return { ok: false, code: 'THREAD_ROW_NOT_FOUND', bodyText: projectRow.innerText.slice(0, 800) };
+  if (threadItems.length !== 1) return { ok: false, code: 'THREAD_ROW_AMBIGUOUS', bodyText: projectRow.innerText.slice(0, 800) };
+  const threadItem = threadItems[0];
   const row = threadItem.querySelector('[role="button"]');
   if (!row) return { ok: false, code: 'THREAD_BUTTON_NOT_FOUND', bodyText: threadItem.innerText.slice(0, 800) };
   row.scrollIntoView({ block: 'center' });
@@ -180,6 +182,7 @@ function Get-Composer {
     editorRect: rectOf(editor),
     sendRect: rectOf(sendButton),
     sendDisabled: !!sendButton?.disabled,
+    hasDraft: !!String(editor?.innerText || editor?.textContent || '').trim(),
     bodyText: document.body.innerText.slice(0, 800)
   };
 })()
@@ -263,6 +266,8 @@ function Send-ToThread {
     Start-Sleep -Milliseconds 1800
 
     $composer = Get-Composer -Socket $socket
+    if ($composer.hasDraft) { throw 'LOCAL_DRAFT_EXISTS' }
+    if ($composer.sendDisabled) { throw 'SEND_DISABLED' }
     $editorRect = $composer.editorRect
     Click-CdpPoint -Socket $socket -X ([double]($editorRect.x + 24)) -Y ([double]($editorRect.y + ($editorRect.height / 2)))
     Start-Sleep -Milliseconds 200
@@ -270,6 +275,7 @@ function Send-ToThread {
     Start-Sleep -Milliseconds 500
 
     $composer = Get-Composer -Socket $socket
+    if ($composer.sendDisabled) { throw 'SEND_DISABLED' }
     $sendRect = $composer.sendRect
     Click-CdpPoint -Socket $socket -X ([double]($sendRect.x + ($sendRect.width / 2))) -Y ([double]($sendRect.y + ($sendRect.height / 2)))
     Start-Sleep -Milliseconds 500
@@ -285,8 +291,14 @@ function Send-ToThread {
 }
 
 function Stop-CodexResponse {
+  if (-not $ProjectName) { throw 'PROJECT_NAME_REQUIRED' }
+  if (-not $ThreadName) { throw 'THREAD_NAME_REQUIRED' }
   $socket = Get-CodexSocket -BringToFront
   try {
+    $row = Get-ThreadRow -Socket $socket -Project $ProjectName -Thread $ThreadName
+    $rect = $row.rect
+    Click-CdpPoint -Socket $socket -X ([double]($rect.x + ($rect.width / 2))) -Y ([double]($rect.y + [Math]::Min($rect.height - 14, [Math]::Max(16, $rect.height * 0.72))))
+    Start-Sleep -Milliseconds 300
     Invoke-Cdp -Socket $socket -Method 'Input.dispatchKeyEvent' -Params @{
       type = 'keyDown'
       key = 'Escape'

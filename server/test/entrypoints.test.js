@@ -139,7 +139,7 @@ test('根目录只保留三端业务目录、README 和 Git 基础设施', () =>
     path.join(mobileDir, 'pages', 'index', 'index.vue'),
     path.join(mobileDir, 'docs', '使用说明.md'),
   ];
-  const allowedRoot = new Set(['.git', '.github', '.gitignore', 'README.md', 'desktop', 'server', 'app']);
+  const allowedRoot = new Set(['.agents', '.codex', '.git', '.gitattributes', '.github', '.gitignore', '.trellis', 'AGENTS.md', 'README.md', 'desktop', 'server', 'app']);
 
   for (const file of expectedFiles) assert.equal(fs.existsSync(file), true, file);
   assert.equal(fs.existsSync(path.join(desktopDir, 'README.md')), true);
