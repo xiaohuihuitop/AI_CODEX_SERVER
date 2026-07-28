@@ -97,14 +97,15 @@ npm run start:manager:gui
 
 ## Docker 发布
 
-推送 `build-*` tag 会触发 GitHub Actions：
+GitHub Actions **只**在推送名称匹配 `build-*` 的 tag 时构建 Docker 镜像；仅推送 `master` 不会触发构建。每次发布使用一个未存在的新版本号，先推送提交，再创建并推送 tag：
 
 ```powershell
-git tag build-v1.0
-git push origin build-v1.0
+git push origin master
+git tag build-v2.3
+git push origin build-v2.3
 ```
 
-工作流会构建 `server/` Docker 镜像，并把镜像 tar、`docker-compose.yml`、`env.example` 上传到 GitHub Release。
+不要复用或强制覆盖已发布 tag。工作流会构建 `server/` Docker 镜像，并把镜像 tar、`docker-compose.yml`、`env.example` 上传到对应 GitHub Release。
 
 ## 验证
 
