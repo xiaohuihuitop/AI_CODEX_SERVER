@@ -41,7 +41,7 @@ HOST=0.0.0.0
 - `HOST`：监听地址，默认 `0.0.0.0`。
 - 管理后台密码固定为 `xiaohuihui`，不从环境变量读取。
 
-设备 Key 存储在 Docker Compose 挂载的 `server/data/keys.json`，不写入环境变量。原始 Key 仅在后台创建时展示一次，仓库内只保存其哈希值。
+设备 Key 存储在 Docker Compose 挂载的 `server/data/keys.json`，不写入环境变量。后台创建时必须填写自定义 Key 和备注，随后会完整展示并支持复制。Key 原文会随该数据文件保存；请限制 `data/keys.json` 的宿主机访问权限。
 
 ## 本地启动
 
@@ -131,8 +131,8 @@ env.example
 
 - `GET /admin`：Key 管理页面。
 - `POST /admin/api/login`：登录管理后台。
-- `GET /admin/api/keys`：列出 Key（不返回原始 Key）。
-- `POST /admin/api/keys`：创建 Key，原始 Key 只在本次响应中返回。
+- `GET /admin/api/keys`：列出完整 Key、备注和状态。
+- `POST /admin/api/keys`：使用自定义 Key 和备注创建设备记录。
 - `POST /admin/api/keys/<id>/disable`：禁用 Key，并立即断开该 Key 的客户端连接。
 - `DELETE /admin/api/keys/<id>`：删除 Key，并立即断开该 Key 的客户端连接。
 

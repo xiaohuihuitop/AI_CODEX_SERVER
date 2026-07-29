@@ -9,20 +9,20 @@
     body { max-width: 820px; margin: 0 auto; padding: 32px 16px; }
     h1 { margin: 0 0 6px; font-size: 24px; } p { color: #5b6472; }
     section { background: #fff; border: 1px solid #d9dde3; border-radius: 8px; padding: 18px; margin-top: 16px; }
-    form { display: flex; gap: 8px; } input { flex: 1; min-width: 0; padding: 9px 10px; border: 1px solid #9ca3af; border-radius: 5px; font: inherit; }
+    form { display: flex; flex-wrap: wrap; gap: 8px; } input { flex: 1 1 220px; min-width: 0; padding: 9px 10px; border: 1px solid #9ca3af; border-radius: 5px; font: inherit; }
     button { padding: 9px 12px; border: 0; border-radius: 5px; background: #1f6feb; color: white; font: inherit; cursor: pointer; } button.secondary { background: #5b6472; } button.danger { background: #b42318; }
     table { width: 100%; border-collapse: collapse; margin-top: 14px; } th, td { padding: 10px 6px; border-bottom: 1px solid #e5e7eb; text-align: left; vertical-align: middle; } th { color: #5b6472; font-size: 13px; } .actions { white-space: nowrap; }
-    #app, #login, #created { display: none; } #notice { min-height: 22px; color: #b42318; } #created code { display: block; padding: 10px; margin-top: 8px; background: #eef5ff; word-break: break-all; }
+    #app, #login, #created { display: none; } #notice { min-height: 22px; color: #b42318; } #notice.success { color: #15803d; } #created code { display: block; padding: 10px; margin-top: 8px; background: #eef5ff; word-break: break-all; }
   </style>
 </head>
 <body>
   <h1>Codex Bridge Key 管理</h1>
-  <p>创建后仅显示一次原始 Key，请立即配置到对应 Windows 管理器和手机端。</p>
+  <p>每台电脑使用一个自定义 Key；Key 会完整显示，可复制到 Windows 管理器和手机端。</p>
   <div id="notice"></div>
   <section id="login"><form id="login-form"><input id="password" type="password" autocomplete="current-password" placeholder="管理密码" required><button>登录</button></form></section>
   <div id="app">
-    <section><form id="create-form"><input id="note" maxlength="80" placeholder="Key 备注，例如：办公室电脑" required><button>创建 Key</button><button id="logout" type="button" class="secondary">退出</button></form></section>
-    <section id="created"><strong>新 Key</strong><code id="new-key"></code></section>
+    <section><form id="create-form"><input id="note" maxlength="80" placeholder="Key 备注，例如：办公室电脑" required><input id="token" minlength="8" maxlength="128" pattern="[A-Za-z0-9_-]{8,128}" placeholder="自定义 Key，例如：office_pc_2026" required><button>创建 Key</button><button id="logout" type="button" class="secondary">退出</button></form></section>
+    <section id="created"><strong>新 Key</strong><code id="new-key"></code><button id="copy-new" type="button" class="secondary">复制 Key</button></section>
     <section><table><thead><tr><th>备注</th><th>Key 标识</th><th>创建时间</th><th>状态</th><th></th></tr></thead><tbody id="keys"></tbody></table></section>
   </div>
   <script>
@@ -31,7 +31,20 @@
     const app = document.querySelector('#app');
     const created = document.querySelector('#created');
     const keys = document.querySelector('#keys');
-    function message(text = '') { notice.textContent = text; }
+    function message(text = '', success = false) { notice.textContent = text; notice.className = success ? 'success' : ''; }
+    function copyKey(token) {
+      const input = document.createElement('textarea');
+      input.value = token;
+      input.setAttribute('readonly', '');
+      input.style.position = 'fixed';
+      input.style.opacity = '0';
+      document.body.append(input);
+      input.select();
+      const copied = document.execCommand('copy');
+      input.remove();
+      if (!copied) throw new Error('浏览器未能复制 Key。');
+      message('Key 已复制。', true);
+    }
     async function request(url, options) {
       const response = await fetch(url, options);
       const data = await response.json();
@@ -44,11 +57,17 @@
         const state = row.disabledAt ? '已禁用' : '可用';
         tr.innerHTML = `<td></td><td></td><td></td><td></td><td class="actions"></td>`;
         tr.children[0].textContent = row.note;
-        tr.children[1].textContent = row.tokenHint;
+        tr.children[1].textContent = row.token || '旧 Key 不可恢复，请新建替换';
         tr.children[2].textContent = new Date(row.createdAt).toLocaleString();
         tr.children[3].textContent = state;
+        if (row.token) {
+          const copy = document.createElement('button'); copy.textContent = '复制'; copy.className = 'secondary';
+          copy.onclick = () => { try { copyKey(row.token); } catch (error) { message(error.message); } };
+          tr.children[4].append(copy);
+        }
         if (!row.disabledAt) {
           const disable = document.createElement('button'); disable.textContent = '禁用'; disable.className = 'danger';
+          disable.style.marginLeft = '6px';
           disable.onclick = async () => { if (confirm(`禁用“${row.note}”后该电脑将立即断开，是否继续？`)) { await request(`/admin/api/keys/${row.id}/disable`, { method: 'POST' }); await load(); } };
           tr.children[4].append(disable);
         }
@@ -60,7 +79,8 @@
     }
     async function load() { const data = await request('/admin/api/keys'); render(data.keys); login.style.display = 'none'; app.style.display = 'block'; }
     document.querySelector('#login-form').onsubmit = async event => { event.preventDefault(); try { await request('/admin/api/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ password: document.querySelector('#password').value }) }); await load(); } catch (error) { message(error.message); } };
-    document.querySelector('#create-form').onsubmit = async event => { event.preventDefault(); try { const data = await request('/admin/api/keys', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ note: document.querySelector('#note').value }) }); document.querySelector('#new-key').textContent = data.token; created.style.display = 'block'; document.querySelector('#note').value = ''; await load(); } catch (error) { message(error.message); } };
+    document.querySelector('#create-form').onsubmit = async event => { event.preventDefault(); try { const data = await request('/admin/api/keys', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ note: document.querySelector('#note').value, token: document.querySelector('#token').value }) }); document.querySelector('#new-key').textContent = data.token; created.style.display = 'block'; document.querySelector('#note').value = ''; document.querySelector('#token').value = ''; await load(); } catch (error) { message(error.message); } };
+    document.querySelector('#copy-new').onclick = () => { try { copyKey(document.querySelector('#new-key').textContent); } catch (error) { message(error.message); } };
     document.querySelector('#logout').onclick = async () => { await request('/admin/api/logout', { method: 'POST' }); app.style.display = 'none'; created.style.display = 'none'; login.style.display = 'block'; };
     load().catch(() => { login.style.display = 'block'; });
   </script>

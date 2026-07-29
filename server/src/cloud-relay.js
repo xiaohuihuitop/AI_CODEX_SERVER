@@ -338,7 +338,7 @@ function createCloudRelayServer(options = {}) {
         }
         if (req.method === 'POST' && url.pathname === '/admin/api/keys') {
           const payload = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');
-          const created = keyStore.create(payload.note);
+          const created = keyStore.create(payload.note, payload.token);
           return sendJson(res, 201, { ok: true, ...created });
         }
         const keyMatch = url.pathname.match(/^\/admin\/api\/keys\/([^/]+)(?:\/(disable))?$/);

@@ -25,7 +25,9 @@ test('Key 管理后台创建、禁用和持久化设备 Key', async () => {
   try {
     const adminPage = await fetch(`${origin}/admin`);
     assert.equal(adminPage.status, 200);
-    assert.match(await adminPage.text(), /Codex Bridge Key 管理/);
+    const adminHtml = await adminPage.text();
+    assert.match(adminHtml, /Codex Bridge Key 管理/);
+    assert.match(adminHtml, /自定义 Key/);
 
     const unauthorized = await json(`${origin}/admin/api/keys`);
     assert.equal(unauthorized.response.status, 401);
@@ -41,14 +43,24 @@ test('Key 管理后台创建、禁用和持久化设备 Key', async () => {
     const created = await json(`${origin}/admin/api/keys`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', cookie },
-      body: JSON.stringify({ note: '办公室电脑' }),
+      body: JSON.stringify({ note: '办公室电脑', token: 'office_pc_2026' }),
     });
     assert.equal(created.response.status, 201);
-    assert.match(created.body.token, /^cdb_/);
+    assert.equal(created.body.token, 'office_pc_2026');
     assert.equal(created.body.key.note, '办公室电脑');
+    assert.equal(created.body.key.token, 'office_pc_2026');
     assert.equal(keyStore.has(created.body.token), true);
     const reloadedStore = createKeyStore(path.join(dir, 'keys.json'));
     assert.equal(reloadedStore.has(created.body.token), true);
+    assert.equal(reloadedStore.list()[0].token, 'office_pc_2026');
+
+    const duplicate = await json(`${origin}/admin/api/keys`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie },
+      body: JSON.stringify({ note: '重复 Key', token: 'office_pc_2026' }),
+    });
+    assert.equal(duplicate.response.status, 409);
+    assert.equal(duplicate.body.code, 'KEY_DUPLICATE');
 
     const health = await json(`${origin}/codex/health?token=${encodeURIComponent(created.body.token)}`);
     assert.equal(health.response.status, 200);

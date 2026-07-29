@@ -2,8 +2,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const KEY_PREFIX = 'cdb_';
-const TOKEN_BYTES = 24;
+const KEY_PATTERN = /^[A-Za-z0-9_-]{8,128}$/;
 
 function tokenHash(token) {
   return crypto.createHash('sha256').update(String(token)).digest('hex');
@@ -19,16 +18,16 @@ function publicKey(key) {
     note: key.note,
     createdAt: key.createdAt,
     disabledAt: key.disabledAt || '',
-    tokenHint: key.tokenHint,
+    token: typeof key.token === 'string' ? key.token : '',
   };
 }
 
 /**
- * AI:创建持久化设备 Key 仓库，仓库只保存 Key 哈希，原始 Key 仅在创建时返回。
+ * AI:创建持久化设备 Key 仓库，支持自定义 Key 和备注。
  *
  * @param {string} filePath Key 数据文件路径。
  * @param {string[]} bootstrapTokens 仅用于首次迁移的旧环境变量 Key。
- * @returns {{has: (token: string) => boolean, matches: (id: string, token: string) => boolean, list: () => object[], create: (note: string) => object, disable: (id: string) => boolean, remove: (id: string) => boolean}}
+ * @returns {{has: (token: string) => boolean, matches: (id: string, token: string) => boolean, list: () => object[], create: (note: string, token: string) => object, disable: (id: string) => boolean, remove: (id: string) => boolean}}
  */
 function createKeyStore(filePath, bootstrapTokens = []) {
   const absolutePath = path.resolve(filePath);
@@ -46,7 +45,7 @@ function createKeyStore(filePath, bootstrapTokens = []) {
       id: crypto.randomUUID(),
       note: `迁移的旧 Key ${index + 1}`,
       tokenHash: tokenHash(token),
-      tokenHint: `${String(token).slice(0, 6)}...`,
+      token: String(token),
       createdAt,
       disabledAt: '',
     }));
@@ -72,23 +71,29 @@ function createKeyStore(filePath, bootstrapTokens = []) {
     list() {
       return keys.map(publicKey);
     },
-    create(note) {
+    create(note, token) {
       const normalizedNote = normalizeNote(note);
       if (!normalizedNote) {
         throw Object.assign(new Error('请填写 Key 备注。'), { status: 400, code: 'KEY_NOTE_REQUIRED' });
       }
-      const token = `${KEY_PREFIX}${crypto.randomBytes(TOKEN_BYTES).toString('base64url')}`;
+      const normalizedToken = String(token || '').trim();
+      if (!KEY_PATTERN.test(normalizedToken)) {
+        throw Object.assign(new Error('Key 必须为 8-128 位字母、数字、下划线或连字符。'), { status: 400, code: 'KEY_INVALID' });
+      }
+      if (keys.some(item => item.tokenHash === tokenHash(normalizedToken))) {
+        throw Object.assign(new Error('Key 已存在，请使用其他 Key。'), { status: 409, code: 'KEY_DUPLICATE' });
+      }
       const key = {
         id: crypto.randomUUID(),
         note: normalizedNote,
-        tokenHash: tokenHash(token),
-        tokenHint: `${token.slice(0, 10)}...${token.slice(-4)}`,
+        tokenHash: tokenHash(normalizedToken),
+        token: normalizedToken,
         createdAt: new Date().toISOString(),
         disabledAt: '',
       };
       keys.push(key);
       persist();
-      return { key: publicKey(key), token };
+      return { key: publicKey(key), token: normalizedToken };
     },
     disable(id) {
       const key = keys.find(item => item.id === id);
