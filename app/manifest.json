@@ -1,6 +1,6 @@
 {
   "name": "Codex 手机端",
-  "appid": "__UNI__CODEXBRIDGE",
+  "appid": "__UNI__EC972AA",
   "description": "通过云端服务器控制 Windows Codex Desktop",
   "versionName": "0.1.0",
   "versionCode": 100,
@@ -26,6 +26,9 @@
           "<uses-permission android:name=\"android.permission.ACCESS_NETWORK_STATE\"/>"
         ],
         "usesCleartextTraffic": true
+      },
+      "ios": {
+        "dSYMs": false
       }
     }
   },
@@ -33,5 +36,7 @@
   "mp-weixin": {},
   "h5": {
     "title": "Codex 手机端"
-  }
+  },
+  "locale": "zh-Hans",
+  "fallbackLocale": "zh-Hans"
 }
