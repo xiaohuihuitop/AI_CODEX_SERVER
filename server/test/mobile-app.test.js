@@ -6,6 +6,12 @@ const test = require('node:test');
 const root = path.join(__dirname, '..', '..');
 const appDir = path.join(root, 'app');
 
+function loadMobileMarkdown() {
+  const source = fs.readFileSync(path.join(appDir, 'utils', 'markdown.js'), 'utf8')
+    .replace(/export function /g, 'function ');
+  return Function(`${source}\nreturn { renderMarkdownToHtml, stripCodexUiDirectives };`)();
+}
+
 function listSourceFiles(dir) {
   const files = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -146,6 +152,29 @@ test('uni-app Android 手机端展示前会清理 Codex UI 上下文', () => {
   assert.match(markdown, /renderMarkdownToHtml\(markdown\)[\s\S]*stripCodexUiDirectives\(markdown\)/);
   assert.match(index, /renderMarkdown\(item\.row\.text \|\| ''\)/);
   assert.match(index, /renderMarkdown\(step\.text \|\| ''\)/);
+});
+
+test('uni-app Android 手机端不展示附件元数据且紧凑渲染代码块', () => {
+  const { renderMarkdownToHtml } = loadMobileMarkdown();
+  const html = renderMarkdownToHtml([
+    '# Files mentioned by the user:',
+    '',
+    '## Screenshot_2026.jpg:',
+    'C:/Users/admin/Downloads/Screenshot_2026.jpg',
+    '',
+    '## My request for Codex:',
+    '请处理手机端显示。',
+    '',
+    '```text',
+    'C:/Users/admin/Downloads/a-very-long-path.txt',
+    '```',
+  ].join('\n'));
+
+  assert.doesNotMatch(html, /Files mentioned by the user/);
+  assert.doesNotMatch(html, /Screenshot_2026/);
+  assert.match(html, /请处理手机端显示。/);
+  assert.match(html, /word-break:break-all/);
+  assert.doesNotMatch(html, /<pre><code>/);
 });
 
 test('uni-app Android 手机端轮询刷新不强制推动阅读位置和处理过程展开状态', () => {

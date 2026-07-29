@@ -13,10 +13,12 @@ const SAFE_PROTOCOLS = {
 export function stripCodexUiDirectives(text) {
   const lines = [];
   let inBrowserContext = false;
+  let inAttachmentContext = false;
 
   for (const line of String(text || '').split(/\r?\n/)) {
     const trimmed = line.trim();
     const isBrowserHeader = /^(?:#+\s*)?In app browser:\s*$/i.test(trimmed);
+    const isAttachmentHeader = /^(?:#+\s*)?Files mentioned by the user:\s*$/i.test(trimmed);
     const isRequestHeader = /^(?:#+\s*)?My request for Codex:\s*$/i.test(trimmed);
     const isBrowserMeta = /^[-*]\s*(?:The user has the in-app browser open\.?|Current URL:.*)$/i.test(trimmed);
 
@@ -24,10 +26,16 @@ export function stripCodexUiDirectives(text) {
       inBrowserContext = true;
       continue;
     }
-    if (isRequestHeader) {
-      inBrowserContext = false;
+    if (isAttachmentHeader) {
+      inAttachmentContext = true;
       continue;
     }
+    if (isRequestHeader) {
+      inBrowserContext = false;
+      inAttachmentContext = false;
+      continue;
+    }
+    if (inAttachmentContext) continue;
     if (inBrowserContext) {
       if (!trimmed || isBrowserMeta) continue;
       inBrowserContext = false;
@@ -144,7 +152,8 @@ export function renderMarkdownToHtml(markdown) {
         index += 1;
       }
       if (index < lines.length) index += 1;
-      html.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
+      const content = escapeHtml(code.join('\n')).replace(/\n/g, '<br/>');
+      html.push(`<div style="margin:8px 0;padding:8px 10px;border-radius:4px;background:#111827;color:#f8fafc;font-family:monospace;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-all;">${content}</div>`);
       continue;
     }
 
