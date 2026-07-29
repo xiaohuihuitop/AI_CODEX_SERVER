@@ -26,3 +26,26 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 2: 修复构建与完善设备 Key 管理
+
+**Date**: 2026-07-29
+**Task**: 修复构建与完善设备 Key 管理
+**Branch**: `master`
+
+### Summary
+
+修复 Relay WebSocket 回归和 CI 测试挂起；固定后台密码；支持自定义设备 Key、完整展示和复制。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `00c952c` | (see git log) |
+| `6ed76b0` | (see git log) |
+| `0b89d52` | (see git log) |
+
+### Status
+
+[OK] **Completed**
