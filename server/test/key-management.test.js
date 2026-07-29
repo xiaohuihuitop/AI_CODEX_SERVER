@@ -5,13 +5,10 @@ const path = require('node:path');
 const test = require('node:test');
 const { createCloudRelayServer } = require('../src/cloud-relay');
 const { createKeyStore } = require('../src/key-store');
+const { closeRelayServer } = require('../test-utils/relay-server');
 
 function listen(server) {
   return new Promise(resolve => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
-}
-
-function close(server) {
-  return new Promise(resolve => server.close(resolve));
 }
 
 async function json(url, options) {
@@ -63,7 +60,7 @@ test('Key 管理后台创建、禁用和持久化设备 Key', async () => {
     const rejected = await json(`${origin}/codex/health?token=${encodeURIComponent(created.body.token)}`);
     assert.equal(rejected.response.status, 401);
   } finally {
-    await close(server);
+    await closeRelayServer(server);
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

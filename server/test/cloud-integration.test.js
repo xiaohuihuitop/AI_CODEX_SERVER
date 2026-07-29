@@ -3,6 +3,7 @@ const path = require('node:path');
 const test = require('node:test');
 const { createCloudRelayServer } = require('../src/cloud-relay');
 const { createDesktopAgentClient } = require('../../desktop/src/desktop-agent-client');
+const { closeRelayServer } = require('../test-utils/relay-server');
 
 const publicDir = path.join(__dirname, '..', 'public');
 
@@ -10,10 +11,6 @@ function listen(server) {
   return new Promise(resolve => {
     server.listen(0, '127.0.0.1', () => resolve(server.address().port));
   });
-}
-
-function closeServer(server) {
-  return new Promise(resolve => server.close(resolve));
 }
 
 function openSocket(ws) {
@@ -60,5 +57,5 @@ test('云端 relay 和 desktop-agent 通过服务器缓存完成手机线程请�
   ]);
 
   ws.close();
-  await closeServer(server);
+  await closeRelayServer(server);
 });

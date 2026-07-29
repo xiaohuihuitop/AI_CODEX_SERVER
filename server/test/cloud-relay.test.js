@@ -5,6 +5,7 @@ const test = require('node:test');
 const { WebSocket } = require('ws');
 const { createCloudRelayServer } = require('../src/cloud-relay');
 const { createCloudSessionCache } = require('../src/session-cache');
+const { closeRelayServer } = require('../test-utils/relay-server');
 
 const publicDir = path.join(__dirname, '..', 'public');
 
@@ -12,10 +13,6 @@ function listen(server) {
   return new Promise(resolve => {
     server.listen(0, '127.0.0.1', () => resolve(server.address().port));
   });
-}
-
-function close(server) {
-  return new Promise(resolve => server.close(resolve));
 }
 
 async function readJson(res) {
@@ -73,7 +70,7 @@ test('云端 relay 手机线程请求读取服务器缓存', async () => {
   ]);
 
   agent.close();
-  await close(server);
+  await closeRelayServer(server);
 });
 
 test('云端 relay 向同 token 手机推送 Agent 状态和会话更新事件', async () => {
@@ -106,7 +103,7 @@ test('云端 relay 向同 token 手机推送 Agent 状态和会话更新事件',
   assert.equal(events.some(event => event.type === 'agent-status' && event.online === false), true);
 
   mobile.close();
-  await close(server);
+  await closeRelayServer(server);
 });
 
 test('云端 relay 在 Agent 未继续同步时标记状态过期并冻结版本', async () => {
@@ -136,7 +133,7 @@ test('云端 relay 在 Agent 未继续同步时标记状态过期并冻结版本
 
   agent.close();
   mobile.close();
-  await close(server);
+  await closeRelayServer(server);
 });
 
 test('云端 relay 没有缓存时线程列表返回空数组', async () => {
@@ -155,7 +152,7 @@ test('云端 relay 没有缓存时线程列表返回空数组', async () => {
   assert.equal(body.agentOnline, false);
   assert.deepEqual(body.threads, []);
 
-  await close(server);
+  await closeRelayServer(server);
 });
 
 test('云端 relay 允许不带 token 加载公开静态脚本', async () => {
@@ -176,7 +173,7 @@ test('云端 relay 允许不带 token 加载公开静态脚本', async () => {
   assert.equal(home.status, 401);
   assert.equal(api.status, 401);
 
-  await close(server);
+  await closeRelayServer(server);
 });
 
 test('云端 relay 拒绝错误 token 的 Agent 连接', async () => {
@@ -195,7 +192,7 @@ test('云端 relay 拒绝错误 token 的 Agent 连接', async () => {
   assert.equal(closeEvent.code, 1008);
   assert.equal(closeEvent.reason, 'UNAUTHORIZED');
 
-  await close(server);
+  await closeRelayServer(server);
 });
 
 test('云端 relay 将手机发送请求转发给 Agent', async () => {
@@ -231,7 +228,7 @@ test('云端 relay 将手机发送请求转发给 Agent', async () => {
   assert.equal(body.watch.threadId, 'thread-1');
 
   agent.close();
-  await close(server);
+  await closeRelayServer(server);
 });
 
 test('云端 relay 在 Agent 断开时立即结束待转发请求', async () => {
@@ -259,7 +256,7 @@ test('云端 relay 在 Agent 断开时立即结束待转发请求', async () => 
   assert.equal(body.ok, false);
   assert.equal(body.code, 'AGENT_DISCONNECTED');
 
-  await close(server);
+  await closeRelayServer(server);
 });
 
 test('云端 relay 从服务器缓存返回历史和状态', async () => {
@@ -310,7 +307,7 @@ test('云端 relay 从服务器缓存返回历史和状态', async () => {
   assert.equal(status.turns[0].steps[0].text, '我在处理');
 
   agent.close();
-  await close(server);
+  await closeRelayServer(server);
 });
 
 test('云端缓存支持渲染为用户消息、处理过程、最终回复顺序', () => {

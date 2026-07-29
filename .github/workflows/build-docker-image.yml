@@ -37,7 +37,7 @@ jobs:
 
       - name: Run tests
         working-directory: server
-        run: npm test
+        run: timeout 8m npm test
 
       - name: Run syntax check
         working-directory: server

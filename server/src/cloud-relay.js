@@ -411,6 +411,7 @@ function createCloudRelayServer(options = {}) {
   });
   const wss = new WebSocketServer({ noServer: true });
   server.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     if (url.pathname !== '/agent' && url.pathname !== '/mobile') {
       socket.destroy();
       return;
