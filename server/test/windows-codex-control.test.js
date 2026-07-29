@@ -14,6 +14,11 @@ function extractGetThreadRowExpression(script, projectName, threadName) {
     .replaceAll('$threadJson', JSON.stringify(threadName));
 }
 
+function extractGetOpenThreadsExpression(script) {
+  const functionText = script.match(/function Get-OpenThreads \{[\s\S]*?\n\}\r?\n\r?\nfunction Send-ToThread/)?.[0] || '';
+  return functionText.match(/\$expression = @'\r?\n([\s\S]*?)\r?\n'@/)?.[1] || '';
+}
+
 function makeElement({ tag = 'div', attrs = {}, text = '', rect = {}, children = [] }) {
   const element = {
     tagName: tag.toUpperCase(),
@@ -110,11 +115,22 @@ function buildProjectDocument() {
       }),
     ],
   });
+  const navigation = makeElement({
+    attrs: { role: 'navigation', 'aria-label': '已安排任务文件夹' },
+    text: '项目\nGUI_LED\ncontrol\napp\nslave',
+    rect: { x: 0, y: 0, width: 288, height: 640 },
+    children: [makeElement({
+      attrs: { role: 'list' },
+      text: projectRow.innerText,
+      rect: { x: 0, y: 40, width: 288, height: 560 },
+      children: [projectRow],
+    })],
+  });
   const document = makeElement({
     tag: 'document',
-    children: [projectRow],
+    children: [navigation],
   });
-  document.body = { innerText: projectRow.innerText };
+  document.body = { innerText: navigation.innerText };
   return document;
 }
 
@@ -167,6 +183,21 @@ test('脚本支持读取 Codex Desktop 当前打开线程', () => {
   assert.match(script, /function Get-OpenThreads/);
   assert.match(script, /projectName/);
   assert.match(script, /threadName/);
+});
+
+test('侧栏导航结构可以提取项目中的打开线程', () => {
+  const script = fs.readFileSync(scriptPath, 'utf8');
+  const expression = extractGetOpenThreadsExpression(script);
+  const result = Function('document', `return ${expression};`)(buildProjectDocument());
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.threads, [
+    { projectName: 'GUI_LED', threadName: 'control' },
+    { projectName: 'GUI_LED', threadName: 'app' },
+    { projectName: 'GUI_LED', threadName: 'slave' },
+  ]);
+  assert.equal(expression.includes("document.querySelectorAll('div')"), false);
+  assert.match(expression, /\[role="navigation"\]/);
 });
 
 test('后台读取打开线程不把 Codex Desktop 拉到前台', () => {

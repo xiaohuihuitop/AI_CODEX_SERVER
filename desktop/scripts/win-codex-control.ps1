@@ -203,17 +203,11 @@ function Get-OpenThreads {
     $expression = @'
 (() => {
   const labels = {
-    projects: '\u9879\u76ee',
     empty: '\u6682\u65e0\u5bf9\u8bdd'
   };
   const timePattern = /^\d+\s*(\u79d2|\u5206|\u5c0f\u65f6|\u5929|\u5468|\u4e2a\u6708|\u5e74)$/;
-  const root = [...document.querySelectorAll('div')]
-    .filter(el => {
-      const rect = el.getBoundingClientRect();
-      const text = (el.innerText || '').trim();
-      return rect.width > 180 && rect.width < 360 && rect.height > 120 && text.includes(labels.projects) && text.includes('\n');
-    })
-    .sort((a, b) => a.innerText.length - b.innerText.length)[0];
+  const root = [...document.querySelectorAll('[role="navigation"]')]
+    .find(el => el.querySelector('[role="listitem"][aria-label] [role="list"]'));
   if (!root) return { ok: false, code: 'OPEN_THREADS_ROOT_NOT_FOUND', bodyText: document.body.innerText.slice(0, 1000) };
 
   const projectRows = [...root.querySelectorAll('[role="listitem"]')]
