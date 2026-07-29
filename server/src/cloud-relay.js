@@ -1,14 +1,17 @@
 const http = require('node:http');
+const crypto = require('node:crypto');
 const path = require('node:path');
 const { WebSocketServer } = require('ws');
 const { readBody, sendJson, sendOptions, serveStatic } = require('./http-utils');
 const { createCloudSessionCache } = require('./session-cache');
+const { createKeyStore } = require('./key-store');
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_SYNC_STALE_MS = 10000;
 const ALLOWED_ACTIONS = new Set(['threads', 'history', 'status', 'send', 'stop']);
 const PUBLIC_ASSET_EXTENSIONS = new Set(['.css', '.ico', '.js', '.json', '.png', '.svg', '.webmanifest']);
+const ADMIN_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 
 function tokenFromRequest(req) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -24,6 +27,26 @@ function createRelayState() {
     pending: new Map(),
     nextId: 0,
   };
+}
+
+function cookieValue(req, name) {
+  const cookies = String(req.headers.cookie || '').split(';');
+  for (const cookie of cookies) {
+    const [key, ...parts] = cookie.trim().split('=');
+    if (key === name) return decodeURIComponent(parts.join('='));
+  }
+  return '';
+}
+
+function secureEqual(left, right) {
+  const leftBuffer = Buffer.from(String(left));
+  const rightBuffer = Buffer.from(String(right));
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+}
+
+function legacyKeyStore(tokens) {
+  const allowed = new Set(tokens || []);
+  return { has: token => allowed.has(token), matches: () => false, list: () => [], create: () => { throw new Error('不支持 Key 管理。'); }, disable: () => false, remove: () => false };
 }
 
 function syncHealthFor(state, token) {
@@ -123,6 +146,23 @@ function rejectPendingForToken(state, token) {
       status: 503,
       code: 'AGENT_DISCONNECTED',
     }));
+  }
+}
+
+function disconnectToken(state, token) {
+  const agent = state.agents.get(token);
+  if (agent) agent.close(1008, 'TOKEN_REVOKED');
+  const clients = state.mobileClients.get(token);
+  if (clients) {
+    for (const ws of clients) ws.close(1008, 'TOKEN_REVOKED');
+  }
+  rejectPendingForToken(state, token);
+}
+
+function disconnectKey(state, keyStore, keyId) {
+  const tokens = new Set([...state.agents.keys(), ...state.mobileClients.keys()]);
+  for (const token of tokens) {
+    if (keyStore.matches(keyId, token)) disconnectToken(state, token);
   }
 }
 
@@ -234,17 +274,92 @@ function isPublicAssetRequest(req) {
   return PUBLIC_ASSET_EXTENSIONS.has(ext);
 }
 
+function isAdminRequest(url) {
+  return url.pathname === '/admin' || url.pathname === '/admin/' || url.pathname.startsWith('/admin/api/');
+}
+
+function isAdminAuthorized(req, state) {
+  const sessionId = cookieValue(req, 'codexBridgeAdmin');
+  const expiresAt = state.adminSessions.get(sessionId);
+  if (!expiresAt || expiresAt <= Date.now()) {
+    state.adminSessions.delete(sessionId);
+    return false;
+  }
+  return true;
+}
+
+function sendAdminSession(res, sessionId) {
+  res.setHeader('set-cookie', `codexBridgeAdmin=${encodeURIComponent(sessionId)}; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=${ADMIN_SESSION_TTL_MS / 1000}`);
+}
+
+function clearAdminSession(res) {
+  res.setHeader('set-cookie', 'codexBridgeAdmin=; HttpOnly; SameSite=Strict; Path=/admin; Max-Age=0');
+}
+
 function createCloudRelayServer(options = {}) {
-  const tokens = new Set(options.tokens || String(process.env.CODEX_CLOUD_TOKENS || process.env.CODEX_CLOUD_TOKEN || '').split(',').map(item => item.trim()).filter(Boolean));
+  const bootstrapTokens = String(process.env.CODEX_CLOUD_TOKENS || process.env.CODEX_CLOUD_TOKEN || '').split(',').map(item => item.trim()).filter(Boolean);
+  const keyStore = options.keyStore || (options.tokens ? legacyKeyStore(options.tokens) : createKeyStore(options.keyStorePath || process.env.CODEX_CLOUD_KEY_STORE_PATH || '/data/keys.json', bootstrapTokens));
+  const adminPassword = String(options.adminPassword || process.env.CODEX_ADMIN_PASSWORD || 'xiaohuihui');
   const publicDir = options.publicDir || path.join(__dirname, '..', 'public');
   const requestTimeoutMs = Number(options.requestTimeoutMs || process.env.CODEX_RELAY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
   const syncStaleMs = Math.max(1000, Number(options.syncStaleMs || process.env.CODEX_RELAY_SYNC_STALE_MS || DEFAULT_SYNC_STALE_MS));
   const state = createRelayState();
+  state.adminSessions = new Map();
   const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') return sendOptions(res);
+    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+    if (isAdminRequest(url)) {
+      try {
+        if (req.method === 'GET' && (url.pathname === '/admin' || url.pathname === '/admin/')) {
+          const adminRequest = Object.create(req);
+          adminRequest.url = '/admin.html';
+          return serveStatic(adminRequest, res, publicDir);
+        }
+        if (req.method === 'POST' && url.pathname === '/admin/api/login') {
+          const payload = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');
+          if (!secureEqual(payload.password, adminPassword)) {
+            return sendJson(res, 401, { ok: false, code: 'ADMIN_UNAUTHORIZED', message: '管理密码不正确。' });
+          }
+          const sessionId = crypto.randomBytes(32).toString('base64url');
+          state.adminSessions.set(sessionId, Date.now() + ADMIN_SESSION_TTL_MS);
+          sendAdminSession(res, sessionId);
+          return sendJson(res, 200, { ok: true });
+        }
+        if (!isAdminAuthorized(req, state)) {
+          return sendJson(res, 401, { ok: false, code: 'ADMIN_UNAUTHORIZED', message: '请先登录管理后台。' });
+        }
+        if (req.method === 'POST' && url.pathname === '/admin/api/logout') {
+          state.adminSessions.delete(cookieValue(req, 'codexBridgeAdmin'));
+          clearAdminSession(res);
+          return sendJson(res, 200, { ok: true });
+        }
+        if (req.method === 'GET' && url.pathname === '/admin/api/keys') {
+          return sendJson(res, 200, { ok: true, keys: keyStore.list() });
+        }
+        if (req.method === 'POST' && url.pathname === '/admin/api/keys') {
+          const payload = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');
+          const created = keyStore.create(payload.note);
+          return sendJson(res, 201, { ok: true, ...created });
+        }
+        const keyMatch = url.pathname.match(/^\/admin\/api\/keys\/([^/]+)(?:\/(disable))?$/);
+        if (keyMatch && req.method === 'POST' && keyMatch[2] === 'disable') {
+          if (!keyStore.disable(keyMatch[1])) return sendJson(res, 404, { ok: false, code: 'KEY_NOT_FOUND', message: 'Key 不存在或已禁用。' });
+          disconnectKey(state, keyStore, keyMatch[1]);
+          return sendJson(res, 200, { ok: true });
+        }
+        if (keyMatch && req.method === 'DELETE' && !keyMatch[2]) {
+          disconnectKey(state, keyStore, keyMatch[1]);
+          if (!keyStore.remove(keyMatch[1])) return sendJson(res, 404, { ok: false, code: 'KEY_NOT_FOUND', message: 'Key 不存在。' });
+          return sendJson(res, 200, { ok: true });
+        }
+        return sendJson(res, 404, { ok: false, code: 'ADMIN_NOT_FOUND', message: '管理接口不存在。' });
+      } catch (error) {
+        return sendRelayError(res, error);
+      }
+    }
     if (isPublicAssetRequest(req)) return serveStatic(req, res, publicDir);
     const token = tokenFromRequest(req);
-    if (!tokens.has(token)) {
+    if (!keyStore.has(token)) {
       return sendJson(res, 401, { ok: false, code: 'UNAUTHORIZED', message: '访问令牌不正确。' });
     }
     try {
@@ -296,14 +411,13 @@ function createCloudRelayServer(options = {}) {
   });
   const wss = new WebSocketServer({ noServer: true });
   server.on('upgrade', (req, socket, head) => {
-    const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
     if (url.pathname !== '/agent' && url.pathname !== '/mobile') {
       socket.destroy();
       return;
     }
     const token = tokenFromRequest(req);
     wss.handleUpgrade(req, socket, head, ws => {
-      if (!tokens.has(token)) {
+      if (!keyStore.has(token)) {
         rejectAgent(ws, 1008, 'UNAUTHORIZED');
         return;
       }
@@ -312,6 +426,7 @@ function createCloudRelayServer(options = {}) {
     });
   });
   server.relayState = state;
+  server.keyStore = keyStore;
   return server;
 }
 
@@ -319,6 +434,8 @@ module.exports = {
   attachMobileClient,
   broadcastToMobileClients,
   createCloudRelayServer,
+  disconnectKey,
+  disconnectToken,
   forwardToAgent,
   markSessionSynced,
   rejectPendingForToken,

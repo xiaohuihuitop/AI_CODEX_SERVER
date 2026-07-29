@@ -10,5 +10,7 @@ COPY cloud-server.js ./
 COPY public ./public
 COPY src ./src
 
+RUN mkdir -p /data
+
 EXPOSE 8787
 CMD ["node", "cloud-server.js"]

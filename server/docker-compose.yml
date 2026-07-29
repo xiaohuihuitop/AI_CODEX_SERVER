@@ -9,3 +9,5 @@ services:
       PORT: 8787
     ports:
       - "${CODEX_CLOUD_HTTP_PORT:-8008}:8787"
+    volumes:
+      - ./data:/data

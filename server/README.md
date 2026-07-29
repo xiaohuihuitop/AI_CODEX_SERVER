@@ -5,7 +5,7 @@
 `server` 是云端 relay 服务，负责：
 
 - 维护手机端和 Windows Agent 的连接。
-- 校验 token。
+- 管理多台电脑的设备 Key，并校验设备 Key。
 - 接收 Windows Agent 上传的 Codex 会话增量。
 - 在服务端解析并缓存线程、历史和状态。
 - 把手机端发送和停止指令转发给对应 Agent。
@@ -29,34 +29,33 @@ server/
 ## 环境变量
 
 ```text
-CODEX_CLOUD_TOKENS=token_replace_with_random_value
 CODEX_CLOUD_HTTP_PORT=8008
 PORT=8787
 HOST=0.0.0.0
+CODEX_ADMIN_PASSWORD=xiaohuihui
 ```
 
 说明：
 
-- `CODEX_CLOUD_TOKENS`：允许连接的 token，多个 token 用英文逗号分隔。
 - `CODEX_CLOUD_HTTP_PORT`：Docker Compose 映射到宿主机的端口。
 - `PORT`：容器或 Node 进程内部监听端口，默认 `8787`。
 - `HOST`：监听地址，默认 `0.0.0.0`。
+- `CODEX_ADMIN_PASSWORD`：管理后台密码，当前按部署要求设为 `xiaohuihui`。
 
-生产部署必须使用强随机 token，不要使用文档示例值。
+设备 Key 存储在 Docker Compose 挂载的 `server/data/keys.json`，不写入环境变量。原始 Key 仅在后台创建时展示一次，仓库内只保存其哈希值。
 
 ## 本地启动
 
 ```powershell
 cd server
 npm install
-$env:CODEX_CLOUD_TOKENS="token_replace_with_random_value"
 npm start
 ```
 
-访问健康检查：
+启动后先访问管理后台创建设备 Key：
 
 ```powershell
-curl "http://127.0.0.1:8787/codex/health?token=token_replace_with_random_value"
+Start-Process http://127.0.0.1:8787/admin
 ```
 
 ## Docker 部署
@@ -70,8 +69,8 @@ cp .env.example .env
 编辑 `.env`：
 
 ```text
-CODEX_CLOUD_TOKENS=token_replace_with_random_value
 CODEX_CLOUD_HTTP_PORT=8008
+CODEX_ADMIN_PASSWORD=xiaohuihui
 ```
 
 启动：
@@ -83,7 +82,7 @@ docker compose up -d
 验证：
 
 ```sh
-curl "http://127.0.0.1:8008/codex/health?token=token_replace_with_random_value"
+curl http://127.0.0.1:8008/admin
 ```
 
 ## 群晖部署建议
@@ -130,6 +129,15 @@ env.example
 
 ## API
 
+管理后台：
+
+- `GET /admin`：Key 管理页面。
+- `POST /admin/api/login`：登录管理后台。
+- `GET /admin/api/keys`：列出 Key（不返回原始 Key）。
+- `POST /admin/api/keys`：创建 Key，原始 Key 只在本次响应中返回。
+- `POST /admin/api/keys/<id>/disable`：禁用 Key，并立即断开该 Key 的客户端连接。
+- `DELETE /admin/api/keys/<id>`：删除 Key，并立即断开该 Key 的客户端连接。
+
 手机端接口：
 
 - `GET /codex/health`
@@ -143,11 +151,15 @@ Agent 接口：
 
 - `GET /agent?token=<token>`：WebSocket 连接入口。
 
-鉴权方式：
+设备鉴权方式：
 
 - Query：`?token=<token>`
 - Header：`x-mobile-typer-token: <token>`
 - Cookie：`codexBridgeToken=<token>`
+
+### 从旧部署迁移
+
+若首次启动时仍配置了旧的 `CODEX_CLOUD_TOKENS` 或 `CODEX_CLOUD_TOKEN`，服务会仅在 `keys.json` 为空时把它们迁移为可管理 Key；运行时不再直接使用该环境变量。迁移完成后可从 `.env` 删除旧变量。
 
 ## 验证
 
