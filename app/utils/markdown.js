@@ -14,6 +14,7 @@ export function stripCodexUiDirectives(text) {
   const lines = [];
   let inBrowserContext = false;
   let inAttachmentContext = false;
+  let attachmentCount = 0;
 
   for (const line of String(text || '').split(/\r?\n/)) {
     const trimmed = line.trim();
@@ -33,9 +34,13 @@ export function stripCodexUiDirectives(text) {
     if (isRequestHeader) {
       inBrowserContext = false;
       inAttachmentContext = false;
+      if (attachmentCount) lines.push(`已附 ${attachmentCount} 个附件（仅电脑端可查看）`);
       continue;
     }
-    if (inAttachmentContext) continue;
+    if (inAttachmentContext) {
+      if (/^#{1,6}\s+.+?:\s*$/.test(trimmed)) attachmentCount += 1;
+      continue;
+    }
     if (inBrowserContext) {
       if (!trimmed || isBrowserMeta) continue;
       inBrowserContext = false;

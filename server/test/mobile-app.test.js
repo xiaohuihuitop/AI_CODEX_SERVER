@@ -172,6 +172,7 @@ test('uni-app Android 手机端不展示附件元数据且紧凑渲染代码块'
 
   assert.doesNotMatch(html, /Files mentioned by the user/);
   assert.doesNotMatch(html, /Screenshot_2026/);
+  assert.match(html, /已附 1 个附件（仅电脑端可查看）/);
   assert.match(html, /请处理手机端显示。/);
   assert.match(html, /word-break:break-all/);
   assert.doesNotMatch(html, /<pre><code>/);
