@@ -305,6 +305,7 @@ test('uni-app Android 手机端切换对话时显示等待 UI 并防止旧请求
   assert.match(index, /selectedThreadId\.value !== requestedThreadId/);
   assert.match(index, /\.switch-loading\s*\{/);
   assert.match(index, /@keyframes switch-loading-spin/);
+  assert.match(index, /if \(switchingThread\.value \|\| loading\.value\) return;/);
 });
 
 test('uni-app Android 手机端隐藏或销毁后停止轮询并阻止异步回写', () => {
@@ -349,6 +350,10 @@ test('uni-app Android 请求支持页面销毁时取消', () => {
   assert.match(api, /export function createRealtimeSocket/);
   assert.match(api, /x-mobile-typer-token/);
   assert.match(api, /\/mobile/);
+  assert.match(api, /const REQUEST_TIMEOUT_MS = 15000;/);
+  assert.match(api, /timeout: timeoutMs,/);
+  assert.match(api, /请求超时，请检查电脑 Agent 或服务器连接。/);
+  assert.match(api, /if \(task && typeof task\.abort === 'function'\) task\.abort\(\);/);
 });
 
 test('uni-app Android 设置页测试连接离开页面时取消请求', () => {

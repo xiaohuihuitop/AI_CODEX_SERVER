@@ -30,6 +30,7 @@ async function syncProvider() {
   }
   const snapshot = reader.readKnownThreadSync(knownThreadTargets, syncOffsets, {
     initialLineLimit: Number(process.env.CODEX_AGENT_INITIAL_SYNC_LINES || 1000),
+    syncByteLimit: Number(process.env.CODEX_AGENT_SYNC_BYTE_LIMIT || 512 * 1024),
   });
   return {
     deviceName,

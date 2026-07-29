@@ -310,6 +310,28 @@ test('云端 relay 从服务器缓存返回历史和状态', async () => {
   await closeRelayServer(server);
 });
 
+test('云端缓存保留只含元数据的打开线程', () => {
+  const cache = createCloudSessionCache();
+  cache.applySync('metadata-token', {
+    openThreadIds: ['thread-meta'],
+    sessions: [{
+      threadId: 'thread-meta',
+      threadName: '待回填线程',
+      projectName: 'demo',
+      sessionFile: 'rollout-thread-meta.jsonl',
+      metadataOnly: true,
+    }],
+  });
+
+  const threads = cache.threads('metadata-token');
+  assert.deepEqual(threads.threads.map(thread => ({ id: thread.id, name: thread.name, projectName: thread.projectName })), [{
+    id: 'thread-meta',
+    name: '待回填线程',
+    projectName: 'demo',
+  }]);
+  assert.equal(cache.history('metadata-token', 'thread-meta').available, true);
+});
+
 test('云端缓存支持渲染为用户消息、处理过程、最终回复顺序', () => {
   const cache = createCloudSessionCache();
   cache.applySync('order-token', {

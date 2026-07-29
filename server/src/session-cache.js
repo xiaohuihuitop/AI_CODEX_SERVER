@@ -123,6 +123,32 @@ class CloudSessionCache {
       if (!threadId) continue;
       nextOpen.push(threadId);
       const existing = bucket.sessions.get(threadId) || { lines: [] };
+      if (row.metadataOnly) {
+        if (bucket.sessions.has(threadId)) {
+          bucket.sessions.set(threadId, Object.assign({}, existing, {
+            name: row.threadName || row.name || existing.name || threadId,
+            projectName: row.projectName || existing.projectName || '',
+            cwd: row.cwd || existing.cwd || '',
+            updatedAt: row.updatedAt || existing.updatedAt || updatedAt,
+            sessionFile: row.sessionFile || existing.sessionFile || '',
+            mtimeMs: Number(row.mtimeMs || existing.mtimeMs || 0),
+          }));
+        } else {
+          bucket.sessions.set(threadId, {
+            threadId,
+            name: row.threadName || row.name || threadId,
+            projectName: row.projectName || '',
+            cwd: row.cwd || '',
+            updatedAt: row.updatedAt || updatedAt,
+            sessionFile: row.sessionFile || '',
+            mtimeMs: Number(row.mtimeMs || 0),
+            lines: [],
+            parsed: this.parseSession([], threadId),
+            statusSinceCache: new Map(),
+          });
+        }
+        continue;
+      }
       const incoming = normalizeLineList(row.lines);
       const lines = row.reset ? incoming : existing.lines.concat(incoming);
       const trimmed = lines.length > this.maxLinesPerSession

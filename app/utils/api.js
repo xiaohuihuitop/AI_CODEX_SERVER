@@ -22,6 +22,8 @@ function buildRealtimeUrl(serverUrl) {
   return `${base.replace(/^https:/i, 'wss:').replace(/^http:/i, 'ws:')}/mobile`;
 }
 
+const REQUEST_TIMEOUT_MS = 15000;
+
 /**
  * AI:建立手机实时状态订阅，控制命令仍经 HTTP 请求发送。
  *
@@ -60,9 +62,19 @@ export function createRealtimeSocket(config, handlers = {}) {
 export function requestJson(config, apiPath, options = {}) {
   return new Promise((resolve, reject) => {
     let task = null;
+    let timeoutTimer = null;
+    let settled = false;
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs) || REQUEST_TIMEOUT_MS);
+    const settle = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      callback(value);
+    };
     task = uni.request({
       url: buildUrl(config.serverUrl, apiPath),
       method: options.method || 'GET',
+      timeout: timeoutMs,
       data: options.data,
       header: {
         'content-type': 'application/json',
@@ -71,19 +83,23 @@ export function requestJson(config, apiPath, options = {}) {
       success(response) {
         const data = response.data || {};
         if (response.statusCode < 200 || response.statusCode >= 300 || data.ok === false) {
-          reject(new Error(data.message || `请求失败：${response.statusCode}`));
+          settle(reject, new Error(data.message || `请求失败：${response.statusCode}`));
           return;
         }
-        resolve(data);
+        settle(resolve, data);
       },
       fail(error) {
-        reject(new Error(error.errMsg || '网络请求失败'));
+        settle(reject, new Error(error.errMsg || '网络请求失败'));
       },
       complete() {
         if (typeof options.unregisterTask === 'function') options.unregisterTask(task);
       },
     });
     if (typeof options.registerTask === 'function') options.registerTask(task);
+    timeoutTimer = setTimeout(() => {
+      settle(reject, new Error('请求超时，请检查电脑 Agent 或服务器连接。'));
+      if (task && typeof task.abort === 'function') task.abort();
+    }, timeoutMs + 1000);
   });
 }
 

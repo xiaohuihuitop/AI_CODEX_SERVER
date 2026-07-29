@@ -519,6 +519,8 @@ class CodexSessionReader {
     const sessions = [];
     const openThreadIds = [];
     const initialLineLimit = Math.max(1, Math.min(Number(options.initialLineLimit) || 800, 5000));
+    const syncByteLimit = Math.max(1024, Number(options.syncByteLimit) || 512 * 1024);
+    let syncedBytes = 0;
 
     for (const target of targets || []) {
       if (!target || !target.threadId || !target.file) continue;
@@ -531,12 +533,42 @@ class CodexSessionReader {
       const previous = offsets instanceof Map ? offsets.get(target.threadId) : offsets[target.threadId];
       const previousSize = previous && Number(previous.size) > 0 ? Number(previous.size) : 0;
       const reset = previousSize <= 0 || previousSize > stat.size;
-      const lines = reset
+      let lines = reset
         ? readTailJsonlLines(target.file, stat.size, initialLineLimit)
         : readJsonlRangeLines(target.file, previousSize, stat.size);
-      offsets instanceof Map ? offsets.set(target.threadId, { size: stat.size }) : offsets[target.threadId] = { size: stat.size };
       openThreadIds.push(target.threadId);
+      const remainingBytes = Math.max(0, syncByteLimit - syncedBytes);
+      let lineBytes = lines.reduce((total, line) => total + Buffer.byteLength(line, 'utf8') + 1, 0);
+      if (lineBytes && syncedBytes + lineBytes > syncByteLimit) {
+        const tail = [];
+        let tailBytes = 0;
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+          const bytes = Buffer.byteLength(lines[index], 'utf8') + 1;
+          if (tail.length && tailBytes + bytes > remainingBytes) break;
+          if (bytes > remainingBytes) continue;
+          tail.unshift(lines[index]);
+          tailBytes += bytes;
+        }
+        lines = tail;
+        lineBytes = tailBytes;
+      }
+      if (!lines.length && (reset || previousSize < stat.size)) {
+        // AI:首轮先同步线程元数据，后续同步周期再按预算补齐历史，避免大批 JSONL 阻塞 Relay。
+        sessions.push({
+          threadId: target.threadId,
+          threadName: target.threadName,
+          projectName: target.projectName,
+          cwd: target.cwd,
+          updatedAt: target.updatedAt || new Date(stat.mtimeMs).toISOString(),
+          sessionFile: target.sessionFile || path.basename(target.file),
+          mtimeMs: stat.mtimeMs,
+          metadataOnly: true,
+        });
+        continue;
+      }
+      offsets instanceof Map ? offsets.set(target.threadId, { size: stat.size }) : offsets[target.threadId] = { size: stat.size };
       if (!lines.length && !reset) continue;
+      syncedBytes += lineBytes;
       sessions.push({
         threadId: target.threadId,
         threadName: target.threadName,

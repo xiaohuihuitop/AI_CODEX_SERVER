@@ -1122,6 +1122,7 @@ function scheduleRealtimeRefresh() {
   if (realtimeRefreshTimer || !canUpdatePage()) return;
   realtimeRefreshTimer = setTimeout(async () => {
     realtimeRefreshTimer = null;
+    if (switchingThread.value || loading.value) return;
     try {
       await loadThreads();
       if (selectedThreadId.value) await loadHistory(null, { scrollToBottom: followBottom.value, silent: true });

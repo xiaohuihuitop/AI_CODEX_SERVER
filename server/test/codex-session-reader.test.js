@@ -276,6 +276,28 @@ test('已发现打开线程后增量同步不再扫描会话目录', () => {
   assert.equal(second.sessions.length, 0);
 });
 
+test('首轮同步受字节预算限制时仍上传全部线程元数据', () => {
+  const offsets = new Map();
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const targets = reader.discoverOpenThreadSessions([
+    { projectName: 'demo', threadName: '测试线程' },
+    { projectName: 'demo', threadName: '第二线程' },
+    { projectName: 'demo', threadName: '运行中线程' },
+  ]);
+  const sync = reader.readKnownThreadSync(targets, offsets, {
+    initialLineLimit: 1000,
+    syncByteLimit: 1024,
+  });
+
+  assert.deepEqual(sync.openThreadIds, targets.map(target => target.threadId));
+  assert.equal(sync.sessions.length, targets.length);
+  assert.equal(sync.sessions.some(session => session.metadataOnly), true);
+  assert.equal(offsets.size < targets.length, true);
+});
+
 test('解析线程历史', () => {
   const reader = new CodexSessionReader({
     sessionsDir: path.join(fixtureRoot, 'sessions'),
