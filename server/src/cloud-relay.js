@@ -12,6 +12,7 @@ const DEFAULT_SYNC_STALE_MS = 10000;
 const ALLOWED_ACTIONS = new Set(['threads', 'history', 'status', 'send', 'stop']);
 const PUBLIC_ASSET_EXTENSIONS = new Set(['.css', '.ico', '.js', '.json', '.png', '.svg', '.webmanifest']);
 const ADMIN_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+const ADMIN_PASSWORD = 'xiaohuihui';
 
 function tokenFromRequest(req) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -299,7 +300,6 @@ function clearAdminSession(res) {
 function createCloudRelayServer(options = {}) {
   const bootstrapTokens = String(process.env.CODEX_CLOUD_TOKENS || process.env.CODEX_CLOUD_TOKEN || '').split(',').map(item => item.trim()).filter(Boolean);
   const keyStore = options.keyStore || (options.tokens ? legacyKeyStore(options.tokens) : createKeyStore(options.keyStorePath || process.env.CODEX_CLOUD_KEY_STORE_PATH || '/data/keys.json', bootstrapTokens));
-  const adminPassword = String(options.adminPassword || process.env.CODEX_ADMIN_PASSWORD || 'xiaohuihui');
   const publicDir = options.publicDir || path.join(__dirname, '..', 'public');
   const requestTimeoutMs = Number(options.requestTimeoutMs || process.env.CODEX_RELAY_TIMEOUT_MS || DEFAULT_TIMEOUT_MS);
   const syncStaleMs = Math.max(1000, Number(options.syncStaleMs || process.env.CODEX_RELAY_SYNC_STALE_MS || DEFAULT_SYNC_STALE_MS));
@@ -317,7 +317,7 @@ function createCloudRelayServer(options = {}) {
         }
         if (req.method === 'POST' && url.pathname === '/admin/api/login') {
           const payload = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');
-          if (!secureEqual(payload.password, adminPassword)) {
+          if (!secureEqual(payload.password, ADMIN_PASSWORD)) {
             return sendJson(res, 401, { ok: false, code: 'ADMIN_UNAUTHORIZED', message: '管理密码不正确。' });
           }
           const sessionId = crypto.randomBytes(32).toString('base64url');

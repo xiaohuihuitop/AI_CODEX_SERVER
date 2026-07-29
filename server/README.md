@@ -32,7 +32,6 @@ server/
 CODEX_CLOUD_HTTP_PORT=8008
 PORT=8787
 HOST=0.0.0.0
-CODEX_ADMIN_PASSWORD=xiaohuihui
 ```
 
 说明：
@@ -40,7 +39,7 @@ CODEX_ADMIN_PASSWORD=xiaohuihui
 - `CODEX_CLOUD_HTTP_PORT`：Docker Compose 映射到宿主机的端口。
 - `PORT`：容器或 Node 进程内部监听端口，默认 `8787`。
 - `HOST`：监听地址，默认 `0.0.0.0`。
-- `CODEX_ADMIN_PASSWORD`：管理后台密码，当前按部署要求设为 `xiaohuihui`。
+- 管理后台密码固定为 `xiaohuihui`，不从环境变量读取。
 
 设备 Key 存储在 Docker Compose 挂载的 `server/data/keys.json`，不写入环境变量。原始 Key 仅在后台创建时展示一次，仓库内只保存其哈希值。
 
@@ -70,7 +69,6 @@ cp .env.example .env
 
 ```text
 CODEX_CLOUD_HTTP_PORT=8008
-CODEX_ADMIN_PASSWORD=xiaohuihui
 ```
 
 启动：

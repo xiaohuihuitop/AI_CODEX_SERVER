@@ -19,7 +19,7 @@ async function json(url, options) {
 test('Key 管理后台创建、禁用和持久化设备 Key', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-key-store-'));
   const keyStore = createKeyStore(path.join(dir, 'keys.json'));
-  const server = createCloudRelayServer({ keyStore, adminPassword: 'xiaohuihui' });
+  const server = createCloudRelayServer({ keyStore, adminPassword: 'other-password' });
   const port = await listen(server);
   const origin = `http://127.0.0.1:${port}`;
   try {
