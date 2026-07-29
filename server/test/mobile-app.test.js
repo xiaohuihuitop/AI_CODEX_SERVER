@@ -341,6 +341,21 @@ test('uni-app Android 手机端切换对话时显示等待 UI 并防止旧请求
   assert.match(index, /if \(switchingThread\.value \|\| loading\.value\) \{[\s\S]*scheduleRealtimeRefresh\(\);[\s\S]*return;/);
 });
 
+test('uni-app Android 手机端首次只读取最近五轮并支持向上分页', () => {
+  const api = fs.readFileSync(path.join(appDir, 'utils', 'api.js'), 'utf8');
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+
+  assert.match(api, /function getHistory\(config, threadId, options = \{\}\)/);
+  assert.match(api, /limit=\$\{encodeURIComponent\(options\.limit \|\| 10\)\}/);
+  assert.match(api, /before=\$\{encodeURIComponent\(options\.before \|\| ''\)\}/);
+  assert.match(index, /const historyNextBefore = ref\(''\)/);
+  assert.match(index, /const hasOlderHistory = ref\(false\)/);
+  assert.match(index, /@scrolltoupper="loadOlderHistory"/);
+  assert.match(index, /async function loadOlderHistory\(\)/);
+  assert.match(index, /await getHistory\(config\.value, requestedThreadId, \{ limit: 10, before: historyNextBefore\.value/);
+  assert.match(index, /messages\.value = data\.messages\.concat\(messages\.value\);/);
+});
+
 test('uni-app Android 手机端隐藏或销毁后停止轮询并阻止异步回写', () => {
   const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
 

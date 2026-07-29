@@ -57,12 +57,15 @@
       </scroll-view>
     </view>
 
-    <scroll-view class="messages" scroll-y :scroll-into-view="scrollTarget">
+    <scroll-view class="messages" scroll-y :scroll-into-view="scrollTarget" upper-threshold="80" @scrolltoupper="loadOlderHistory">
       <view v-if="switchingThread" class="switch-loading">
         <view class="switch-loading-spinner"></view>
         <text class="switch-loading-title">正在载入对话</text>
         <text class="switch-loading-subtitle">{{ selectedThreadName || '请稍候' }}</text>
       </view>
+
+      <view v-if="loadingOlderHistory" class="history-loading">正在加载更早对话...</view>
+      <view v-else-if="hasOlderHistory" class="history-load-more" @click="loadOlderHistory">上滑加载更早 5 轮对话</view>
 
       <view v-for="item in timelineItems" :key="item.key">
         <view
@@ -117,6 +120,9 @@ const serverState = ref({ online: false, offline: false, message: '服务器检�
 const agentState = ref({ online: false, offline: false, message: 'Agent 检测中' });
 const syncState = ref({ fresh: false, version: 0, lastSyncedAt: '' });
 const currentThreadStatus = ref(null);
+const historyNextBefore = ref('');
+const hasOlderHistory = ref(false);
+const loadingOlderHistory = ref(false);
 const pendingWatch = ref(null);
 const pendingLocalSends = ref([]);
 const historyReloadedForCompletion = ref(false);
@@ -883,15 +889,19 @@ async function loadHistory(statusData = null, options = {}) {
   const requestedThreadId = options.threadId || selectedThreadId.value;
   if (!requestedThreadId) {
     messages.value = [];
+    historyNextBefore.value = '';
+    hasOlderHistory.value = false;
     currentThreadStatus.value = null;
     manualProcessOpenState.value = {};
     setNotice('没有可用 Codex 对话');
     return;
   }
-  const data = await getHistory(config.value, requestedThreadId, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+  const data = await getHistory(config.value, requestedThreadId, { limit: 10, registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
   if (!canUpdateTask(token) || selectedThreadId.value !== requestedThreadId) return;
   if (!applyRelayState(data)) return;
   messages.value = mergePendingLocalMessages(requestedThreadId, data.messages || []);
+  historyNextBefore.value = data.nextBefore || '';
+  hasOlderHistory.value = Boolean(data.hasMore && historyNextBefore.value);
   if (data.available) {
     const snapshot = statusData || await getStatus(config.value, { threadId: requestedThreadId }, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token) || selectedThreadId.value !== requestedThreadId) return;
@@ -1136,6 +1146,30 @@ function scheduleRealtimeRefresh() {
       setNotice(error.message);
     }
   }, 180);
+}
+
+/**
+ * AI:向上追加当前对话的更早消息，每次固定读取五轮。
+ *
+ * @returns {Promise<void>}
+ */
+async function loadOlderHistory() {
+  const token = currentLifecycleToken();
+  const requestedThreadId = selectedThreadId.value;
+  if (!requestedThreadId || !hasOlderHistory.value || loadingOlderHistory.value) return;
+  loadingOlderHistory.value = true;
+  try {
+    const data = await getHistory(config.value, requestedThreadId, { limit: 10, before: historyNextBefore.value, registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+    if (!canUpdateTask(token) || requestedThreadId !== selectedThreadId.value) return;
+    if (!applyRelayState(data)) return;
+    messages.value = data.messages.concat(messages.value);
+    historyNextBefore.value = data.nextBefore || '';
+    hasOlderHistory.value = Boolean(data.hasMore && historyNextBefore.value);
+  } catch (error) {
+    if (canUpdateTask(token)) setNotice(error.message);
+  } finally {
+    if (canUpdateTask(token)) loadingOlderHistory.value = false;
+  }
 }
 
 /**
@@ -1558,6 +1592,19 @@ onBackPress(() => {
   min-height: 0;
   height: 0;
   padding: 10px 12px 14px;
+}
+
+.history-loading,
+.history-load-more {
+  padding: 8px 12px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.history-load-more {
+  color: #1f6feb;
 }
 
 .switch-loading {

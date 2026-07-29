@@ -298,6 +298,27 @@ test('首轮同步受字节预算限制时仍上传全部线程元数据', () =>
   assert.equal(offsets.size < targets.length, true);
 });
 
+test('紧凑会话快照在首轮同步时保留最近消息和当前状态', () => {
+  const offsets = new Map();
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const targets = reader.discoverOpenThreadSessions([
+    { projectName: 'demo', threadName: '测试线程' },
+  ]);
+  const sync = reader.readKnownThreadSync(targets, offsets, {
+    snapshotMessageLimit: 10,
+    syncByteLimit: 64 * 1024,
+  });
+
+  assert.equal(sync.sessions.length, 1);
+  assert.equal(sync.sessions[0].metadataOnly, undefined);
+  assert.deepEqual(sync.sessions[0].snapshot.messages.map(message => message.text), ['你好 Codex', '你好，我在 Windows 上。']);
+  assert.equal(sync.sessions[0].snapshot.status.status, 'complete');
+  assert.equal(offsets.get(targets[0].threadId).size > 0, true);
+});
+
 test('解析线程历史', () => {
   const reader = new CodexSessionReader({
     sessionsDir: path.join(fixtureRoot, 'sessions'),

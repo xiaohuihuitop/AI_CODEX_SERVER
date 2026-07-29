@@ -196,6 +196,13 @@ function attachAgent(state, ws, token, syncStaleMs) {
     if (message.type === 'session-sync') {
       const result = state.cache.applySync(token, message.payload || {});
       const syncState = markSessionSynced(state, token, syncStaleMs);
+      if (Array.isArray(message.payload?.sessions) && message.payload.sessions.length) {
+        ws.send(JSON.stringify({
+          type: 'session-sync-ack',
+          sessionCount: result.sessionCount,
+          updatedAt: result.updatedAt,
+        }));
+      }
       broadcastToMobileClients(state, token, Object.assign({
         type: 'session-updated',
         updatedAt: result.updatedAt,
@@ -381,7 +388,7 @@ function createCloudRelayServer(options = {}) {
       if (req.method === 'GET' && req.url.startsWith('/codex/history')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const threadId = url.searchParams.get('thread') || '';
-        return sendJson(res, 200, Object.assign(state.cache.history(token, threadId, url.searchParams.get('limit') || 120), relayStateForToken(state, token)));
+        return sendJson(res, 200, Object.assign(state.cache.history(token, threadId, url.searchParams.get('limit') || 120, url.searchParams.get('before') || ''), relayStateForToken(state, token)));
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/status')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);

@@ -131,7 +131,7 @@ export function getThreads(config, options = {}) {
  * @returns {Promise<object>} 历史响应。
  */
 export function getHistory(config, threadId, options = {}) {
-  return requestJson(config, `/codex/history?thread=${encodeURIComponent(threadId)}&limit=120`, options);
+  return requestJson(config, `/codex/history?thread=${encodeURIComponent(threadId)}&limit=${encodeURIComponent(options.limit || 10)}&before=${encodeURIComponent(options.before || '')}`, options);
 }
 
 /**

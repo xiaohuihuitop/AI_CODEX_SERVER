@@ -332,6 +332,34 @@ test('云端缓存保留只含元数据的打开线程', () => {
   assert.equal(cache.history('metadata-token', 'thread-meta').available, true);
 });
 
+test('云端缓存保存紧凑快照并按页面返回历史', () => {
+  const cache = createCloudSessionCache();
+  const messages = Array.from({ length: 12 }, (_, index) => ({
+    role: index % 2 ? 'assistant' : 'user',
+    text: `消息 ${index + 1}`,
+    turnId: `turn-${Math.floor(index / 2) + 1}`,
+  }));
+  cache.applySync('snapshot-token', {
+    openThreadIds: ['thread-snapshot'],
+    sessions: [{
+      threadId: 'thread-snapshot',
+      threadName: '快照线程',
+      snapshot: {
+        messages,
+        status: { active: false, status: 'complete', preview: '已完成', final: '消息 12', steps: [], turns: [] },
+      },
+    }],
+  });
+
+  const newest = cache.history('snapshot-token', 'thread-snapshot', 4);
+  const older = cache.history('snapshot-token', 'thread-snapshot', 4, newest.nextBefore);
+  assert.deepEqual(newest.messages.map(row => row.text), ['消息 9', '消息 10', '消息 11', '消息 12']);
+  assert.equal(newest.hasMore, true);
+  assert.equal(newest.nextBefore, '8');
+  assert.deepEqual(older.messages.map(row => row.text), ['消息 5', '消息 6', '消息 7', '消息 8']);
+  assert.equal(cache.status('snapshot-token', 'thread-snapshot').status, 'complete');
+});
+
 test('云端缓存支持渲染为用户消息、处理过程、最终回复顺序', () => {
   const cache = createCloudSessionCache();
   cache.applySync('order-token', {

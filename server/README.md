@@ -140,7 +140,7 @@ env.example
 
 - `GET /codex/health`
 - `GET /codex/threads?limit=120`
-- `GET /codex/history?thread=<threadId>&limit=120`
+- `GET /codex/history?thread=<threadId>&limit=10&before=<消息索引>`：默认读取最新 5 轮，携带 `before` 可继续读取更早记录。
 - `GET /codex/status?thread=<threadId>&since=<since>`
 - `POST /send`
 - `POST /codex/stop`

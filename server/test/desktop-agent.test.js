@@ -214,6 +214,45 @@ test('desktop-agent 同步快照为空时不上传会话同步消息', async () 
   assert.equal(messages.length, 0);
 });
 
+test('desktop-agent 收到服务器同步确认后发出确认事件', async () => {
+  class FakeSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.OPEN = 1;
+      this.CLOSED = 3;
+      this.readyState = this.OPEN;
+      setImmediate(() => this.emit('open'));
+    }
+
+    send() {}
+
+    close() {
+      this.readyState = this.CLOSED;
+      this.emit('close', 1000, Buffer.from(''));
+    }
+  }
+
+  const client = createDesktopAgentClient({
+    serverUrl: 'http://example.test',
+    token: 'token',
+    api: { handle: async () => ({ ok: true }) },
+    WebSocket: FakeSocket,
+    syncProvider: async () => null,
+  });
+  const received = new Promise(resolve => client.once('sync-ack', resolve));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  client.socket.emit('message', Buffer.from(JSON.stringify({
+    type: 'session-sync-ack',
+    sessionCount: 3,
+    updatedAt: '2026-07-29T12:00:00.000Z',
+  })));
+  const ack = await received;
+  client.close();
+
+  assert.equal(ack.sessionCount, 3);
+  assert.equal(ack.updatedAt, '2026-07-29T12:00:00.000Z');
+});
+
 test('desktop-agent 同步任务超时后会释放后续同步', async () => {
   const messages = [];
   class FakeSocket extends EventEmitter {

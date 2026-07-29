@@ -75,6 +75,23 @@ function normalizeLineList(lines) {
     : [];
 }
 
+function normalizeSnapshot(snapshot) {
+  const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
+  const messages = Array.isArray(source.messages)
+    ? source.messages.map(message => ({
+      role: message && message.role === 'assistant' ? 'assistant' : 'user',
+      label: String(message && message.label || ''),
+      text: String(message && message.text || ''),
+      timestamp: String(message && message.timestamp || ''),
+      turnId: String(message && message.turnId || ''),
+    })).filter(message => message.text)
+    : [];
+  const status = source.status && typeof source.status === 'object'
+    ? source.status
+    : { active: false, status: 'idle', preview: '', final: '', steps: [], turns: [] };
+  return { messages, status };
+}
+
 class CloudSessionCache {
   /**
    * AI:创建云端会话缓存。
@@ -149,6 +166,22 @@ class CloudSessionCache {
         }
         continue;
       }
+      if (row.snapshot) {
+        const parsed = normalizeSnapshot(row.snapshot);
+        bucket.sessions.set(threadId, {
+          threadId,
+          name: row.threadName || row.name || existing.name || threadId,
+          projectName: row.projectName || existing.projectName || '',
+          cwd: row.cwd || existing.cwd || '',
+          updatedAt: row.updatedAt || updatedAt,
+          sessionFile: row.sessionFile || existing.sessionFile || '',
+          mtimeMs: Number(row.mtimeMs || existing.mtimeMs || 0),
+          lines: existing.lines || [],
+          parsed,
+          statusSinceCache: new Map(),
+        });
+        continue;
+      }
       const incoming = normalizeLineList(row.lines);
       const lines = row.reset ? incoming : existing.lines.concat(incoming);
       const trimmed = lines.length > this.maxLinesPerSession
@@ -217,16 +250,25 @@ class CloudSessionCache {
    * @param {number|string} limit 最大消息数量。
    * @returns {{ok: boolean, available: boolean, threadId: string, sessionFile: string, messages: Array<object>, cached: boolean}} 历史结果。
    */
-  history(token, threadId, limit = 120) {
+  history(token, threadId, limit = 120, before = '') {
     const session = this.bucket(token).sessions.get(String(threadId || ''));
     if (!session) return { ok: true, available: false, threadId, sessionFile: '', messages: [], cached: true };
     const max = Math.max(1, Math.min(Number(limit) || 120, 200));
+    const messages = session.parsed.messages || [];
+    const beforeText = String(before || '').trim();
+    const requestedBefore = Number(beforeText);
+    const end = beforeText && Number.isInteger(requestedBefore) && requestedBefore >= 0 && requestedBefore <= messages.length
+      ? requestedBefore
+      : messages.length;
+    const start = Math.max(0, end - max);
     return {
       ok: true,
       available: true,
       threadId,
       sessionFile: session.sessionFile || '',
-      messages: session.parsed.messages.slice(-max),
+      messages: messages.slice(start, end),
+      hasMore: start > 0,
+      nextBefore: start > 0 ? String(start) : '',
       cached: true,
     };
   }

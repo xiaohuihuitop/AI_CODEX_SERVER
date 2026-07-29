@@ -519,6 +519,7 @@ class CodexSessionReader {
     const sessions = [];
     const openThreadIds = [];
     const initialLineLimit = Math.max(1, Math.min(Number(options.initialLineLimit) || 800, 5000));
+    const snapshotMessageLimit = Math.max(0, Math.min(Number(options.snapshotMessageLimit) || 0, 100));
     const syncByteLimit = Math.max(1024, Number(options.syncByteLimit) || 512 * 1024);
     let syncedBytes = 0;
 
@@ -533,6 +534,43 @@ class CodexSessionReader {
       const previous = offsets instanceof Map ? offsets.get(target.threadId) : offsets[target.threadId];
       const previousSize = previous && Number(previous.size) > 0 ? Number(previous.size) : 0;
       const reset = previousSize <= 0 || previousSize > stat.size;
+      const changed = reset || previousSize < stat.size;
+      if (snapshotMessageLimit && changed) {
+        const snapshot = {
+          messages: this.parseHistory(target.threadId, snapshotMessageLimit).messages,
+          status: this.parseStatus({ threadId: target.threadId }),
+        };
+        const snapshotBytes = Buffer.byteLength(JSON.stringify(snapshot), 'utf8');
+        const remainingBytes = Math.max(0, syncByteLimit - syncedBytes);
+        if (snapshotBytes <= remainingBytes) {
+          offsets instanceof Map ? offsets.set(target.threadId, { size: stat.size }) : offsets[target.threadId] = { size: stat.size };
+          syncedBytes += snapshotBytes;
+          sessions.push({
+            threadId: target.threadId,
+            threadName: target.threadName,
+            projectName: target.projectName,
+            cwd: target.cwd,
+            updatedAt: target.updatedAt || new Date(stat.mtimeMs).toISOString(),
+            sessionFile: target.sessionFile || path.basename(target.file),
+            mtimeMs: stat.mtimeMs,
+            snapshot,
+          });
+          continue;
+        }
+        if (reset) {
+          sessions.push({
+            threadId: target.threadId,
+            threadName: target.threadName,
+            projectName: target.projectName,
+            cwd: target.cwd,
+            updatedAt: target.updatedAt || new Date(stat.mtimeMs).toISOString(),
+            sessionFile: target.sessionFile || path.basename(target.file),
+            mtimeMs: stat.mtimeMs,
+            metadataOnly: true,
+          });
+        }
+        continue;
+      }
       let lines = reset
         ? readTailJsonlLines(target.file, stat.size, initialLineLimit)
         : readJsonlRangeLines(target.file, previousSize, stat.size);

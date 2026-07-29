@@ -90,6 +90,10 @@ test('桌面管理器提供日志清除操作', () => {
   assert.match(renderer, /clearLogsButton/);
   assert.match(renderer, /window\.codexManager\.clearLogs\(\)/);
   assert.match(html, /id="clearLogsButton"/);
+  const agent = fs.readFileSync(path.join(__dirname, '../../desktop/desktop-agent.js'), 'utf8');
+  assert.match(agent, /对话同步准备：/);
+  assert.match(agent, /同步请求已发送：/);
+  assert.match(agent, /服务器已确认同步：/);
 });
 
 test('桌面管理器配置可以持久化到文件', () => {

@@ -92,6 +92,7 @@ function createDesktopAgentClient(options) {
       const payload = await withTimeout(syncProvider(), syncTimeoutMs, 'Agent 会话同步超时。');
       if (payload && socket && socket.readyState === socket.OPEN) {
         socket.send(JSON.stringify({ type: 'session-sync', payload }));
+        if (Array.isArray(payload.sessions) && payload.sessions.length) client.emit('sync-sent', payload);
       }
     } catch (error) {
       if (client.listenerCount('sync-error') > 0) client.emit('sync-error', error);
@@ -133,6 +134,10 @@ function createDesktopAgentClient(options) {
       try {
         message = JSON.parse(data.toString());
       } catch {
+        return;
+      }
+      if (message.type === 'session-sync-ack') {
+        client.emit('sync-ack', message);
         return;
       }
       const response = await handleAgentRequest(api, message);

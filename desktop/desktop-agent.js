@@ -39,18 +39,23 @@ async function syncProvider() {
     lastDiscoveryAt = now;
     console.log('列表同步中：读取 Codex Desktop 已打开的对话');
     const openThreads = await controller.listOpenThreads();
-    knownThreadTargets = reader.discoverOpenThreadSessions(openThreads);
+    knownThreadTargets = reader.discoverOpenThreadSessions(openThreads)
+      .sort((left, right) => Number(right.mtimeMs || 0) - Number(left.mtimeMs || 0));
     console.log(`列表同步完成：发现 ${openThreads.length} 个对话，匹配 ${knownThreadTargets.length} 个本地记录`);
   }
   const snapshot = reader.readKnownThreadSync(knownThreadTargets, syncOffsets, {
     initialLineLimit: Number(process.env.CODEX_AGENT_INITIAL_SYNC_LINES || 1000),
+    snapshotMessageLimit: Number(process.env.CODEX_AGENT_SNAPSHOT_MESSAGES || 50),
     syncByteLimit: Number(process.env.CODEX_AGENT_SYNC_BYTE_LIMIT || 512 * 1024),
   });
   if (snapshot.sessions.length) {
-    const contentCount = snapshot.sessions.filter(session => !session.metadataOnly).length;
-    const metadataCount = snapshot.sessions.length - contentCount;
-    console.log(`对话同步中：${describeSyncedThreads(snapshot.sessions)}`);
-    console.log(`对话同步完成：${snapshot.sessions.length} 个对话，${contentCount} 个含消息${metadataCount ? `，${metadataCount} 个仅列表信息` : ''}`);
+    const snapshotSessions = snapshot.sessions.filter(session => session.snapshot);
+    const metadataCount = snapshot.sessions.filter(session => session.metadataOnly).length;
+    for (const session of snapshotSessions) {
+      const status = session.snapshot.status || {};
+      console.log(`对话同步准备：${session.threadName || session.threadId}，${session.snapshot.messages.length} 条消息，状态 ${status.status || 'unknown'}`);
+    }
+    if (metadataCount) console.log(`对话同步排队：${metadataCount} 个对话等待下一个同步批次`);
   }
   return {
     deviceName,
@@ -80,4 +85,12 @@ ws.on('error', error => {
 });
 ws.on('sync-error', error => {
   console.error(`Desktop agent sync error: ${error.message}`);
+});
+ws.on('sync-sent', payload => {
+  const sessions = Array.isArray(payload && payload.sessions) ? payload.sessions : [];
+  const snapshotCount = sessions.filter(session => session.snapshot).length;
+  console.log(`同步请求已发送：${sessions.length} 个对话，${snapshotCount} 个携带历史快照`);
+});
+ws.on('sync-ack', ack => {
+  console.log(`服务器已确认同步：缓存 ${Number(ack.sessionCount) || 0} 个对话，${ack.updatedAt || ''}`);
 });
