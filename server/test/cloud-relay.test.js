@@ -358,6 +358,7 @@ test('云端缓存保存紧凑快照并按页面返回历史', () => {
   assert.equal(newest.nextBefore, '8');
   assert.deepEqual(older.messages.map(row => row.text), ['消息 5', '消息 6', '消息 7', '消息 8']);
   assert.equal(cache.status('snapshot-token', 'thread-snapshot').status, 'complete');
+  assert.equal(cache.status('snapshot-token', 'thread-snapshot', '2026-07-29T12:00:00.000Z').status, 'complete');
 });
 
 test('云端缓存支持渲染为用户消息、处理过程、最终回复顺序', () => {

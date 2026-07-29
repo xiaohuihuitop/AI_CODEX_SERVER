@@ -288,7 +288,7 @@ class CloudSessionCache {
     }
     const sinceKey = String(since || '');
     let status = session.parsed.status;
-    if (sinceKey) {
+    if (sinceKey && session.lines.length) {
       if (!session.statusSinceCache.has(sinceKey)) {
         session.statusSinceCache.set(sinceKey, this.parseSession(session.lines, threadId, sinceKey).status);
         if (session.statusSinceCache.size > 12) {
