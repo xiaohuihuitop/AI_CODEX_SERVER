@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 2
+- **Total Sessions**: 3
 - **Last Active**: 2026-07-29
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~51 | Active |
+| `journal-1.md` | ~73 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 3 | 2026-07-29 | 修复手机端会话同步与加载 | `d2de398`, `c3db6c7` | `master` |
 | 2 | 2026-07-29 | 修复构建与完善设备 Key 管理 | `00c952c`, `6ed76b0`, `0b89d52` | `master` |
 | 1 | 2026-07-29 | 完成 Windows Agent 远程桥接与 Key 管理 | `71ec2b7` | `master` |
 <!-- @@@/auto:session-history -->

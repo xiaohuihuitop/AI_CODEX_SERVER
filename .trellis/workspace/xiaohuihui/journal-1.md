@@ -49,3 +49,25 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 3: 修复手机端会话同步与加载
+
+**Date**: 2026-07-29
+**Task**: 修复手机端会话同步与加载
+**Branch**: `master`
+
+### Summary
+
+修复 Codex 侧栏线程识别；限制首轮会话同步负载并为手机端请求增加超时和切换互斥。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d2de398` | (see git log) |
+| `c3db6c7` | (see git log) |
+
+### Status
+
+[OK] **Completed**
