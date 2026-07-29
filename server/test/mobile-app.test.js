@@ -105,10 +105,11 @@ test('uni-app Android 手机端按每轮对话渲染处理过程', () => {
   assert.match(index, /processKey: processStateKey\(turn, steps\)/);
   assert.match(index, /const timelineItems = computed/);
   assert.match(index, /const turnsById = \{\};/);
+  assert.match(index, /const renderedProcessTurnIds = \{\};/);
   assert.match(index, /row\.turnId \? turnsById\[row\.turnId\] : null/);
   assert.match(index, /function shouldAppendUnmatchedProcess\(turn\)/);
   assert.match(index, /const userTurn = row && row\.role === 'user' && row\.turnId \? turnsById\[row\.turnId\] : null;/);
-  assert.match(index, /if \(userTurn\) \{[\s\S]*items\.push\(\{ type: 'message'[\s\S]*items\.push\(\{ type: 'process'/);
+  assert.match(index, /if \(userTurn && !renderedProcessTurnIds\[userTurn\.turnId\]\) \{[\s\S]*items\.push\(\{ type: 'message'[\s\S]*items\.push\(\{ type: 'process'/);
   assert.match(index, /return false;/);
   assert.doesNotMatch(index, /pendingTurns\.splice\(0, 1\)/);
   assert.match(index, /items\.push\(\{ type: 'process'/);
@@ -254,8 +255,8 @@ test('uni-app Android 手机端消息顺序固定为用户消息、处理过程�
   const timelineFunction = index.match(/const timelineItems = computed\(\(\) => \{([\s\S]*?)\n\}\);/)?.[1] || '';
   const pollFunction = index.match(/async function pollStatus\(watch = pendingWatch\.value \|\| \{\}\) \{([\s\S]*?)\n\}/)?.[1] || '';
 
-  assert.match(timelineFunction, /if \(userTurn\) \{[\s\S]*items\.push\(\{ type: 'message'[\s\S]*items\.push\(\{ type: 'process'/);
-  assert.match(timelineFunction, /if \(exactTurn\) \{[\s\S]*items\.push\(\{ type: 'process'[\s\S]*items\.push\(\{ type: 'message'/);
+  assert.match(timelineFunction, /if \(userTurn && !renderedProcessTurnIds\[userTurn\.turnId\]\) \{[\s\S]*items\.push\(\{ type: 'message'[\s\S]*items\.push\(\{ type: 'process'/);
+  assert.match(timelineFunction, /if \(exactTurn && !renderedProcessTurnIds\[exactTurn\.turnId\]\) \{[\s\S]*items\.push\(\{ type: 'process'[\s\S]*items\.push\(\{ type: 'message'/);
   assert.match(pollFunction, /const historySynced = await syncRunningHistory\(data\);[\s\S]*if \(!historySynced && !applyThreadStatus\(data\)\) return;/);
 });
 
@@ -292,6 +293,7 @@ test('uni-app Android 手机端运行状态同时要求 Agent 在线和同步新
   const fetchThreadRowsFunction = index.match(/async function fetchThreadRows\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
   const threadDotFunction = index.match(/function threadDotClassFor\(thread\) \{([\s\S]*?)\n\}/)?.[1] || '';
   const startTimersFunction = index.match(/function startTimers\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
+  const realtimeRefreshFunction = index.match(/function scheduleRealtimeRefresh\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
 
   assert.match(index, /function applyAgentOnline\(data\)/);
   assert.match(index, /typeof data\.agentOnline !== 'boolean'/);
@@ -306,6 +308,7 @@ test('uni-app Android 手机端运行状态同时要求 Agent 在线和同步新
   assert.match(index, /function applyThreadStatus\(status\) \{[\s\S]*!applyRelayState\(status\)/);
   assert.match(index, /createRealtimeSocket/);
   assert.match(index, /function scheduleRealtimeRefresh\(\)/);
+  assert.match(realtimeRefreshFunction, /if \(switchingThread\.value \|\| loading\.value\) \{[\s\S]*scheduleRealtimeRefresh\(\);[\s\S]*return;/);
   assert.match(index, /function scheduleRealtimeReconnect\(\)/);
   assert.match(index, /function openRealtimeSocket\(\)/);
   assert.match(index, /event\.type === 'session-updated'/);
@@ -335,7 +338,7 @@ test('uni-app Android 手机端切换对话时显示等待 UI 并防止旧请求
   assert.match(index, /selectedThreadId\.value !== requestedThreadId/);
   assert.match(index, /\.switch-loading\s*\{/);
   assert.match(index, /@keyframes switch-loading-spin/);
-  assert.match(index, /if \(switchingThread\.value \|\| loading\.value\) return;/);
+  assert.match(index, /if \(switchingThread\.value \|\| loading\.value\) \{[\s\S]*scheduleRealtimeRefresh\(\);[\s\S]*return;/);
 });
 
 test('uni-app Android 手机端隐藏或销毁后停止轮询并阻止异步回写', () => {

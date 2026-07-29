@@ -10,6 +10,11 @@ const {
   generateDeviceToken,
   normalizeManagerConfig,
 } = require('../../desktop/src/desktop-manager');
+const {
+  DesktopAgentProcess,
+  MAX_LOG_LINES,
+  appendLog,
+} = require('../../desktop/src/desktop-agent-process');
 
 test('桌面管理器生成可直接用于手机和 Agent 的固定 token 配置', () => {
   const config = normalizeManagerConfig({
@@ -57,6 +62,34 @@ test('桌面管理器 token 生成不使用短 token', () => {
   const token = generateDeviceToken();
 
   assert.match(token, /^codex_[a-z0-9_-]{24,}$/i);
+});
+
+test('桌面 Agent 日志最多保留 500 条且支持清除', () => {
+  const logs = [];
+  appendLog(logs, Array.from({ length: MAX_LOG_LINES + 2 }, (_, index) => `日志 ${index + 1}`).join('\n'));
+  assert.equal(MAX_LOG_LINES, 500);
+  assert.equal(logs.length, 500);
+  assert.equal(logs[0], '日志 3');
+
+  const manager = new DesktopAgentProcess({ processFinder: () => null });
+  manager.lastOutput = ['列表同步完成'];
+  manager.lastError = ['同步异常'];
+  manager.clearLogs();
+  assert.deepEqual(manager.status().lastOutput, []);
+  assert.deepEqual(manager.status().lastError, []);
+});
+
+test('桌面管理器提供日志清除操作', () => {
+  const main = fs.readFileSync(path.join(__dirname, '../../desktop/electron/main.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(__dirname, '../../desktop/electron/preload.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '../../desktop/electron/renderer.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '../../desktop/electron/renderer.html'), 'utf8');
+
+  assert.match(main, /manager:clear-logs/);
+  assert.match(preload, /clearLogs/);
+  assert.match(renderer, /clearLogsButton/);
+  assert.match(renderer, /window\.codexManager\.clearLogs\(\)/);
+  assert.match(html, /id="clearLogsButton"/);
 });
 
 test('桌面管理器配置可以持久化到文件', () => {

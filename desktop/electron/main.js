@@ -218,6 +218,11 @@ ipcMain.handle('manager:restart-agent', async () => {
   return getState();
 });
 
+ipcMain.handle('manager:clear-logs', () => {
+  agentController.clearLogs();
+  return getState();
+});
+
 ipcMain.handle('manager:open-mobile', async () => {
   const normalized = normalizeManagerConfig(config);
   if (!normalized.serverUrl || !normalized.token) {

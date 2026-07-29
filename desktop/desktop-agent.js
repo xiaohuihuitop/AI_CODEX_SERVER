@@ -20,18 +20,38 @@ const discoveryIntervalMs = Math.max(5000, Number(process.env.CODEX_AGENT_DISCOV
 let knownThreadTargets = [];
 let lastDiscoveryAt = 0;
 
+function describeSyncedThreads(sessions) {
+  const names = {};
+  for (const session of sessions) {
+    const name = String(session.threadName || session.threadId || '').trim();
+    if (name) names[name] = true;
+  }
+  const values = Object.keys(names);
+  if (!values.length) return '未知对话';
+  const preview = values.slice(0, 3).join('、');
+  return values.length > 3 ? `${preview} 等 ${values.length} 个对话` : preview;
+}
+
 async function syncProvider() {
   const busy = api.isBusy();
   const now = Date.now();
   if (!busy && now - lastDiscoveryAt >= discoveryIntervalMs) {
     lastDiscoveryAt = now;
+    console.log('列表同步中：读取 Codex Desktop 已打开的对话');
     const openThreads = await controller.listOpenThreads();
     knownThreadTargets = reader.discoverOpenThreadSessions(openThreads);
+    console.log(`列表同步完成：发现 ${openThreads.length} 个对话，匹配 ${knownThreadTargets.length} 个本地记录`);
   }
   const snapshot = reader.readKnownThreadSync(knownThreadTargets, syncOffsets, {
     initialLineLimit: Number(process.env.CODEX_AGENT_INITIAL_SYNC_LINES || 1000),
     syncByteLimit: Number(process.env.CODEX_AGENT_SYNC_BYTE_LIMIT || 512 * 1024),
   });
+  if (snapshot.sessions.length) {
+    const contentCount = snapshot.sessions.filter(session => !session.metadataOnly).length;
+    const metadataCount = snapshot.sessions.length - contentCount;
+    console.log(`对话同步中：${describeSyncedThreads(snapshot.sessions)}`);
+    console.log(`对话同步完成：${snapshot.sessions.length} 个对话，${contentCount} 个含消息${metadataCount ? `，${metadataCount} 个仅列表信息` : ''}`);
+  }
   return {
     deviceName,
     syncedAt: new Date().toISOString(),

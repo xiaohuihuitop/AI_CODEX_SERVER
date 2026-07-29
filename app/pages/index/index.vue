@@ -197,6 +197,7 @@ const timelineItems = computed(() => {
   const items = [];
   const pendingTurns = [];
   const turnsById = {};
+  const renderedProcessTurnIds = {};
   for (const turn of processTurns.value) {
     pendingTurns.push(turn);
     turnsById[turn.turnId] = turn;
@@ -204,16 +205,18 @@ const timelineItems = computed(() => {
   for (let index = 0; index < messages.value.length; index += 1) {
     const row = messages.value[index];
     const userTurn = row && row.role === 'user' && row.turnId ? turnsById[row.turnId] : null;
-    if (userTurn) {
+    if (userTurn && !renderedProcessTurnIds[userTurn.turnId]) {
       items.push({ type: 'message', key: row.id || `message-${row.role}-${index}`, row });
       items.push({ type: 'process', key: `process-${userTurn.turnId}`, turn: userTurn });
+      renderedProcessTurnIds[userTurn.turnId] = true;
       const pendingIndex = pendingTurns.findIndex(turn => turn.turnId === userTurn.turnId);
       if (pendingIndex !== -1) pendingTurns.splice(pendingIndex, 1);
       continue;
     }
     const exactTurn = row && row.role === 'assistant' && row.turnId ? turnsById[row.turnId] : null;
-    if (exactTurn) {
+    if (exactTurn && !renderedProcessTurnIds[exactTurn.turnId]) {
       items.push({ type: 'process', key: `process-${exactTurn.turnId}`, turn: exactTurn });
+      renderedProcessTurnIds[exactTurn.turnId] = true;
       for (let pendingIndex = 0; pendingIndex < pendingTurns.length; pendingIndex += 1) {
         if (pendingTurns[pendingIndex].turnId === exactTurn.turnId) {
           pendingTurns.splice(pendingIndex, 1);
@@ -1122,7 +1125,10 @@ function scheduleRealtimeRefresh() {
   if (realtimeRefreshTimer || !canUpdatePage()) return;
   realtimeRefreshTimer = setTimeout(async () => {
     realtimeRefreshTimer = null;
-    if (switchingThread.value || loading.value) return;
+    if (switchingThread.value || loading.value) {
+      scheduleRealtimeRefresh();
+      return;
+    }
     try {
       await loadThreads();
       if (selectedThreadId.value) await loadHistory(null, { scrollToBottom: followBottom.value, silent: true });

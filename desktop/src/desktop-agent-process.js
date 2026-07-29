@@ -2,7 +2,7 @@ const path = require('node:path');
 const { execFileSync, spawn } = require('node:child_process');
 const { buildAgentEnv, normalizeManagerConfig } = require('./desktop-manager');
 
-const MAX_LOG_LINES = 30;
+const MAX_LOG_LINES = 500;
 const DEFAULT_STOP_TIMEOUT_MS = 5000;
 const DEFAULT_STOP_POLL_MS = 100;
 
@@ -152,6 +152,16 @@ class DesktopAgentProcess {
   }
 
   /**
+   * AI:清空当前管理器保留的 Agent 输出，避免历史日志干扰排查。
+   *
+   * @returns {void}
+   */
+  clearLogs() {
+    this.lastOutput = [];
+    this.lastError = [];
+  }
+
+  /**
    * AI:等待指定 Agent PID 退出，避免重新上线时复用旧连接状态。
    *
    * @param {number} pid 需要等待退出的进程 PID。
@@ -209,6 +219,8 @@ function createDesktopAgentProcess(options = {}) {
 
 module.exports = {
   DesktopAgentProcess,
+  MAX_LOG_LINES,
+  appendLog,
   createDesktopAgentProcess,
   findExistingAgentSnapshot,
 };
