@@ -332,6 +332,7 @@
     let syncState = { fresh: false, version: 0, lastSyncedAt: '' };
     let commandConfirmTimer = null;
     let pendingLocalSends = [];
+    let renderedHistorySignature = '';
 
     /**
      * 调用本机桥接 API。
@@ -627,6 +628,23 @@
     }
 
     /**
+     * AI:为历史消息生成稳定签名，只有内容变化时才重建消息 DOM。
+     *
+     * @param {Array<object>} rows 当前历史消息。
+     * @returns {string} 消息内容签名。
+     */
+    function historyRowsSignature(rows) {
+      return (rows || []).map(row => [
+        row && row.role || '',
+        row && row.text || '',
+        row && row.timestamp || '',
+        row && row.turnId || '',
+        row && row.pending ? 'pending' : '',
+        row && row.id || '',
+      ].join('\u0000')).join('\u0001');
+    }
+
+    /**
      * 提取每轮可显示的处理过程。
      *
      * @param {object} status Codex 状态数据。
@@ -758,6 +776,20 @@
     }
 
     /**
+     * AI:仅在轮次内容实际变化时替换过程卡，保留展开状态并消除轮询闪烁。
+     *
+     * @param {object} turn 处理轮次。
+     * @returns {string} 可比较的轮次内容标识。
+     */
+    function processCardSignature(turn) {
+      return JSON.stringify({
+        status: turn.status || '',
+        durationText: turn.durationText || '',
+        steps: (turn.steps || []).map(step => [step.kind || '', step.label || '', step.time || '', step.text || '']),
+      });
+    }
+
+    /**
      * AI:判断没有匹配到最终回复的处理过程是否允许临时追加到底部。
      *
      * @param {object} turn 处理轮次。
@@ -775,19 +807,25 @@
      */
     function renderProcessPanel(status, options = {}) {
       const scroll = options.preserveScroll === false ? null : captureScroll();
-      document.querySelectorAll('.process-card').forEach(item => item.remove());
       const turns = processTurns(status);
-      if (!turns.length) {
-        restoreScroll(scroll);
-        return;
-      }
+      const expectedTurnIds = new Set(turns.map(turn => turn.turnId));
 
       for (const turn of turns) {
+        const signature = processCardSignature(turn);
+        const existing = Array.from(messagesEl.querySelectorAll('.process-card')).find(item => item.dataset.turnId === turn.turnId);
+        if (existing && existing.dataset.signature === signature) continue;
         const card = createProcessCard(turn);
+        card.dataset.signature = signature;
+        const wasOpen = Boolean(existing?.querySelector('details')?.open);
+        card.querySelector('details').open = wasOpen;
         const assistant = findAssistantMessageByTurn(turn.turnId);
         const user = findUserMessageByTurn(turn.turnId);
-        if (user) user.insertAdjacentElement('afterend', card);
+        if (existing) existing.replaceWith(card);
+        else if (user) user.insertAdjacentElement('afterend', card);
         else if (assistant) messagesEl.insertBefore(card, assistant);
+      }
+      for (const card of messagesEl.querySelectorAll('.process-card')) {
+        if (!expectedTurnIds.has(card.dataset.turnId)) card.remove();
       }
       if (options.scrollToBottom) scrollToBottom();
       else restoreScroll(scroll);
@@ -868,7 +906,7 @@
     async function fetchThreadRows(errorMessage) {
       if (threadListRequest) return threadListRequest;
       threadListRequest = (async () => {
-        const res = await api(`/codex/threads?limit=120&token=${encodeURIComponent(token)}`);
+        const res = await api(`/codex/threads?limit=160&token=${encodeURIComponent(token)}`);
         const data = await res.json();
         if (!res.ok || !data.ok) {
           updateConnectionStatus({ offline: true, message: data.message || errorMessage });
@@ -928,6 +966,7 @@
     async function loadHistory(statusData = null, options = {}) {
       if (!selectedThreadId) {
         messagesEl.innerHTML = '';
+        renderedHistorySignature = '';
         notice('没有可用 Codex 线程');
         return;
       }
@@ -936,8 +975,12 @@
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.message || '读取历史失败');
       const rows = mergePendingLocalMessages(selectedThreadId, data.messages || []);
-      messagesEl.innerHTML = '';
-      for (const row of rows) message(row.role, row.text || '', { scrollToBottom: false, turnId: row.turnId || '', pending: Boolean(row.pending), id: row.id || '' });
+      const historySignature = historyRowsSignature(rows);
+      if (historySignature !== renderedHistorySignature) {
+        messagesEl.innerHTML = '';
+        for (const row of rows) message(row.role, row.text || '', { scrollToBottom: false, turnId: row.turnId || '', pending: Boolean(row.pending), id: row.id || '' });
+        renderedHistorySignature = historySignature;
+      }
       if (data.available) {
         const snapshot = statusData || await fetchStatus({ threadId: selectedThreadId });
         currentThreadStatus = snapshot;

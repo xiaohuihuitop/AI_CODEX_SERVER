@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const {
   CodexSessionReader,
+  applyDesktopRuntimeStatus,
   projectNameFromCwd,
   reasoningText,
   stripCodexUiDirectives,
@@ -276,6 +277,33 @@ test('已发现打开线程后增量同步不再扫描会话目录', () => {
   assert.equal(second.sessions.length, 0);
 });
 
+test('侧栏可见线程在索引缺失标题时仍可精确发现且不包含归档会话', () => {
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+
+  const targets = reader.discoverOpenThreadSessions([
+    { projectName: 'demo', threadName: '我现在 手机端 看不到任何对话. web 也看不见 : http://www.xiaohuihuitop.top:80…' },
+  ]);
+
+  assert.deepEqual(targets.map(target => target.threadId), ['22222222-3333-4444-5555-666666666666']);
+  assert.deepEqual(targets.map(target => target.threadName), ['我现在 手机端 看不到任何对话. web 也看不见 : http://www.xiaohuihuitop.top:80…']);
+});
+
+test('发现本机全部会话时不依赖 Codex 当前打开的窗口', () => {
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+
+  const targets = reader.discoverThreadSessions(160);
+
+  assert.equal(targets.length, reader.sessionFiles().length);
+  assert.equal(targets.some(target => target.threadName === '未打开线程'), true);
+  assert.equal(targets.some(target => target.threadName === '测试线程'), true);
+});
+
 test('首轮同步受字节预算限制时仍上传全部线程元数据', () => {
   const offsets = new Map();
   const reader = new CodexSessionReader({
@@ -317,6 +345,46 @@ test('紧凑会话快照在首轮同步时保留最近消息和当前状态', ()
   assert.deepEqual(sync.sessions[0].snapshot.messages.map(message => message.text), ['你好 Codex', '你好，我在 Windows 上。']);
   assert.equal(sync.sessions[0].snapshot.status.status, 'complete');
   assert.equal(offsets.get(targets[0].threadId).size > 0, true);
+  assert.deepEqual(sync.openThreadIds, [targets[0].threadId]);
+});
+
+test('桌面已空闲时结束缺少 JSONL 终止事件的运行状态', () => {
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const running = reader.parseStatus({ threadId: 'ffffffff-aaaa-bbbb-cccc-dddddddddddd' });
+  const status = applyDesktopRuntimeStatus(running, {
+    state: 'idle',
+    observedAt: '2026-06-08T10:15:00.000Z',
+  });
+
+  assert.equal(running.status, 'running');
+  assert.equal(status.active, false);
+  assert.equal(status.status, 'complete');
+  assert.equal(status.completedAt, '2026-06-08T10:15:00.000Z');
+  assert.equal(status.turns.at(-1).status, 'complete');
+});
+
+test('桌面运行态变化时即使 JSONL 未变化也重新同步状态快照', () => {
+  const offsets = new Map();
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const targets = reader.discoverOpenThreadSessions([
+    { projectName: 'demo', threadName: '运行中线程' },
+  ]);
+  const first = reader.readKnownThreadSync(targets, offsets, { snapshotMessageLimit: 10 });
+  targets[0].desktopRuntime = { state: 'idle', observedAt: '2026-06-08T10:15:00.000Z' };
+  const second = reader.readKnownThreadSync(targets, offsets, { snapshotMessageLimit: 10 });
+  const third = reader.readKnownThreadSync(targets, offsets, { snapshotMessageLimit: 10 });
+
+  assert.equal(first.sessions[0].snapshot.status.status, 'running');
+  assert.equal(second.sessions.length, 1);
+  assert.equal(second.sessions[0].snapshot.status.status, 'complete');
+  assert.equal(offsets.get(targets[0].threadId).desktopState, 'idle');
+  assert.equal(third.sessions.length, 0);
 });
 
 test('解析线程历史', () => {

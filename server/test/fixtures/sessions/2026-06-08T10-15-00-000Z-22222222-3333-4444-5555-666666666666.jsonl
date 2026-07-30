@@ -1,0 +1,3 @@
+{"timestamp":"2026-06-08T10:15:00.000Z","type":"session_meta","payload":{"cwd":"C:\\Users\\admin\\Desktop\\demo"}}
+{"timestamp":"2026-06-08T10:15:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"我现在 手机端 看不到任何对话. web 也看不见 : http://www.xiaohuihuitop.top:8008/?token=xiaohuihui"}}
+{"timestamp":"2026-06-08T10:15:02.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-sidebar-title","completed_at":1780913702}}

@@ -1,6 +1,6 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('send-thread', 'stop', 'list-open-threads')]
+  [ValidateSet('send-thread', 'stop', 'list-open-threads', 'get-active-thread-runtime')]
   [string]$Action,
 
   [string]$ProjectName = '',
@@ -242,6 +242,62 @@ function Get-OpenThreads {
   }
 }
 
+function Get-ActiveThreadRuntime {
+  $socket = Get-CodexSocket
+  try {
+    $expression = @'
+(() => {
+  const timePattern = /^\d+\s*(\u79d2|\u5206|\u5c0f\u65f6|\u5929|\u5468|\u4e2a\u6708|\u5e74)$/;
+  const textOf = (el) => String((el && (el.innerText || el.textContent)) || '').trim();
+  const titleOf = (el) => textOf(el).split('\n').map(line => line.trim()).find(line => line && !timePattern.test(line)) || '';
+  const navigation = [...document.querySelectorAll('[role="navigation"]')]
+    .find(el => el.querySelector('[role="listitem"][aria-label] [role="list"]'));
+  const selectedButton = navigation && [...navigation.querySelectorAll('[role="list"] [role="button"]')]
+    .find(el => el.getAttribute('aria-current') === 'page' || el.getAttribute('aria-selected') === 'true' || el.closest('[aria-selected="true"]'));
+  const selectedItem = selectedButton ? selectedButton.closest('[role="listitem"]') : null;
+  const projectRow = selectedItem ? selectedItem.closest('[role="listitem"][aria-label]:has([role="list"])') : null;
+  const buttons = [...document.querySelectorAll('button')].filter(btn => {
+    const rect = btn.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && String(btn.className || '').includes('size-token-button-composer');
+  });
+  const composerButton = buttons[0];
+  const pathNode = composerButton ? composerButton.querySelector('svg path') : null;
+  const iconPath = pathNode ? pathNode.getAttribute('d') || '' : '';
+  const hasBusyIndicator = [...document.querySelectorAll('[role="progressbar"], svg, [data-state]')].some(el => {
+    const text = `${el.getAttribute('class') || ''} ${el.getAttribute('aria-label') || ''} ${el.getAttribute('data-state') || ''}`;
+    return /animate-spin|spinner|loading|generating|\u6b63\u5728\u751f\u6210/i.test(text);
+  });
+  return {
+    ok: !!composerButton,
+    projectName: projectRow ? projectRow.getAttribute('aria-label') || '' : '',
+    threadName: titleOf(selectedItem),
+    iconPath,
+    hasBusyIndicator,
+  };
+})()
+'@
+    $result = Invoke-Cdp -Socket $socket -Method 'Runtime.evaluate' -Params @{
+      expression = $expression
+      returnByValue = $true
+    }
+    if (-not $result.result.value -or -not $result.result.value.ok) {
+      return [pscustomobject]@{ ok = $false; projectName = ''; threadName = ''; state = 'unknown' }
+    }
+    $value = $result.result.value
+    # AI:Codex Desktop 当前版本的可发送按钮是向上箭头；未知图标不改变 JSONL 状态。
+    $runtimeState = 'unknown'
+    if ($value.iconPath -like 'M9.33467*' -and -not $value.hasBusyIndicator) { $runtimeState = 'idle' }
+    [pscustomobject]@{
+      ok = $true
+      projectName = [string]$value.projectName
+      threadName = [string]$value.threadName
+      state = $runtimeState
+    } | ConvertTo-Json -Depth 8
+  } finally {
+    Close-CodexSocket -Socket $socket
+  }
+}
+
 function Send-ToThread {
   if (-not $ProjectName) { throw 'PROJECT_NAME_REQUIRED' }
   if (-not $ThreadName) { throw 'THREAD_NAME_REQUIRED' }
@@ -322,5 +378,10 @@ if ($Action -eq 'stop') {
 
 if ($Action -eq 'list-open-threads') {
   Get-OpenThreads
+  exit 0
+}
+
+if ($Action -eq 'get-active-thread-runtime') {
+  Get-ActiveThreadRuntime
   exit 0
 }

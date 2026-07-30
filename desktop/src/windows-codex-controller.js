@@ -117,6 +117,16 @@ class WindowsCodexController {
       target.threadName,
     ]);
   }
+
+  /**
+   * 读取 Codex Desktop 当前可见线程的实际运行状态。
+   *
+   * @returns {Promise<{projectName: string, threadName: string, state: 'running'|'idle'|'unknown'}>} 当前线程运行状态。
+   */
+  async getActiveThreadRuntime() {
+    const result = await this.run('get-active-thread-runtime');
+    return JSON.parse(result.stdout || '{}');
+  }
 }
 
 module.exports = {

@@ -22,7 +22,9 @@ test('云端和桌面端入口文件存在并使用固定 token 环境变量', (
   assert.match(agent, /const busy = api\.isBusy\(\)/);
   assert.match(agent, /if \(!busy && now - lastDiscoveryAt >= discoveryIntervalMs\)/);
   assert.doesNotMatch(agent, /if \(api\.isBusy\(\)\) \{\s*return null;\s*\}/);
+  assert.match(agent, /controller\.listOpenThreads\(\)/);
   assert.match(agent, /discoverOpenThreadSessions/);
+  assert.match(agent, /syncOffsets\.clear\(\)/);
   assert.match(agent, /readKnownThreadSync/);
   assert.match(agent, /CODEX_AGENT_SYNC_INTERVAL_MS/);
   assert.match(agent, /CODEX_AGENT_DISCOVERY_INTERVAL_MS/);

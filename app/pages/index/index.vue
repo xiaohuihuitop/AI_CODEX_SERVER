@@ -35,7 +35,7 @@
       <view class="popup-header">
         <view>
           <text class="popup-title">选择对话</text>
-          <text class="popup-subtitle">按文件夹分组显示当前打开的对话</text>
+          <text class="popup-subtitle">按文件夹分组显示电脑端已同步的对话</text>
         </view>
         <button class="popup-close" @click="closeThreadPopup">关闭</button>
       </view>
@@ -768,6 +768,28 @@ function applyAgentOnline(data) {
 }
 
 /**
+ * AI:合并已加载的历史页与服务器最新页，实时刷新不能丢弃向上翻出的旧消息。
+ *
+ * @param {Array<object>} existingRows 当前已展示消息。
+ * @param {Array<object>} latestRows 服务器返回的最新一页消息。
+ * @returns {Array<object>} 时间顺序稳定且去重后的历史消息。
+ */
+function mergeLoadedHistory(existingRows, latestRows) {
+  const rows = [];
+  const seen = {};
+  const currentRows = (existingRows || []).filter(item => !(item && item.pending));
+  const combinedRows = currentRows.concat(latestRows || []);
+  for (const row of combinedRows) {
+    if (!row || !row.text) continue;
+    const key = [row.role || '', row.turnId || '', row.timestamp || '', row.text || ''].join('\u0000');
+    if (Object.prototype.hasOwnProperty.call(seen, key)) continue;
+    seen[key] = true;
+    rows.push(row);
+  }
+  return rows;
+}
+
+/**
  * AI:应用 Relay 的版本化同步状态，拒绝旧快照回写页面。
  *
  * @param {object} data Relay 响应或实时事件。
@@ -899,7 +921,7 @@ async function loadHistory(statusData = null, options = {}) {
   const data = await getHistory(config.value, requestedThreadId, { limit: 10, registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
   if (!canUpdateTask(token) || selectedThreadId.value !== requestedThreadId) return;
   if (!applyRelayState(data)) return;
-  messages.value = mergePendingLocalMessages(requestedThreadId, data.messages || []);
+  messages.value = mergePendingLocalMessages(requestedThreadId, mergeLoadedHistory(messages.value, data.messages || []));
   historyNextBefore.value = data.nextBefore || '';
   hasOlderHistory.value = Boolean(data.hasMore && historyNextBefore.value);
   if (data.available) {
@@ -1162,7 +1184,7 @@ async function loadOlderHistory() {
     const data = await getHistory(config.value, requestedThreadId, { limit: 10, before: historyNextBefore.value, registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token) || requestedThreadId !== selectedThreadId.value) return;
     if (!applyRelayState(data)) return;
-    messages.value = data.messages.concat(messages.value);
+    messages.value = mergePendingLocalMessages(requestedThreadId, mergeLoadedHistory(data.messages || [], messages.value));
     historyNextBefore.value = data.nextBefore || '';
     hasOlderHistory.value = Boolean(data.hasMore && historyNextBefore.value);
   } catch (error) {
@@ -1535,8 +1557,8 @@ onBackPress(() => {
 }
 
 .popup-list {
-  height: 52vh;
-  max-height: 460px;
+  height: 70vh;
+  max-height: 680px;
   padding: 10px 10px 20px;
 }
 

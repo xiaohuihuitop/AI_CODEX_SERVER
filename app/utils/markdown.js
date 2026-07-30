@@ -16,6 +16,12 @@ export function stripCodexUiDirectives(text) {
   let inAttachmentContext = false;
   let attachmentCount = 0;
 
+  function appendAttachmentNotice() {
+    if (!attachmentCount) return;
+    lines.push(`已附 ${attachmentCount} 个附件（仅电脑端可查看）`);
+    attachmentCount = 0;
+  }
+
   for (const line of String(text || '').split(/\r?\n/)) {
     const trimmed = line.trim();
     const isBrowserHeader = /^(?:#+\s*)?In app browser:\s*$/i.test(trimmed);
@@ -34,12 +40,19 @@ export function stripCodexUiDirectives(text) {
     if (isRequestHeader) {
       inBrowserContext = false;
       inAttachmentContext = false;
-      if (attachmentCount) lines.push(`已附 ${attachmentCount} 个附件（仅电脑端可查看）`);
+      appendAttachmentNotice();
       continue;
     }
     if (inAttachmentContext) {
-      if (/^#{1,6}\s+.+?:\s*$/.test(trimmed)) attachmentCount += 1;
-      continue;
+      const isAttachmentTitle = /^#{1,6}\s+.+?:\s*(?:(?:[A-Za-z]:[\\/]|\/).+)?$/.test(trimmed);
+      const isLocalAttachmentPath = /^(?:[A-Za-z]:[\\/]|\/)/.test(trimmed);
+      if (!trimmed || isLocalAttachmentPath) continue;
+      if (isAttachmentTitle) {
+        attachmentCount += 1;
+        continue;
+      }
+      inAttachmentContext = false;
+      appendAttachmentNotice();
     }
     if (inBrowserContext) {
       if (!trimmed || isBrowserMeta) continue;

@@ -21,6 +21,7 @@ const elements = {
   mobileUrl: document.getElementById('mobileUrl'),
   agentEnv: document.getElementById('agentEnv'),
   agentLog: document.getElementById('agentLog'),
+  managerVersion: document.getElementById('managerVersion'),
   clearLogsButton: document.getElementById('clearLogsButton'),
   lastUpdated: document.getElementById('lastUpdated'),
   cloudCard: document.getElementById('cloudCard'),
@@ -76,6 +77,8 @@ function renderConfig(config) {
 
 function renderState(nextState, options = {}) {
   state.current = nextState;
+  const managerVersion = nextState.managerVersion || '未知版本';
+  elements.managerVersion.textContent = `版本 v${managerVersion}`;
   if (options.renderConfig !== false) renderConfig(nextState.config);
   const configured = isConfigured(nextState.config);
   const featureStarted = Boolean(configured && nextState.agent.running);
@@ -105,8 +108,8 @@ function renderState(nextState, options = {}) {
     `CODEX_DEVICE_NAME=${nextState.agentEnv.CODEX_DEVICE_NAME || ''}`,
   ].join('\n');
 
-  const logs = [...(nextState.agent.lastOutput || []), ...(nextState.agent.lastError || [])].slice(-500);
-  elements.agentLog.textContent = logs.length ? logs.join('\n') : '暂无日志。';
+  const logs = [...(nextState.agent.lastOutput || []), ...(nextState.agent.lastError || [])].slice(-499);
+  elements.agentLog.textContent = [`管理器版本：v${managerVersion}`, ...logs].join('\n');
   elements.lastUpdated.textContent = `最后刷新 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
 }
 

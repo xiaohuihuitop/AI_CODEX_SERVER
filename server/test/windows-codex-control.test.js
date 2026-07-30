@@ -179,8 +179,9 @@ test('Windows Codex 控制脚本有进程级超时保护', async () => {
 test('脚本支持读取 Codex Desktop 当前打开线程', () => {
   const script = fs.readFileSync(scriptPath, 'utf8');
 
-  assert.match(script, /ValidateSet\('send-thread', 'stop', 'list-open-threads'/);
+  assert.match(script, /ValidateSet\('send-thread', 'stop', 'list-open-threads', 'get-active-thread-runtime'/);
   assert.match(script, /function Get-OpenThreads/);
+  assert.match(script, /function Get-ActiveThreadRuntime/);
   assert.match(script, /projectName/);
   assert.match(script, /threadName/);
 });
@@ -345,6 +346,8 @@ test('手机端处理过程默认折叠且只通过手动展开', () => {
   assert.match(html, /处理过程已折叠/);
   assert.match(html, /renderProcessPanel\(data\)/);
   assert.match(html, /await loadHistory\(data, \{ preserveScroll: true \}\)/);
+  assert.match(html, /function processCardSignature\(turn\)/);
+  assert.doesNotMatch(html, /document\.querySelectorAll\('\.process-card'\)\.forEach\(item => item\.remove\(\)\);/);
   assert.match(html, /pendingWatch/);
   assert.match(html, /setInterval\(\(\) => pollStatus\(\)/);
   assert.match(html, /if \(!requestedThreadId\) return/);
@@ -378,6 +381,9 @@ test('网页端运行中同步电脑端新增用户消息', () => {
   assert.match(html, /const historySynced = await syncRunningHistory\(data\)/);
   assert.match(html, /if \(!historySynced\) \{[\s\S]*renderProcessPanel\(data\);[\s\S]*\}/);
   assert.match(html, /if \(!options\.silent\) notice/);
+  assert.match(html, /let renderedHistorySignature = '';/);
+  assert.match(html, /function historyRowsSignature\(rows\)/);
+  assert.match(html, /if \(historySignature !== renderedHistorySignature\) \{[\s\S]*messagesEl\.innerHTML = '';/);
 });
 
 test('网页端消息顺序固定为用户消息、处理过程、最终回复', () => {

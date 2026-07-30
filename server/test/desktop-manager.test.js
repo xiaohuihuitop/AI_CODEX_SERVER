@@ -96,6 +96,21 @@ test('桌面管理器提供日志清除操作', () => {
   assert.match(agent, /服务器已确认同步：/);
 });
 
+test('桌面管理器统一使用固定目录、固定名称并展示版本', () => {
+  const main = fs.readFileSync(path.join(__dirname, '../../desktop/electron/main.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '../../desktop/electron/renderer.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '../../desktop/electron/renderer.html'), 'utf8');
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../../desktop/package.json'), 'utf8'));
+
+  assert.equal(pkg.build.directories.output, 'dist');
+  assert.equal(pkg.productName, 'Codex Desktop 管理器');
+  assert.equal(pkg.version, '0.2.0');
+  assert.match(main, /const MANAGER_VERSION = app\.getVersion\(\)/);
+  assert.match(main, /Codex Desktop 管理器 v\$\{MANAGER_VERSION\} 已启动/);
+  assert.match(html, /id="managerVersion"/);
+  assert.match(renderer, /管理器版本：v\$\{managerVersion\}/);
+});
+
 test('桌面管理器配置可以持久化到文件', () => {
   const { loadConfig, saveConfig } = require('../../desktop/src/desktop-manager-server');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-manager-'));

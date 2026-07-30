@@ -177,6 +177,17 @@ test('uni-app Android 手机端不展示附件元数据且紧凑渲染代码块'
   assert.match(html, /请处理手机端显示。/);
   assert.match(html, /word-break:break-all/);
   assert.doesNotMatch(html, /<pre><code>/);
+
+  const directRequestHtml = renderMarkdownToHtml([
+    '# Files mentioned by the user:',
+    '',
+    '## Screenshot_2026.jpg: C:/Users/admin/Downloads/Screenshot_2026.jpg',
+    '',
+    '手机端没显示我发的消息?',
+  ].join('\n'));
+
+  assert.match(directRequestHtml, /已附 1 个附件（仅电脑端可查看）/);
+  assert.match(directRequestHtml, /手机端没显示我发的消息/);
 });
 
 test('uni-app Android 手机端轮询刷新不强制推动阅读位置和处理过程展开状态', () => {
@@ -227,7 +238,8 @@ test('uni-app Android 手机端历史刷新保留未确认本地用户消息', (
   assert.match(mergeFunction, /const insertAt = Math\.min\(rows\.length, Math\.max\(0, \(Number\(pending\.baseMessageCount\) \|\| 0\) \+ insertedCount\)\);/);
   assert.match(mergeFunction, /for \(let localIndex = 0; localIndex < localRows\.length; localIndex \+= 1\)/);
   assert.match(mergeFunction, /rows\.splice\(insertAt \+ localIndex, 0, localRows\[localIndex\]\);/);
-  assert.match(index, /messages\.value = mergePendingLocalMessages\(requestedThreadId, data\.messages \|\| \[\]\);/);
+  assert.match(index, /function mergeLoadedHistory\(existingRows, latestRows\)/);
+  assert.match(index, /messages\.value = mergePendingLocalMessages\(requestedThreadId, mergeLoadedHistory\(messages\.value, data\.messages \|\| \[\]\)\);/);
   assert.match(index, /catch \(error\) \{[\s\S]*removePendingLocalSend\(pending\);[\s\S]*setNotice\(error\.message\);/);
   assert.match(index, /bindPendingLocalSendTurn\(runningTurn\.turnId\);/);
 });
@@ -281,7 +293,7 @@ test('uni-app Android 手机端使用弹出二级对话列表选择线程', () =
   assert.match(index, /\.thread-selector-title\s*\{[\s\S]*line-height:\s*40px;[\s\S]*text-align:\s*left;/);
   assert.match(index, /\.thread-selector-subtitle\s*\{[\s\S]*line-height:\s*40px;[\s\S]*text-align:\s*right;/);
   const popupListStyle = index.match(/\.popup-list\s*\{([\s\S]*?)\n\}/)?.[1] || '';
-  assert.match(popupListStyle, /height:\s*52vh;/);
+  assert.match(popupListStyle, /height:\s*70vh;/);
   assert.doesNotMatch(popupListStyle, /height:\s*0;/);
   assert.match(index, /import \{ onBackPress, onHide, onShow, onUnload \} from '@dcloudio\/uni-app';/);
   assert.match(index, /onBackPress\(\(\) => \{[\s\S]*threadPopupOpen\.value = false;[\s\S]*return true;/);
@@ -353,7 +365,38 @@ test('uni-app Android 手机端首次只读取最近五轮并支持向上分页'
   assert.match(index, /@scrolltoupper="loadOlderHistory"/);
   assert.match(index, /async function loadOlderHistory\(\)/);
   assert.match(index, /await getHistory\(config\.value, requestedThreadId, \{ limit: 10, before: historyNextBefore\.value/);
-  assert.match(index, /messages\.value = data\.messages\.concat\(messages\.value\);/);
+  assert.match(index, /messages\.value = mergePendingLocalMessages\(requestedThreadId, mergeLoadedHistory\(messages\.value, data\.messages \|\| \[\]\)\);/);
+});
+
+test('uni-app Android 手机端向上分页后保持消息时间顺序', () => {
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+  const source = index.match(/function mergeLoadedHistory\(existingRows, latestRows\) \{([\s\S]*?)\n\}\n\n\/\*\*\n \* AI:应用 Relay/)?.[0] || '';
+  const factory = new Function(`${source.replace(/\n\/\*\*[\s\S]*$/, '')}\nreturn mergeLoadedHistory;`);
+  const mergeLoadedHistory = factory();
+  const olderRows = [
+    { role: 'user', text: '第 1 条', timestamp: '2026-07-30T09:00:00.000Z' },
+    { role: 'assistant', text: '第 2 条', timestamp: '2026-07-30T09:00:01.000Z' },
+  ];
+  const latestRows = [
+    { role: 'user', text: '第 3 条', timestamp: '2026-07-30T09:00:02.000Z' },
+    { role: 'assistant', text: '第 4 条', timestamp: '2026-07-30T09:00:03.000Z' },
+  ];
+
+  const loadOlderHistorySource = index.match(/async function loadOlderHistory\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
+  const merged = mergeLoadedHistory(olderRows, latestRows);
+
+  assert.deepEqual(merged.map(row => row.text), ['第 1 条', '第 2 条', '第 3 条', '第 4 条']);
+  const refreshed = mergeLoadedHistory(merged, [
+    ...latestRows,
+    { role: 'user', text: '第 5 条', timestamp: '2026-07-30T09:00:04.000Z' },
+    { role: 'assistant', text: '第 6 条', timestamp: '2026-07-30T09:00:05.000Z' },
+  ]);
+
+  assert.deepEqual(
+    refreshed.map(row => row.text),
+    ['第 1 条', '第 2 条', '第 3 条', '第 4 条', '第 5 条', '第 6 条'],
+  );
+  assert.match(loadOlderHistorySource, /mergeLoadedHistory\(data\.messages \|\| \[\], messages\.value\)/);
 });
 
 test('uni-app Android 手机端隐藏或销毁后停止轮询并阻止异步回写', () => {

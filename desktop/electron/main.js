@@ -24,6 +24,7 @@ const { restartCodexDesktopWithDebug } = require('../src/codex-desktop-process')
 const PROJECT_ROOT = path.join(__dirname, '..');
 const CONFIG_PATH = getDefaultConfigPath();
 const CODEX_DEBUG_PORT = Number(process.env.CODEX_DEBUG_PORT || 9229);
+const MANAGER_VERSION = app.getVersion();
 const TRAY_ICON_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAUUlEQVR4nGMQlFD/P5CYYdQBow4YdQA+SYu9P6iCh74D+Ja+JAsPTwcQA0YdQDcHDHgaGHXAqANGHTDg5QDdHICMiQHDpz1ADzzqgFEHjDoAAFZ6baw6ZLM1AAAAAElFTkSuQmCC';
 
 function escapeRegExp(value) {
@@ -145,6 +146,7 @@ async function getState() {
   const [cloud, codex] = await Promise.all([probeCloud(normalized), probeCodexDebug()]);
   return {
     ok: true,
+    managerVersion: MANAGER_VERSION,
     config: normalized,
     mobileUrl: normalized.serverUrl && normalized.token ? buildMobileUrl(normalized) : '',
     agentEnv: buildAgentEnv(normalized),
@@ -238,6 +240,7 @@ ipcMain.handle('manager:restart-codex', async () => {
 });
 
 app.whenReady().then(() => {
+  console.log(`Codex Desktop 管理器 v${MANAGER_VERSION} 已启动。`);
   startAgentIfEnabled().catch(error => {
     console.error(`Codex manager auto start agent failed: ${error.message}`);
   });

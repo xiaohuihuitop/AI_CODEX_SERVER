@@ -120,7 +120,7 @@ export function getHealth(config, options = {}) {
  * @returns {Promise<object>} 对话列表响应。
  */
 export function getThreads(config, options = {}) {
-  return requestJson(config, '/codex/threads?limit=120', options);
+  return requestJson(config, '/codex/threads?limit=160', options);
 }
 
 /**

@@ -93,6 +93,37 @@ function messageText(content) {
 }
 
 /**
+ * AI:生成与 Codex Desktop 侧栏一致的线程标题，侧栏以 60 个字符展示首条用户请求。
+ *
+ * @param {string} text 用户请求文本。
+ * @returns {string} 可用于匹配侧栏的线程标题。
+ */
+function threadTitleFromUserMessage(text) {
+  const normalized = stripCodexUiDirectives(text).replace(/\s+/g, ' ').trim();
+  const characters = Array.from(normalized);
+  return characters.length > 60 ? `${characters.slice(0, 59).join('')}…` : normalized;
+}
+
+/**
+ * AI:读取会话的线程标题，索引缺失时从首条真实用户请求生成侧栏标题。
+ *
+ * @param {string} file 会话文件路径。
+ * @param {string} indexedName Codex 会话索引标题。
+ * @returns {string} 线程标题。
+ */
+function threadTitleFromSession(file, indexedName) {
+  const name = String(indexedName || '').trim();
+  if (name) return name;
+  for (const item of readJsonl(file)) {
+    const payload = item.payload || {};
+    if (item.type !== 'event_msg' || payload.type !== 'user_message') continue;
+    const title = threadTitleFromUserMessage(payload.message);
+    if (title) return title;
+  }
+  return '';
+}
+
+/**
  * 提取 Codex 公开过程摘要文本。
  *
  * @param {object} payload Codex 响应 payload。
@@ -129,6 +160,30 @@ function commentaryText(payload) {
  */
 function commandCountText(count) {
   return `已运行 ${count} 条命令`;
+}
+
+/**
+ * 将 Codex Desktop 已知的可发送状态同步到缺少终止事件的会话。
+ *
+ * @param {object} status JSONL 解析结果。
+ * @param {{state?: string, observedAt?: string}|undefined} desktopRuntime 当前桌面线程运行状态。
+ * @returns {object} 统一后的会话状态。
+ */
+function applyDesktopRuntimeStatus(status, desktopRuntime) {
+  if (!desktopRuntime || desktopRuntime.state !== 'idle' || status.status !== 'running') return status;
+  const completedAt = String(desktopRuntime.observedAt || new Date().toISOString());
+  const turns = Array.isArray(status.turns) ? status.turns.map(turn => (
+    turn.status === 'running'
+      ? Object.assign({}, turn, { status: 'complete', completedAt })
+      : turn
+  )) : [];
+  return Object.assign({}, status, {
+    active: false,
+    status: 'complete',
+    completedAt,
+    preview: status.final || 'Codex Desktop 已结束本轮回复。',
+    turns,
+  });
 }
 
 /**
@@ -339,7 +394,7 @@ class CodexSessionReader {
       const indexed = byId.get(id) || { id, name: '', updatedAt: '' };
       rows.push({
         id,
-        name: indexed.name || '未命名线程',
+        name: threadTitleFromSession(file, indexed.name) || '未命名线程',
         updatedAt: indexed.updatedAt || new Date(stat.mtimeMs).toISOString(),
         sessionFile: path.basename(file),
         mtimeMs: stat.mtimeMs,
@@ -374,7 +429,7 @@ class CodexSessionReader {
       const meta = readJsonl(file).find(item => item.type === 'session_meta') || {};
       const cwd = String((meta.payload && meta.payload.cwd) || '').trim();
       const projectName = projectNameFromCwd(cwd);
-      const threadName = indexed.name || '未命名线程';
+      const threadName = threadTitleFromSession(file, indexed.name) || '未命名线程';
       const opened = wanted.get(targetKey(projectName, threadName));
       if (!opened) continue;
 
@@ -404,7 +459,7 @@ class CodexSessionReader {
    *
    * @param {Array<{projectName: string, threadName: string}>} openTargets 当前打开线程目标。
    * @param {Map<string, {size: number}>|object} offsets 已同步偏移。
-   * @param {{initialLineLimit?: number}} options 同步选项。
+   * @param {{initialLineLimit?: number, snapshotMessageLimit?: number, syncByteLimit?: number}} options 同步选项。
    * @returns {{sessions: Array<object>, openThreadIds: string[]}} 会话同步快照。
    */
   readOpenThreadSync(openTargets, offsets = new Map(), options = {}) {
@@ -431,7 +486,7 @@ class CodexSessionReader {
       this.sessionMetaCache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, meta });
       const cwd = String((meta.payload && meta.payload.cwd) || '').trim();
       const projectName = projectNameFromCwd(cwd);
-      const threadName = indexed.name || '未命名线程';
+      const threadName = threadTitleFromSession(file, indexed.name) || '未命名线程';
       if (!wanted.has(targetKey(projectName, threadName))) continue;
 
       const previous = offsets instanceof Map ? offsets.get(id) : offsets[id];
@@ -486,11 +541,12 @@ class CodexSessionReader {
       this.sessionMetaCache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, meta });
       const cwd = String((meta.payload && meta.payload.cwd) || '').trim();
       const projectName = projectNameFromCwd(cwd);
-      const threadName = indexed.name || '未命名线程';
-      if (!wanted.has(targetKey(projectName, threadName))) continue;
+      const threadName = threadTitleFromSession(file, indexed.name) || '未命名线程';
+      const opened = wanted.get(targetKey(projectName, threadName));
+      if (!opened) continue;
       rows.push({
         threadId: id,
-        threadName,
+        threadName: opened.threadName,
         projectName,
         cwd,
         file,
@@ -505,6 +561,42 @@ class CodexSessionReader {
       const bIndex = openTargets.findIndex(item => targetKey(item.projectName, item.threadName) === targetKey(b.projectName, b.threadName));
       return aIndex - bIndex;
     });
+  }
+
+  /**
+   * AI:发现本机全部可同步会话，不依赖 Codex Desktop 当前是否将其打开。
+   *
+   * @param {number|string} limit 最大会话数量。
+   * @returns {Array<object>} 本机会话目标。
+   */
+  discoverThreadSessions(limit = 160) {
+    const byId = this.readIndex();
+    const rows = [];
+    for (const file of this.sessionFiles()) {
+      const threadId = threadIdFromSessionFile(file);
+      if (!threadId) continue;
+      const indexed = byId.get(threadId) || { id: threadId, name: '', updatedAt: '' };
+      const stat = fs.statSync(file);
+      const cachedMeta = this.sessionMetaCache.get(file);
+      const meta = cachedMeta && cachedMeta.size === stat.size && cachedMeta.mtimeMs === stat.mtimeMs
+        ? cachedMeta.meta
+        : readSessionMeta(file);
+      this.sessionMetaCache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, meta });
+      const cwd = String((meta.payload && meta.payload.cwd) || '').trim();
+      rows.push({
+        threadId,
+        threadName: threadTitleFromSession(file, indexed.name) || '未命名线程',
+        projectName: projectNameFromCwd(cwd),
+        cwd,
+        file,
+        updatedAt: indexed.updatedAt || new Date(stat.mtimeMs).toISOString(),
+        sessionFile: path.basename(file),
+        mtimeMs: stat.mtimeMs,
+      });
+    }
+    return rows
+      .sort((left, right) => Number(right.mtimeMs || 0) - Number(left.mtimeMs || 0))
+      .slice(0, Math.max(1, Math.min(Number(limit) || 160, 160)));
   }
 
   /**
@@ -531,19 +623,41 @@ class CodexSessionReader {
       } catch {
         continue;
       }
+      openThreadIds.push(target.threadId);
       const previous = offsets instanceof Map ? offsets.get(target.threadId) : offsets[target.threadId];
       const previousSize = previous && Number(previous.size) > 0 ? Number(previous.size) : 0;
       const reset = previousSize <= 0 || previousSize > stat.size;
-      const changed = reset || previousSize < stat.size;
+      const desktopState = String((target.desktopRuntime && target.desktopRuntime.state) || 'unknown');
+      const stateChanged = String((previous && previous.desktopState) || 'unknown') !== desktopState;
+      const changed = reset || previousSize < stat.size || stateChanged;
       if (snapshotMessageLimit && changed) {
+        const remainingBytes = Math.max(0, syncByteLimit - syncedBytes);
+        if (!remainingBytes) {
+          if (reset) {
+            sessions.push({
+              threadId: target.threadId,
+              threadName: target.threadName,
+              projectName: target.projectName,
+              cwd: target.cwd,
+              updatedAt: target.updatedAt || new Date(stat.mtimeMs).toISOString(),
+              sessionFile: target.sessionFile || path.basename(target.file),
+              mtimeMs: stat.mtimeMs,
+              metadataOnly: true,
+            });
+          }
+          continue;
+        }
         const snapshot = {
           messages: this.parseHistory(target.threadId, snapshotMessageLimit).messages,
-          status: this.parseStatus({ threadId: target.threadId }),
+          status: applyDesktopRuntimeStatus(
+            this.parseStatus({ threadId: target.threadId }),
+            target.desktopRuntime,
+          ),
         };
         const snapshotBytes = Buffer.byteLength(JSON.stringify(snapshot), 'utf8');
-        const remainingBytes = Math.max(0, syncByteLimit - syncedBytes);
         if (snapshotBytes <= remainingBytes) {
-          offsets instanceof Map ? offsets.set(target.threadId, { size: stat.size }) : offsets[target.threadId] = { size: stat.size };
+          const nextOffset = { size: stat.size, desktopState };
+          offsets instanceof Map ? offsets.set(target.threadId, nextOffset) : offsets[target.threadId] = nextOffset;
           syncedBytes += snapshotBytes;
           sessions.push({
             threadId: target.threadId,
@@ -574,7 +688,6 @@ class CodexSessionReader {
       let lines = reset
         ? readTailJsonlLines(target.file, stat.size, initialLineLimit)
         : readJsonlRangeLines(target.file, previousSize, stat.size);
-      openThreadIds.push(target.threadId);
       const remainingBytes = Math.max(0, syncByteLimit - syncedBytes);
       let lineBytes = lines.reduce((total, line) => total + Buffer.byteLength(line, 'utf8') + 1, 0);
       if (lineBytes && syncedBytes + lineBytes > syncByteLimit) {
@@ -604,7 +717,8 @@ class CodexSessionReader {
         });
         continue;
       }
-      offsets instanceof Map ? offsets.set(target.threadId, { size: stat.size }) : offsets[target.threadId] = { size: stat.size };
+      const nextOffset = { size: stat.size, desktopState };
+      offsets instanceof Map ? offsets.set(target.threadId, nextOffset) : offsets[target.threadId] = nextOffset;
       if (!lines.length && !reset) continue;
       syncedBytes += lineBytes;
       sessions.push({
@@ -688,7 +802,7 @@ class CodexSessionReader {
     return {
       available: true,
       threadId,
-      threadName: indexed.name || '未命名线程',
+      threadName: threadTitleFromSession(file, indexed.name) || '未命名线程',
       projectName: projectNameFromCwd(cwd),
       cwd,
       sessionFile: path.basename(file),
@@ -903,6 +1017,7 @@ class CodexSessionReader {
 
 module.exports = {
   CodexSessionReader,
+  applyDesktopRuntimeStatus,
   isThreadId,
   reasoningText,
   stripCodexUiDirectives,

@@ -37,11 +37,22 @@ async function syncProvider() {
   const now = Date.now();
   if (!busy && now - lastDiscoveryAt >= discoveryIntervalMs) {
     lastDiscoveryAt = now;
-    console.log('列表同步中：读取 Codex Desktop 已打开的对话');
-    const openThreads = await controller.listOpenThreads();
-    knownThreadTargets = reader.discoverOpenThreadSessions(openThreads)
-      .sort((left, right) => Number(right.mtimeMs || 0) - Number(left.mtimeMs || 0));
-    console.log(`列表同步完成：发现 ${openThreads.length} 个对话，匹配 ${knownThreadTargets.length} 个本地记录`);
+    console.log('列表同步中：读取 Codex Desktop 当前侧栏对话');
+    const openTargets = await controller.listOpenThreads();
+    knownThreadTargets = reader.discoverOpenThreadSessions(openTargets);
+    const activeRuntime = await controller.getActiveThreadRuntime();
+    if (activeRuntime.state === 'idle') {
+      for (const target of knownThreadTargets) {
+        target.desktopRuntime = {
+          state: activeRuntime.state,
+          observedAt: new Date().toISOString(),
+        };
+      }
+      console.log(`桌面运行态已确认：页面无运行任务，已核对 ${knownThreadTargets.length} 个对话`);
+    } else {
+      console.log('桌面运行态未识别：保持 JSONL 协议状态');
+    }
+    console.log(`列表同步完成：侧栏 ${openTargets.length} 个对话，匹配 ${knownThreadTargets.length} 个本地记录`);
   }
   const snapshot = reader.readKnownThreadSync(knownThreadTargets, syncOffsets, {
     initialLineLimit: Number(process.env.CODEX_AGENT_INITIAL_SYNC_LINES || 1000),
@@ -75,7 +86,11 @@ const ws = createDesktopAgentClient({
 });
 
 ws.on('open', () => {
+  syncOffsets.clear();
+  lastDiscoveryAt = 0;
+  knownThreadTargets = [];
   console.log(`Desktop agent connected: ${deviceName}`);
+  console.log('同步游标已重置：将重新上传本地对话列表和历史快照');
 });
 ws.on('close', (code, reason) => {
   console.log(`Desktop agent disconnected: ${code} ${reason.toString()}`);
