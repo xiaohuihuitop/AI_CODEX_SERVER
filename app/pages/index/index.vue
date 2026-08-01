@@ -133,11 +133,13 @@ const sending = ref(false);
 const switchingThread = ref(false);
 const threadPopupOpen = ref(false);
 const scrollTarget = ref('');
+const AUTO_REFRESH_INTERVAL_MS = 4000;
 let threadListRequest = null;
 let switchRequestSeq = 0;
 let realtimeSocket = null;
 let realtimeReconnectTimer = null;
 let realtimeRefreshTimer = null;
+let automaticRefreshTimer = null;
 let commandConfirmTimer = null;
 let mountedOnce = false;
 let pageActive = false;
@@ -1100,6 +1102,11 @@ async function send() {
   historyReloadedForCompletion.value = false;
   const sentAt = Date.now();
   const pending = registerPendingLocalSend(selectedThreadId.value, text, sentAt, messages.value.length);
+  pendingWatch.value = {
+    threadId: selectedThreadId.value,
+    kind: 'send-pending',
+    acceptedSyncVersion: syncState.value.version,
+  };
   messages.value = messages.value.concat([
     { role: 'user', text, id: pending.userId },
     { role: 'assistant', text: '已发送，等待 Codex 回复...', pending: true, id: pending.assistantId },
@@ -1116,7 +1123,10 @@ async function send() {
     waitForCommandConfirmation(pendingWatch.value);
     await pollStatus(pendingWatch.value);
   } catch (error) {
-    if (!sendAccepted) removePendingLocalSend(pending);
+    if (!sendAccepted) {
+      removePendingLocalSend(pending);
+      if (pendingWatch.value && pendingWatch.value.threadId === pending.threadId) pendingWatch.value = null;
+    }
     setNotice(error.message);
   } finally {
     if (canUpdateTask(token)) sending.value = false;
@@ -1168,6 +1178,38 @@ function scheduleRealtimeRefresh() {
       setNotice(error.message);
     }
   }, 180);
+}
+
+/**
+ * AI:前台定时核对当前线程，修复实时事件丢失后页面长期停在旧快照的问题。
+ *
+ * @returns {Promise<void>}
+ */
+async function refreshCurrentThreadAutomatically() {
+  if (!canUpdatePage()) return;
+  try {
+    if (!switchingThread.value && !loading.value && !sending.value) {
+      await loadThreads();
+      if (selectedThreadId.value) await loadHistory(null, { scrollToBottom: followBottom.value, silent: true });
+    }
+  } catch (error) {
+    setNotice(error.message);
+  } finally {
+    scheduleAutomaticRefresh();
+  }
+}
+
+/**
+ * AI:安排一次前台状态核对，始终由前一轮完成后再开始计时。
+ *
+ * @returns {void}
+ */
+function scheduleAutomaticRefresh() {
+  if (automaticRefreshTimer || !canUpdatePage()) return;
+  automaticRefreshTimer = setTimeout(() => {
+    automaticRefreshTimer = null;
+    refreshCurrentThreadAutomatically();
+  }, AUTO_REFRESH_INTERVAL_MS);
 }
 
 /**
@@ -1260,6 +1302,7 @@ function startTimers() {
   if (timersStarted) return;
   timersStarted = true;
   openRealtimeSocket();
+  scheduleAutomaticRefresh();
 }
 
 /**
@@ -1270,8 +1313,10 @@ function startTimers() {
 function stopTimers() {
   if (realtimeReconnectTimer) clearTimeout(realtimeReconnectTimer);
   if (realtimeRefreshTimer) clearTimeout(realtimeRefreshTimer);
+  if (automaticRefreshTimer) clearTimeout(automaticRefreshTimer);
   realtimeReconnectTimer = null;
   realtimeRefreshTimer = null;
+  automaticRefreshTimer = null;
   const socket = realtimeSocket;
   realtimeSocket = null;
   if (socket) socket.close({ code: 1000, reason: 'PAGE_INACTIVE' });

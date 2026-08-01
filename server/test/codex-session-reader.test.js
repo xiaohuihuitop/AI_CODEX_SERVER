@@ -366,6 +366,26 @@ test('桌面已空闲时结束缺少 JSONL 终止事件的运行状态', () => {
   assert.equal(status.turns.at(-1).status, 'complete');
 });
 
+test('桌面仍在运行时覆盖 JSONL 中上一轮的完成状态', () => {
+  const status = applyDesktopRuntimeStatus({
+    ok: true,
+    available: true,
+    active: false,
+    status: 'complete',
+    preview: '上一轮回复',
+    final: '上一轮回复',
+    turns: [{ turnId: 'turn-complete', status: 'complete', steps: [], final: '上一轮回复' }],
+  }, {
+    state: 'running',
+    observedAt: '2026-06-08T10:16:00.000Z',
+  });
+
+  assert.equal(status.active, true);
+  assert.equal(status.status, 'running');
+  assert.equal(status.final, '');
+  assert.equal(status.preview, 'Codex 正在回复...');
+});
+
 test('桌面运行态变化时即使 JSONL 未变化也重新同步状态快照', () => {
   const offsets = new Map();
   const reader = new CodexSessionReader({

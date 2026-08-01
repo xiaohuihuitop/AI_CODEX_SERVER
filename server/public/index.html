@@ -321,6 +321,8 @@
     let realtimeSocket = null;
     let realtimeReconnectTimer = null;
     let realtimeRefreshTimer = null;
+    let automaticRefreshTimer = null;
+    const AUTO_REFRESH_INTERVAL_MS = 4000;
     let threadListRequest = null;
     let currentThreadStatus = null;
     let pendingWatch = null;
@@ -866,6 +868,14 @@
     function updateThreadStatus(statusData = null) {
       const row = threadRows.find(item => item.id === selectedThreadId);
       const scopedStatus = statusData?.threadId === selectedThreadId ? statusData : null;
+      const awaitingDesktopConfirmation = pendingWatch?.threadId === selectedThreadId && pendingWatch.kind === 'send-pending';
+      if (awaitingDesktopConfirmation) {
+        threadStatusEl.classList.remove('thread-status--running', 'thread-status--complete');
+        threadStatusEl.title = '正在等待电脑确认发送';
+        threadStatusEl.setAttribute('aria-label', threadStatusEl.title);
+        setRunning(false);
+        return;
+      }
       const status = scopedStatus?.status || row?.status || 'idle';
       const running = agentOnline && syncState.fresh && (Boolean(scopedStatus?.active) || !!row?.active || status === 'running');
       const complete = !running && status === 'complete';
@@ -1097,6 +1107,35 @@
     }
 
     /**
+     * AI:前台定时核对当前线程，避免实时事件丢失后页面长期显示旧快照。
+     *
+     * @returns {Promise<void>}
+     */
+    async function refreshCurrentThreadAutomatically() {
+      try {
+        await loadThreads();
+        if (selectedThreadId) await loadHistory(null, { preserveScroll: true });
+      } catch (error) {
+        notice(error.message);
+      } finally {
+        scheduleAutomaticRefresh();
+      }
+    }
+
+    /**
+     * AI:在浏览器页面存活期间安排下一次当前线程校验。
+     *
+     * @returns {void}
+     */
+    function scheduleAutomaticRefresh() {
+      if (automaticRefreshTimer) return;
+      automaticRefreshTimer = setTimeout(() => {
+        automaticRefreshTimer = null;
+        refreshCurrentThreadAutomatically();
+      }, AUTO_REFRESH_INTERVAL_MS);
+    }
+
+    /**
      * AI:连接云端 Relay 的手机状态订阅，不退回定时轮询。
      *
      * @returns {void}
@@ -1226,9 +1265,14 @@
       textEl.value = '';
       const sentAt = Date.now();
       const pendingLocal = registerPendingLocalSend(selectedThreadId, text, sentAt, messagesEl.querySelectorAll('.message').length);
+      pendingWatch = {
+        threadId: selectedThreadId,
+        kind: 'send-pending',
+        acceptedSyncVersion: syncState.version,
+      };
       message('user', text, { id: pendingLocal.userId });
       const pending = message('assistant', '已发送，等待 Codex 回复...', { pending: true, id: pendingLocal.assistantId });
-      setRunning(true);
+      notice('正在发送给电脑 Codex...');
       historyReloadedForCompletion = false;
       let sendAccepted = false;
       try {
@@ -1246,7 +1290,10 @@
         waitForCommandConfirmation(pendingWatch);
         await pollStatus(pendingWatch);
       } catch (error) {
-        if (!sendAccepted) removePendingLocalSend(pendingLocal);
+        if (!sendAccepted) {
+          removePendingLocalSend(pendingLocal);
+          if (pendingWatch?.threadId === pendingLocal.threadId) pendingWatch = null;
+        }
         pending.textContent = error.message;
         setRunning(false);
       }
@@ -1275,6 +1322,7 @@
     refreshConnectionStatus().catch(() => {});
     loadThreads().then(() => loadHistory(null, { preserveScroll: false, scrollToBottom: true })).catch(error => notice(error.message));
     openRealtimeSocket();
+    scheduleAutomaticRefresh();
   </script>
 </body>
 </html>

@@ -29,6 +29,8 @@ test('云端和桌面端入口文件存在并使用固定 token 环境变量', (
   assert.match(agent, /CODEX_AGENT_SYNC_INTERVAL_MS/);
   assert.match(agent, /CODEX_AGENT_DISCOVERY_INTERVAL_MS/);
   assert.match(agent, /CODEX_AGENT_DISCOVERY_INTERVAL_MS \|\| 30000/);
+  assert.match(agent, /ws\.on\('control-complete'/);
+  assert.match(agent, /lastDiscoveryAt = 0/);
 });
 
 test('桌面管理小软件入口使用本地管理端口和配置模块', () => {

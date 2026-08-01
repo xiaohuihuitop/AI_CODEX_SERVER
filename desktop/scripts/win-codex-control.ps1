@@ -284,9 +284,10 @@ function Get-ActiveThreadRuntime {
       return [pscustomobject]@{ ok = $false; projectName = ''; threadName = ''; state = 'unknown' }
     }
     $value = $result.result.value
-    # AI:Codex Desktop 当前版本的可发送按钮是向上箭头；未知图标不改变 JSONL 状态。
+    # AI:Codex Desktop 当前版本的可发送按钮是向上箭头；加载指示器或非发送图标表示当前轮仍在运行。
     $runtimeState = 'unknown'
     if ($value.iconPath -like 'M9.33467*' -and -not $value.hasBusyIndicator) { $runtimeState = 'idle' }
+    if ($value.hasBusyIndicator -or ($value.iconPath -and $value.iconPath -notlike 'M9.33467*')) { $runtimeState = 'running' }
     [pscustomobject]@{
       ok = $true
       projectName = [string]$value.projectName
@@ -328,7 +329,10 @@ function Send-ToThread {
     if ($composer.sendDisabled) { throw 'SEND_DISABLED' }
     $sendRect = $composer.sendRect
     Click-CdpPoint -Socket $socket -X ([double]($sendRect.x + ($sendRect.width / 2))) -Y ([double]($sendRect.y + ($sendRect.height / 2)))
-    Start-Sleep -Milliseconds 500
+    Start-Sleep -Milliseconds 800
+    $composer = Get-Composer -Socket $socket
+    $confirmed = Get-ActiveThreadRuntime
+    if ($composer.hasDraft -or $confirmed.state -ne 'running') { throw 'SEND_NOT_CONFIRMED' }
 
     [pscustomobject]@{
       ok = $true

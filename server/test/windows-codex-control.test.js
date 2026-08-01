@@ -4,7 +4,7 @@ const path = require('node:path');
 const test = require('node:test');
 
 const scriptPath = path.join(__dirname, '..', '..', 'desktop', 'scripts', 'win-codex-control.ps1');
-const indexPath = path.join(__dirname, '..', '..', 'desktop', 'public', 'index.html');
+const indexPath = path.join(__dirname, '..', 'public', 'index.html');
 
 function extractGetThreadRowExpression(script, projectName, threadName) {
   const functionText = script.match(/function Get-ThreadRow \{[\s\S]*?\n\}\r?\n\r?\nfunction Get-Composer/)?.[0] || '';
@@ -186,6 +186,18 @@ test('脚本支持读取 Codex Desktop 当前打开线程', () => {
   assert.match(script, /threadName/);
 });
 
+test('向 Codex 发送消息后必须确认桌面进入运行态', () => {
+  const script = fs.readFileSync(scriptPath, 'utf8');
+  const sendFunction = script.match(/function Send-ToThread \{[\s\S]*?\n\}/)?.[0] || '';
+
+  assert.match(sendFunction, /SEND_NOT_CONFIRMED/);
+  assert.match(sendFunction, /Get-ActiveThreadRuntime/);
+  assert.match(sendFunction, /Start-Sleep -Milliseconds 800\r?\n\s*\$composer = Get-Composer -Socket \$socket\r?\n\s*\$confirmed = Get-ActiveThreadRuntime/);
+  assert.match(sendFunction, /\$confirmed\.state -ne 'running'/);
+  assert.match(script, /\$value\.hasBusyIndicator/);
+  assert.match(script, /\$value\.iconPath -notlike 'M9\.33467\*'/);
+});
+
 test('侧栏导航结构可以提取项目中的打开线程', () => {
   const script = fs.readFileSync(scriptPath, 'utf8');
   const expression = extractGetOpenThreadsExpression(script);
@@ -296,7 +308,9 @@ test('手机端显示线程运行状态指示点', () => {
   assert.match(html, /thread-status--complete/);
   assert.match(html, /#3b82f6/);
   assert.match(html, /setRunning\(running\)/);
-  assert.match(html, /setInterval\(\(\) => refreshThreadStatuses/);
+  assert.match(html, /const AUTO_REFRESH_INTERVAL_MS = 4000/);
+  assert.match(html, /function scheduleAutomaticRefresh/);
+  assert.match(html, /function refreshCurrentThreadAutomatically/);
 });
 
 test('手机端显示云端 Agent 连接状态指示点', () => {
@@ -312,7 +326,7 @@ test('手机端显示云端 Agent 连接状态指示点', () => {
   assert.match(html, /typeof data\.agentOnline !== 'boolean'/);
   assert.match(html, /function refreshConnectionStatus/);
   assert.match(html, /\/codex\/health\?token=/);
-  assert.match(html, /setInterval\(\(\) => refreshConnectionStatus/);
+  assert.match(html, /function scheduleAutomaticRefresh/);
 });
 
 test('网页端连接状态不再由线程缓存请求成功误判为在线', () => {
@@ -321,9 +335,17 @@ test('网页端连接状态不再由线程缓存请求成功误判为在线', ()
   const fetchThreadRowsFunction = html.match(/async function fetchThreadRows\(errorMessage\) \{([\s\S]*?)\n    \}/)?.[1] || '';
 
   assert.match(updateThreadStatusFunction, /const running = agentOnline &&/);
-  assert.match(fetchThreadRowsFunction, /applyAgentOnline\(data\);/);
+  assert.match(fetchThreadRowsFunction, /applyRelayState\(data\)/);
   assert.doesNotMatch(fetchThreadRowsFunction, /updateConnectionStatus\(\{ online: true \}\)/);
-  assert.match(html, /applyAgentOnline\(data\);[\s\S]*return data;/);
+  assert.match(html, /function applyRelayState\(data\)/);
+  assert.match(html, /applyAgentOnline\(data\);/);
+});
+
+test('网页端发送后先等待电脑确认，不沿用旧的完成状态', () => {
+  const html = fs.readFileSync(indexPath, 'utf8');
+  assert.match(html, /awaitingDesktopConfirmation/);
+  assert.match(html, /正在等待电脑确认发送/);
+  assert.match(html, /pendingWatch\?\.threadId === selectedThreadId/);
 });
 
 test('手机端处理过程默认折叠且只通过手动展开', () => {
@@ -335,13 +357,13 @@ test('手机端处理过程默认折叠且只通过手动展开', () => {
   assert.match(html, /step\.kind !== 'start'/);
   assert.match(html, /details\.open = false/);
   assert.doesNotMatch(html, /details\.open = turn\.status === 'running'/);
-  assert.match(html, /function formatElapsedTime\(startedAt, completedAt\)/);
+  assert.match(html, /function formatElapsedTime\(startedAt, completedAt, observedAt = ''\)/);
   assert.match(html, /function processSummaryText\(turn\)/);
   assert.match(html, /processSummaryText\(turn\)/);
   assert.match(html, /findAssistantMessageByTurn\(turn\.turnId\)/);
   assert.match(html, /function shouldAppendUnmatchedProcess\(turn\)/);
-  assert.match(html, /turn && \(turn\.status === 'running' \|\| turn\.status === 'interrupted'\)/);
-  assert.match(html, /else if \(shouldAppendUnmatchedProcess\(turn\)\) messagesEl\.appendChild\(card\)/);
+  assert.match(html, /function shouldAppendUnmatchedProcess\(turn\) \{\s*return false;/);
+  assert.match(html, /else if \(assistant\) messagesEl\.insertBefore\(card, assistant\)/);
   assert.match(html, /bindPendingAssistantTurn\(data\)/);
   assert.match(html, /处理过程已折叠/);
   assert.match(html, /renderProcessPanel\(data\)/);
@@ -349,7 +371,7 @@ test('手机端处理过程默认折叠且只通过手动展开', () => {
   assert.match(html, /function processCardSignature\(turn\)/);
   assert.doesNotMatch(html, /document\.querySelectorAll\('\.process-card'\)\.forEach\(item => item\.remove\(\)\);/);
   assert.match(html, /pendingWatch/);
-  assert.match(html, /setInterval\(\(\) => pollStatus\(\)/);
+  assert.match(html, /function scheduleAutomaticRefresh/);
   assert.match(html, /if \(!requestedThreadId\) return/);
   assert.match(html, /data\.threadId !== selectedThreadId/);
 });
@@ -359,11 +381,11 @@ test('网页端 Agent 离线时不中断轮次不继续累计处理时长', () =
   const processTurnsFunction = html.match(/function processTurns\(status\) \{([\s\S]*?)\n    \}/)?.[1] || '';
   const summaryFunction = html.match(/function processSummaryText\(turn\) \{([\s\S]*?)\n    \}/)?.[1] || '';
 
-  assert.match(processTurnsFunction, /const interrupted = Boolean\(turn\?\.status === 'running' && !agentOnline\)/);
+  assert.match(processTurnsFunction, /const interrupted = Boolean\(turn\?\.status === 'running' && \(!agentOnline \|\| !syncState\.fresh\)\)/);
   assert.match(processTurnsFunction, /status: interrupted \? 'interrupted'/);
-  assert.match(processTurnsFunction, /durationText: interrupted \? '' : formatElapsedTime/);
+  assert.match(processTurnsFunction, /durationText: formatElapsedTime\(turn\?\.startedAt \|\| '', turn\?\.completedAt \|\| '', interrupted \? syncState\.lastSyncedAt : ''\)/);
   assert.match(summaryFunction, /turn\?\.status === 'interrupted'/);
-  assert.match(summaryFunction, /Agent 未在线/);
+  assert.match(processTurnsFunction, /interruptionReason: !agentOnline \? 'Agent 未在线' : '状态未确认'/);
 });
 
 test('网页端运行中同步电脑端新增用户消息', () => {
@@ -390,7 +412,7 @@ test('网页端消息顺序固定为用户消息、处理过程、最终回复',
   const html = fs.readFileSync(indexPath, 'utf8');
 
   assert.match(html, /if \(assistant\) messagesEl\.insertBefore\(card, assistant\)/);
-  assert.match(html, /else if \(shouldAppendUnmatchedProcess\(turn\)\) messagesEl\.appendChild\(card\)/);
+  assert.match(html, /else if \(user\) user\.insertAdjacentElement\('afterend', card\)/);
   assert.match(html, /const historySynced = await syncRunningHistory\(data\);[\s\S]*if \(!historySynced\) \{[\s\S]*renderProcessPanel\(data\);[\s\S]*\}/);
 });
 
@@ -409,7 +431,7 @@ test('网页端历史刷新保留未确认本地用户消息', () => {
   assert.match(html, /const rows = mergePendingLocalMessages\(selectedThreadId, data\.messages \|\| \[\]\)/);
   assert.match(html, /bindPendingLocalSendTurn\(runningTurn\.turnId\)/);
   assert.match(html, /let sendAccepted = false/);
-  assert.match(html, /if \(!sendAccepted\) removePendingLocalSend\(pendingLocal\)/);
+  assert.match(html, /if \(!sendAccepted\) \{[\s\S]*removePendingLocalSend\(pendingLocal\)/);
 });
 
 test('网页端线程选择控件使用底部直线样式', () => {

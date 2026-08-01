@@ -20,6 +20,19 @@ const discoveryIntervalMs = Math.max(5000, Number(process.env.CODEX_AGENT_DISCOV
 let knownThreadTargets = [];
 let lastDiscoveryAt = 0;
 
+function applyActiveThreadRuntime(targets, runtime) {
+  if (!runtime || !['idle', 'running'].includes(runtime.state)) return false;
+  const projectName = String(runtime.projectName || '').trim();
+  const threadName = String(runtime.threadName || '').trim();
+  const target = targets.find(item => item.projectName === projectName && item.threadName === threadName);
+  if (!target) return false;
+  target.desktopRuntime = {
+    state: runtime.state,
+    observedAt: new Date().toISOString(),
+  };
+  return true;
+}
+
 function describeSyncedThreads(sessions) {
   const names = {};
   for (const session of sessions) {
@@ -41,16 +54,10 @@ async function syncProvider() {
     const openTargets = await controller.listOpenThreads();
     knownThreadTargets = reader.discoverOpenThreadSessions(openTargets);
     const activeRuntime = await controller.getActiveThreadRuntime();
-    if (activeRuntime.state === 'idle') {
-      for (const target of knownThreadTargets) {
-        target.desktopRuntime = {
-          state: activeRuntime.state,
-          observedAt: new Date().toISOString(),
-        };
-      }
-      console.log(`桌面运行态已确认：页面无运行任务，已核对 ${knownThreadTargets.length} 个对话`);
+    if (applyActiveThreadRuntime(knownThreadTargets, activeRuntime)) {
+      console.log(`桌面运行态已确认：${activeRuntime.threadName} 为 ${activeRuntime.state}`);
     } else {
-      console.log('桌面运行态未识别：保持 JSONL 协议状态');
+      console.log('桌面运行态未匹配到当前线程：保持 JSONL 协议状态');
     }
     console.log(`列表同步完成：侧栏 ${openTargets.length} 个对话，匹配 ${knownThreadTargets.length} 个本地记录`);
   }
@@ -91,6 +98,11 @@ ws.on('open', () => {
   knownThreadTargets = [];
   console.log(`Desktop agent connected: ${deviceName}`);
   console.log('同步游标已重置：将重新上传本地对话列表和历史快照');
+});
+
+ws.on('control-complete', ({ action }) => {
+  lastDiscoveryAt = 0;
+  console.log(`控制命令已确认：${action}，立即重新读取桌面运行态`);
 });
 ws.on('close', (code, reason) => {
   console.log(`Desktop agent disconnected: ${code} ${reason.toString()}`);

@@ -219,6 +219,8 @@ test('uni-app Android 手机端发送后立即追加本地消息', () => {
   assert.match(index, /messages\.value = messages\.value\.concat\(\[/);
   assert.match(index, /\{ role: 'user', text, id: pending\.userId \}/);
   assert.match(index, /\{ role: 'assistant', text: '已发送，等待 Codex 回复\.\.\.', pending: true, id: pending\.assistantId \}/);
+  assert.match(index, /kind: 'send-pending'/);
+  assert.match(index, /if \(pendingWatch\.value && pendingWatch\.value\.threadId === pending\.threadId\) pendingWatch\.value = null;/);
   assert.match(index, /await scrollToBottom\(\);/);
 });
 
@@ -324,9 +326,14 @@ test('uni-app Android 手机端运行状态同时要求 Agent 在线和同步新
   assert.match(index, /function scheduleRealtimeReconnect\(\)/);
   assert.match(index, /function openRealtimeSocket\(\)/);
   assert.match(index, /event\.type === 'session-updated'/);
-  assert.doesNotMatch(index, /setInterval\(/);
+  assert.match(index, /const AUTO_REFRESH_INTERVAL_MS = 4000;/);
+  assert.match(index, /let automaticRefreshTimer = null;/);
+  assert.match(index, /async function refreshCurrentThreadAutomatically\(\)/);
+  assert.match(index, /function scheduleAutomaticRefresh\(\)/);
+  assert.match(index, /await loadHistory\(null, \{ scrollToBottom: followBottom\.value, silent: true \}\);/);
   assert.match(startTimersFunction, /openRealtimeSocket\(\);/);
-  assert.doesNotMatch(startTimersFunction, /setInterval\(/);
+  assert.match(startTimersFunction, /scheduleAutomaticRefresh\(\);/);
+  assert.match(index, /if \(automaticRefreshTimer\) clearTimeout\(automaticRefreshTimer\);/);
 });
 
 test('uni-app Android 手机端切换对话时显示等待 UI 并防止旧请求覆盖', () => {

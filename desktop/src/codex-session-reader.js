@@ -170,7 +170,17 @@ function commandCountText(count) {
  * @returns {object} 统一后的会话状态。
  */
 function applyDesktopRuntimeStatus(status, desktopRuntime) {
-  if (!desktopRuntime || desktopRuntime.state !== 'idle' || status.status !== 'running') return status;
+  if (!desktopRuntime || !status) return status;
+  if (desktopRuntime.state === 'running' && status.status !== 'running') {
+    return Object.assign({}, status, {
+      active: true,
+      status: 'running',
+      completedAt: '',
+      preview: 'Codex 正在回复...',
+      final: '',
+    });
+  }
+  if (desktopRuntime.state !== 'idle' || status.status !== 'running') return status;
   const completedAt = String(desktopRuntime.observedAt || new Date().toISOString());
   const turns = Array.isArray(status.turns) ? status.turns.map(turn => (
     turn.status === 'running'

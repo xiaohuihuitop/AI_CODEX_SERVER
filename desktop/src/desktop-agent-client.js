@@ -143,6 +143,7 @@ function createDesktopAgentClient(options) {
       const response = await handleAgentRequest(api, message);
       if (socket.readyState === socket.OPEN) socket.send(JSON.stringify(response));
       if (response.ok && (message.action === 'send' || message.action === 'stop')) {
+        client.emit('control-complete', { action: message.action, payload: message.payload || {} });
         void syncSessions();
       }
     });
