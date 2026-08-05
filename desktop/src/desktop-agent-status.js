@@ -26,21 +26,24 @@ function getAgentStatusPath(token, options = {}) {
  * AI:校验并规范化 Agent 写入和管理器读取的状态载荷。
  *
  * @param {object} input 原始状态载荷。
- * @returns {{version: number, pid: number, state: string, message: string, updatedAt: string}} 规范化状态。
+ * @returns {{version: number, pid: number, state: string, message: string, codexVersion: string, updatedAt: string}} 规范化状态。
  */
 function normalizeAgentStatus(input = {}) {
   const pid = Number(input.pid);
   const state = String(input.state || '').trim();
   const message = String(input.message || '').trim();
+  const codexVersion = String(input.codexVersion || '').trim();
   const updatedAt = String(input.updatedAt || '').trim();
   if (!Number.isInteger(pid) || pid <= 0) throw new Error('Agent 状态缺少有效 PID。');
   if (!AGENT_STATES.has(state)) throw new Error('Agent 状态包含未知服务状态。');
+  if (codexVersion.length > 128) throw new Error('Agent 状态中的 Codex 版本过长。');
   if (!Number.isFinite(Date.parse(updatedAt))) throw new Error('Agent 状态缺少有效更新时间。');
   return {
     version: AGENT_STATUS_VERSION,
     pid,
     state,
     message,
+    codexVersion,
     updatedAt,
   };
 }
@@ -50,7 +53,7 @@ function normalizeAgentStatus(input = {}) {
  *
  * @param {string} statusPath 状态文件路径。
  * @param {object} status 原始状态载荷。
- * @returns {{version: number, pid: number, state: string, message: string, updatedAt: string}} 已写入状态。
+ * @returns {{version: number, pid: number, state: string, message: string, codexVersion: string, updatedAt: string}} 已写入状态。
  */
 function writeAgentStatus(statusPath, status) {
   const normalized = normalizeAgentStatus(status);
@@ -65,7 +68,7 @@ function writeAgentStatus(statusPath, status) {
  * AI:读取并校验 Agent 状态文件，损坏或不存在时返回空状态供管理器明确提示。
  *
  * @param {string} statusPath 状态文件路径。
- * @returns {{version: number, pid: number, state: string, message: string, updatedAt: string}|null} 有效状态或空。
+ * @returns {{version: number, pid: number, state: string, message: string, codexVersion: string, updatedAt: string}|null} 有效状态或空。
  */
 function readAgentStatus(statusPath) {
   try {

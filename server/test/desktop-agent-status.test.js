@@ -21,6 +21,7 @@ test('Agent 状态文件按设备 Key 隔离且不暴露明文 Key', () => {
       pid: 87420,
       state: 'ready',
       message: '本机 stdio 会话服务已就绪',
+      codexVersion: '0.144.0-alpha.4',
       updatedAt: '2026-08-05T01:00:00.000Z',
     });
 
@@ -29,6 +30,7 @@ test('Agent 状态文件按设备 Key 隔离且不暴露明文 Key', () => {
       pid: 87420,
       state: 'ready',
       message: '本机 stdio 会话服务已就绪',
+      codexVersion: '0.144.0-alpha.4',
       updatedAt: '2026-08-05T01:00:00.000Z',
     });
     assert.equal(isAgentStatusFresh(readAgentStatus(statusPath), Date.parse('2026-08-05T01:00:20.000Z')), true);
@@ -46,6 +48,7 @@ test('管理器在接管已有 Agent 时从状态心跳判断 app-server 已就�
       pid: 87420,
       state: 'ready',
       message: '本机 stdio 会话服务已就绪',
+      codexVersion: '0.144.0-alpha.4',
       updatedAt: '2026-08-05T01:00:00.000Z',
     });
 
@@ -60,6 +63,7 @@ test('管理器在接管已有 Agent 时从状态心跳判断 app-server 已就�
     }), {
       ok: true,
       message: '本机 stdio 会话服务已就绪',
+      codexVersion: '0.144.0-alpha.4',
     });
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
@@ -75,6 +79,7 @@ test('管理器拒绝过期或属于其他 Agent 的 app-server 状态', () => {
       pid: 100,
       state: 'ready',
       message: '本机 stdio 会话服务已就绪',
+      codexVersion: '0.144.0-alpha.4',
       updatedAt: '2026-08-05T01:00:00.000Z',
     });
     const otherAgent = resolveAppServerStatus({ running: true, pid: 200 }, config, {
@@ -88,6 +93,7 @@ test('管理器拒绝过期或属于其他 Agent 的 app-server 状态', () => {
       pid: 200,
       state: 'ready',
       message: '本机 stdio 会话服务已就绪',
+      codexVersion: '0.144.0-alpha.4',
       updatedAt: '2026-08-05T01:00:00.000Z',
     });
     const stale = resolveAppServerStatus({ running: true, pid: 200 }, config, {

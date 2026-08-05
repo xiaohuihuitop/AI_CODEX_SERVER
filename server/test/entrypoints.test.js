@@ -107,12 +107,14 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(electronHtml, /停止功能/);
   assert.doesNotMatch(electronHtml, /重启 Codex 生效 CDP/);
   assert.match(electronHtml, /id="portStatus"/);
+  assert.match(electronHtml, /id="codexVersion"/);
   assert.match(electronHtml, /功能状态/);
   assert.match(electronHtml, /云端连接/);
   assert.match(electronHtml, /会话服务/);
   assert.match(electronRenderer, /const cloudPort = nextState\.ports\.cloud \|\| '未配置'/);
   assert.match(electronRenderer, /云端 \$\{cloudPort\} \/ App Server stdio/);
   assert.match(electronRenderer, /nextState\.appServer\.ok/);
+  assert.match(electronRenderer, /nextState\.appServer\.codexVersion/);
   assert.doesNotMatch(electronRenderer, /Codex App 目标/);
   assert.doesNotMatch(electronRenderer, /可控制目标 \$\{nextState\.codex\.targetCount\}/);
   assert.match(electronRenderer, /function isConfigured\(config\)/);

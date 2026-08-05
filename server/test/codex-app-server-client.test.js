@@ -5,6 +5,8 @@ const test = require('node:test');
 const {
   CodexAppServerClient,
   findDesktopCodexExecutable,
+  parseCodexVersion,
+  readCodexVersion,
   resolveAppServerLaunch,
 } = require('../../desktop/src/codex-app-server-client');
 
@@ -30,6 +32,7 @@ function createTestClient(child, options = {}) {
   return new CodexAppServerClient({
     spawnProcess: () => child,
     launchResolver: () => ({ command: 'codex-test.exe', args: ['app-server'], source: 'test' }),
+    versionResolver: async () => '0.0.0-test',
     ...options,
   });
 }
@@ -69,6 +72,65 @@ test('Windows 找不到 Codex Desktop 内置程序时明确失败', () => {
     () => resolveAppServerLaunch({ platform: 'win32', localAppData: 'C:\\missing', filesystem }),
     error => error.code === 'APP_SERVER_EXECUTABLE_NOT_FOUND',
   );
+});
+
+test('Codex 版本读取使用与 app-server 相同的可执行文件', async () => {
+  const launch = { command: 'C:\\Codex\\bin\\current\\codex.exe', args: ['app-server'], source: 'desktop' };
+  const version = await readCodexVersion(launch, {
+    execFile: (command, args, options, callback) => {
+      assert.equal(command, launch.command);
+      assert.deepEqual(args, ['--version']);
+      assert.equal(options.windowsHide, true);
+      callback(null, 'codex-cli 0.144.0-alpha.4\n');
+    },
+  });
+
+  assert.equal(version, '0.144.0-alpha.4');
+  assert.equal(parseCodexVersion('Codex 0.145.0'), '0.145.0');
+  assert.equal(parseCodexVersion('unknown output'), '');
+});
+
+test('app-server 客户端初始化时上报当前运行时版本', async () => {
+  const child = createChild();
+  child.stdin.on('data', data => {
+    const message = JSON.parse(String(data));
+    if (message.method === 'initialize') respond(child, message.id, {});
+  });
+  const launch = { command: 'codex-test.exe', args: ['app-server'], source: 'test' };
+  const client = createTestClient(child, {
+    launchResolver: () => launch,
+    versionResolver: async receivedLaunch => {
+      assert.deepEqual(receivedLaunch, launch);
+      return '0.144.0-alpha.4';
+    },
+  });
+  const reported = new Promise(resolve => client.once('version', resolve));
+
+  await client.start();
+
+  assert.deepEqual(await reported, { launch, version: '0.144.0-alpha.4' });
+  client.stop();
+});
+
+test('Codex 版本读取失败不阻断 app-server 会话初始化', async () => {
+  const child = createChild();
+  child.stdin.on('data', data => {
+    const message = JSON.parse(String(data));
+    if (message.method === 'initialize') respond(child, message.id, {});
+  });
+  const client = createTestClient(child, {
+    versionResolver: async () => {
+      throw new Error('版本命令失败');
+    },
+  });
+  const reported = new Promise(resolve => client.once('version-error', resolve));
+
+  await client.start();
+
+  const event = await reported;
+  assert.match(event.error.message, /版本命令失败/);
+  assert.equal(client.isRunning(), true);
+  client.stop();
 });
 
 test('app-server 客户端初始化后按未归档更新时间读取线程', async () => {

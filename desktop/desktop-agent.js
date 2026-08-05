@@ -29,6 +29,7 @@ let syncBatchCursor = 0;
 let pendingCatalogMetadata = true;
 let appServerState = 'starting';
 let appServerStatusMessage = '正在初始化本机 stdio 会话服务';
+let appServerCodexVersion = '';
 let lastAppServerStatusAt = 0;
 let pendingControlSyncThreadId = '';
 
@@ -52,6 +53,7 @@ function reportAppServerStatus(state, message, force = false) {
       pid: process.pid,
       state: appServerState,
       message: appServerStatusMessage,
+      codexVersion: appServerCodexVersion,
       updatedAt: new Date(now).toISOString(),
     });
   } catch (error) {
@@ -233,8 +235,17 @@ async function syncProvider() {
 
 reportAppServerStatus('starting', appServerStatusMessage, true);
 appServer.on('launch', ({ command, source }) => {
+  appServerCodexVersion = '';
   const type = source === 'desktop' ? 'Codex Desktop 内置程序' : '系统 PATH 程序';
   console.log(`App Server 启动：${type}，${command}`);
+});
+appServer.on('version', ({ version }) => {
+  appServerCodexVersion = String(version || '').trim();
+  console.log(`Codex 运行时版本：v${appServerCodexVersion}`);
+  reportAppServerStatus(appServerState, appServerStatusMessage, true);
+});
+appServer.on('version-error', ({ error }) => {
+  console.error(`Codex 运行时版本读取失败：${error && error.message || '未知错误'}`);
 });
 appServer.on('ready', () => {
   lastAppServerError = '';

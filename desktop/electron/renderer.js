@@ -32,6 +32,7 @@ const elements = {
   codexCard: document.getElementById('codexCard'),
   codexStatus: document.getElementById('codexStatus'),
   codexDetail: document.getElementById('codexDetail'),
+  codexVersion: document.getElementById('codexVersion'),
 };
 
 function getFormConfig() {
@@ -95,6 +96,8 @@ function renderState(nextState, options = {}) {
   const cloudPort = nextState.ports.cloud || '未配置';
   elements.codexStatus.textContent = nextState.appServer.ok ? '已连接' : '未就绪';
   elements.codexDetail.textContent = nextState.appServer.message || '等待 Agent 初始化 App Server';
+  const codexVersion = String(nextState.appServer.codexVersion || '').trim();
+  elements.codexVersion.textContent = codexVersion ? `当前 Codex：v${codexVersion}` : '';
   elements.portStatus.textContent = `云端 ${cloudPort} / App Server stdio`;
 
   elements.mobileUrl.textContent = nextState.mobileUrl || '请先填写云端服务器地址和固定 Token。';

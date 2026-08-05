@@ -122,6 +122,12 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.status-card .runtime-version {
+  color: var(--text);
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+}
+
 .status-dot {
   width: 10px;
   height: 10px;

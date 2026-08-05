@@ -1,9 +1,10 @@
-const { spawn } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const path = require('node:path');
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
+const VERSION_REQUEST_TIMEOUT_MS = 5000;
 
 function createAppServerError(message, code = 'APP_SERVER_FAILED') {
   return Object.assign(new Error(message), { code });
@@ -12,6 +13,54 @@ function createAppServerError(message, code = 'APP_SERVER_FAILED') {
 function statusFromProtocol(status) {
   const type = typeof status === 'string' ? status : String(status && status.type || '');
   return type === 'active' ? 'running' : 'idle';
+}
+
+/**
+ * AI:从 Codex 可执行文件的版本输出中提取语义版本号。
+ *
+ * @param {string|Buffer} output `codex --version` 的标准输出。
+ * @returns {string} 版本号；输出不符合 Codex 格式时返回空字符串。
+ */
+function parseCodexVersion(output) {
+  const matched = String(output || '').match(/\b(?:codex-cli|codex)\s+([0-9][^\s]*)/i);
+  return matched ? matched[1] : '';
+}
+
+/**
+ * AI:读取即将启动 app-server 的同一 Codex 可执行文件版本，避免管理器误显示 PATH 中的其他 CLI。
+ *
+ * @param {{command?: string}} launch app-server 启动命令。
+ * @param {{execFile?: Function}} options 可注入的进程执行函数。
+ * @returns {Promise<string>} 已解析的 Codex 版本号。
+ */
+function readCodexVersion(launch = {}, options = {}) {
+  const command = String(launch.command || '').trim();
+  if (!command) {
+    return Promise.reject(createAppServerError('无法读取 Codex 版本：缺少 app-server 可执行文件。', 'APP_SERVER_VERSION_FAILED'));
+  }
+  const executeFile = options.execFile || execFile;
+  return new Promise((resolve, reject) => {
+    try {
+      executeFile(command, ['--version'], {
+        windowsHide: true,
+        timeout: VERSION_REQUEST_TIMEOUT_MS,
+        maxBuffer: 1024,
+      }, (error, stdout) => {
+        if (error) {
+          reject(createAppServerError(`无法读取 Codex 版本：${error.message}`, 'APP_SERVER_VERSION_FAILED'));
+          return;
+        }
+        const version = parseCodexVersion(stdout);
+        if (!version) {
+          reject(createAppServerError('无法读取 Codex 版本：可执行文件未返回可识别的版本号。', 'APP_SERVER_VERSION_FAILED'));
+          return;
+        }
+        resolve(version);
+      });
+    } catch (error) {
+      reject(createAppServerError(`无法读取 Codex 版本：${error.message}`, 'APP_SERVER_VERSION_FAILED'));
+    }
+  });
 }
 
 /**
@@ -77,7 +126,7 @@ function resolveAppServerLaunch(options = {}) {
  */
 class CodexAppServerClient extends EventEmitter {
   /**
-   * @param {{spawnProcess?: Function, requestTimeoutMs?: number, logger?: object, launchResolver?: Function}} options 子进程与协议配置。
+   * @param {{spawnProcess?: Function, requestTimeoutMs?: number, logger?: object, launchResolver?: Function, versionResolver?: Function}} options 子进程与协议配置。
    */
   constructor(options = {}) {
     super();
@@ -85,6 +134,7 @@ class CodexAppServerClient extends EventEmitter {
     this.requestTimeoutMs = Math.max(1000, Number(options.requestTimeoutMs) || DEFAULT_REQUEST_TIMEOUT_MS);
     this.logger = options.logger || console;
     this.launchResolver = options.launchResolver || resolveAppServerLaunch;
+    this.versionResolver = options.versionResolver || readCodexVersion;
     this.child = null;
     this.starting = null;
     this.nextRequestId = 1;
@@ -137,6 +187,7 @@ class CodexAppServerClient extends EventEmitter {
     }
     this.child = child;
     this.emit('launch', launch);
+    this.resolveRuntimeVersion(launch);
     this.attachChild(child);
     try {
       const initialized = await this.request('initialize', {
@@ -159,6 +210,27 @@ class CodexAppServerClient extends EventEmitter {
     });
     child.on('error', error => this.handleExit(error, null, null));
     child.on('close', (code, signal) => this.handleExit(null, code, signal));
+  }
+
+  /**
+   * AI:异步上报当前 app-server 对应的运行时版本，不阻塞会话服务初始化。
+   *
+   * @param {{command: string, args: string[], source: string}} launch 当前 app-server 启动命令。
+   * @returns {void}
+   */
+  resolveRuntimeVersion(launch) {
+    Promise.resolve()
+      .then(() => this.versionResolver(launch))
+      .then(version => {
+        const normalized = String(version || '').trim();
+        if (!normalized) {
+          throw createAppServerError('无法读取 Codex 版本：版本号为空。', 'APP_SERVER_VERSION_FAILED');
+        }
+        this.emit('version', { launch, version: normalized });
+      })
+      .catch(error => {
+        this.emit('version-error', { launch, error });
+      });
   }
 
   handleStdout(data) {
@@ -339,6 +411,8 @@ module.exports = {
   createCodexAppServerClient,
   createAppServerError,
   findDesktopCodexExecutable,
+  parseCodexVersion,
+  readCodexVersion,
   resolveAppServerLaunch,
   statusFromProtocol,
 };
