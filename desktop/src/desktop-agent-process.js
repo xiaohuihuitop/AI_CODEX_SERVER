@@ -76,11 +76,12 @@ class DesktopAgentProcess {
   /**
    * 创建 Agent 子进程管理器。
    *
-   * @param {{cwd?: string, nodePath?: string}} options 进程启动配置。
+   * @param {{cwd?: string, nodePath?: string, platform?: string}} options 进程启动配置。
    */
   constructor(options = {}) {
     this.cwd = options.cwd || path.join(__dirname, '..');
     this.nodePath = options.nodePath || process.execPath;
+    this.platform = options.platform || process.platform;
     this.agentScriptPath = options.agentScriptPath || path.join(this.cwd, 'desktop-agent.js');
     this.childArgs = options.childArgs || [this.agentScriptPath];
     this.childEnv = options.childEnv || {};
@@ -166,7 +167,7 @@ class DesktopAgentProcess {
   stop() {
     const running = this.getRunningSnapshot();
     if (!running) return { running: false, pid: null };
-    if (process.platform === 'win32') this.killProcessTree(running.pid);
+    if (this.platform === 'win32') this.killProcessTree(running.pid);
     else if (this.child && this.child.pid === running.pid) this.child.kill();
     else this.killProcess(running.pid);
     return { running: false, pid: running.pid };

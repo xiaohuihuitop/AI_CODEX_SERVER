@@ -292,6 +292,7 @@ test('桌面 Agent 管理器可以识别并接管已有 Agent 进程', () => {
   const killed = [];
   const manager = new DesktopAgentProcess({
     cwd: 'C:\\repo',
+    platform: 'win32',
     processFinder: () => ({ pid: 4321, commandLine: 'node C:\\repo\\desktop-agent.js' }),
     killProcessTree: pid => killed.push(pid),
   });
@@ -329,6 +330,7 @@ test('桌面 Agent 管理器重启时会结束旧 Agent 的 Windows 进程树', 
 
   const manager = new DesktopAgentProcess({
     cwd: 'C:\\repo',
+    platform: 'win32',
     nodePath: 'node.exe',
     processFinder: () => (existingPid ? { pid: existingPid, commandLine: 'node C:\\repo\\desktop-agent.js' } : null),
     killProcessTree: pid => {
@@ -365,6 +367,19 @@ test('桌面 Agent 管理器重启时会结束旧 Agent 的 Windows 进程树', 
   assert.equal(spawned.length, 1);
   assert.deepEqual(spawned[0][0], 'node.exe');
   assert.equal(spawned[0][2].env.CODEX_DEVICE_TOKEN, 'token_replace_with_random_value');
+});
+
+test('桌面 Agent 管理器按注入的平台隔离非 Windows 进程终止方式', () => {
+  const { DesktopAgentProcess } = require('../../desktop/src/desktop-agent-process');
+  const killed = [];
+  const manager = new DesktopAgentProcess({
+    platform: 'linux',
+    processFinder: () => ({ pid: 4321, commandLine: 'node desktop-agent.js' }),
+    killProcess: pid => killed.push(pid),
+  });
+
+  assert.deepEqual(manager.stop(), { running: false, pid: 4321 });
+  assert.deepEqual(killed, [4321]);
 });
 
 test('桌面 Agent 管理器支持自定义子进程入口参数', () => {
