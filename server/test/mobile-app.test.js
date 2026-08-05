@@ -377,8 +377,8 @@ test('uni-app Android 手机端首次只读取最近五轮并支持向上分页'
 
 test('uni-app Android 手机端向上分页后保持消息时间顺序', () => {
   const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
-  const source = index.match(/function mergeLoadedHistory\(existingRows, latestRows\) \{([\s\S]*?)\n\}\n\n\/\*\*\n \* AI:应用 Relay/)?.[0] || '';
-  const factory = new Function(`${source.replace(/\n\/\*\*[\s\S]*$/, '')}\nreturn mergeLoadedHistory;`);
+  const source = index.match(/function mergeLoadedHistory\(existingRows, latestRows\) \{([\s\S]*?)\r?\n\}\r?\n\r?\n\/\*\*\r?\n \* AI:应用 Relay/)?.[0] || '';
+  const factory = new Function(`${source.replace(/\r?\n\/\*\*[\s\S]*$/, '')}\nreturn mergeLoadedHistory;`);
   const mergeLoadedHistory = factory();
   const olderRows = [
     { role: 'user', text: '第 1 条', timestamp: '2026-07-30T09:00:00.000Z' },
