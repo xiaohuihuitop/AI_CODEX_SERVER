@@ -974,17 +974,19 @@
      * @returns {Promise<void>}
      */
     async function loadHistory(statusData = null, options = {}) {
-      if (!selectedThreadId) {
+      const requestedThreadId = selectedThreadId;
+      if (!requestedThreadId) {
         messagesEl.innerHTML = '';
         renderedHistorySignature = '';
         notice('没有可用 Codex 线程');
         return;
       }
       const scroll = options.preserveScroll === false ? null : captureScroll();
-      const res = await api(`/codex/history?thread=${encodeURIComponent(selectedThreadId)}&limit=120&token=${encodeURIComponent(token)}`);
+      const res = await api(`/codex/history?thread=${encodeURIComponent(requestedThreadId)}&limit=120&token=${encodeURIComponent(token)}`);
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.message || '读取历史失败');
-      const rows = mergePendingLocalMessages(selectedThreadId, data.messages || []);
+      if (requestedThreadId !== selectedThreadId || data.threadId !== requestedThreadId) return;
+      const rows = mergePendingLocalMessages(requestedThreadId, data.messages || []);
       const historySignature = historyRowsSignature(rows);
       if (historySignature !== renderedHistorySignature) {
         messagesEl.innerHTML = '';
@@ -992,7 +994,10 @@
         renderedHistorySignature = historySignature;
       }
       if (data.available) {
-        const snapshot = statusData || await fetchStatus({ threadId: selectedThreadId });
+        const snapshot = statusData?.threadId === requestedThreadId
+          ? statusData
+          : await fetchStatus({ threadId: requestedThreadId });
+        if (requestedThreadId !== selectedThreadId || snapshot?.threadId !== requestedThreadId) return;
         currentThreadStatus = snapshot;
         bindPendingAssistantTurn(snapshot);
         updateThreadStatus(snapshot);

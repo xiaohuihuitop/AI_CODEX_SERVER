@@ -7,6 +7,7 @@ const {
   buildAgentEnv,
   buildMobileUrl,
   createDefaultManagerConfig,
+  getAgentStatusPath,
   generateDeviceToken,
   normalizeManagerConfig,
 } = require('../../desktop/src/desktop-manager');
@@ -35,6 +36,7 @@ test('桌面管理器生成可直接用于手机和 Agent 的固定 token 配置
     CODEX_CLOUD_URL: 'https://codex.example.com',
     CODEX_DEVICE_TOKEN: 'abc123',
     CODEX_DEVICE_NAME: 'home-pc',
+    CODEX_AGENT_STATUS_PATH: getAgentStatusPath('abc123'),
   });
 });
 
@@ -291,7 +293,7 @@ test('桌面 Agent 管理器可以识别并接管已有 Agent 进程', () => {
   const manager = new DesktopAgentProcess({
     cwd: 'C:\\repo',
     processFinder: () => ({ pid: 4321, commandLine: 'node C:\\repo\\desktop-agent.js' }),
-    killProcess: pid => killed.push(pid),
+    killProcessTree: pid => killed.push(pid),
   });
 
   assert.deepEqual(manager.status(), {
@@ -317,7 +319,7 @@ test('桌面 Agent 管理器可以识别并接管已有 Agent 进程', () => {
   assert.deepEqual(killed, [4321]);
 });
 
-test('桌面 Agent 管理器支持一键重启 Agent 让连接重新上线', async () => {
+test('桌面 Agent 管理器重启时会结束旧 Agent 的 Windows 进程树', async () => {
   const EventEmitter = require('node:events');
   const { PassThrough } = require('node:stream');
   const { DesktopAgentProcess } = require('../../desktop/src/desktop-agent-process');
@@ -329,7 +331,7 @@ test('桌面 Agent 管理器支持一键重启 Agent 让连接重新上线', asy
     cwd: 'C:\\repo',
     nodePath: 'node.exe',
     processFinder: () => (existingPid ? { pid: existingPid, commandLine: 'node C:\\repo\\desktop-agent.js' } : null),
-    killProcess: pid => {
+    killProcessTree: pid => {
       killed.push(pid);
       existingPid = null;
     },

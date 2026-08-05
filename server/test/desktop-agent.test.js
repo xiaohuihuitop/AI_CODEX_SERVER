@@ -3,6 +3,7 @@ const EventEmitter = require('node:events');
 const test = require('node:test');
 const { agentUrlFromServerUrl, createDesktopAgentClient, handleAgentRequest, isRecoverableSocketError, withTimeout } = require('../../desktop/src/desktop-agent-client');
 const { DesktopAgentApi } = require('../../desktop/src/desktop-agent-api');
+const { selectSyncBatch } = require('../../desktop/src/desktop-sync-batch');
 
 test('desktop-agent 将 HTTPS 云端地址转换为 WSS Agent 地址', () => {
   assert.equal(
@@ -13,6 +14,23 @@ test('desktop-agent 将 HTTPS 云端地址转换为 WSS Agent 地址', () => {
     agentUrlFromServerUrl('http://127.0.0.1:8791/base/', 'token 2'),
     'ws://127.0.0.1:8791/base/agent?token=token+2',
   );
+});
+
+test('手机控制后的目标线程优先同步且不打乱常规轮转游标', () => {
+  const targets = [
+    { threadId: 'thread-1' },
+    { threadId: 'thread-2' },
+    { threadId: 'thread-3' },
+  ];
+  const priority = selectSyncBatch(targets, 1, 2, 'thread-3');
+  const regular = selectSyncBatch(targets, 1, 2, '');
+
+  assert.equal(priority.prioritized, true);
+  assert.deepEqual(priority.targets.map(item => item.threadId), ['thread-3']);
+  assert.equal(priority.nextCursor, 1);
+  assert.equal(regular.prioritized, false);
+  assert.deepEqual(regular.targets.map(item => item.threadId), ['thread-2', 'thread-3']);
+  assert.equal(regular.nextCursor, 0);
 });
 
 test('desktop-agent 只处理带 id 和 action 的请求', async () => {
@@ -251,6 +269,60 @@ test('desktop-agent 收到服务器同步确认后发出确认事件', async () 
 
   assert.equal(ack.sessionCount, 3);
   assert.equal(ack.updatedAt, '2026-07-29T12:00:00.000Z');
+});
+
+test('desktop-agent 为手机控制命令发出接收、完成和失败事件', async () => {
+  class FakeSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.OPEN = 1;
+      this.CLOSED = 3;
+      this.readyState = this.OPEN;
+      setImmediate(() => this.emit('open'));
+    }
+
+    send() {}
+
+    close() {
+      this.readyState = this.CLOSED;
+      this.emit('close', 1000, Buffer.from(''));
+    }
+  }
+
+  const client = createDesktopAgentClient({
+    serverUrl: 'http://example.test',
+    token: 'token',
+    api: {
+      handle: async action => {
+        if (action === 'send') return { ok: true };
+        const error = new Error('无法停止');
+        error.code = 'THREAD_NOT_RUNNING';
+        error.status = 409;
+        throw error;
+      },
+    },
+    WebSocket: FakeSocket,
+    syncProvider: async () => null,
+  });
+  const received = [];
+  const completed = [];
+  const failed = [];
+  client.on('control-received', event => received.push(event));
+  client.on('control-complete', event => completed.push(event));
+  client.on('control-failed', event => failed.push(event));
+
+  await new Promise(resolve => setTimeout(resolve, 20));
+  client.socket.emit('message', Buffer.from(JSON.stringify({ id: 'send-1', action: 'send', payload: { threadId: 'thread-1', text: 'hello' } })));
+  client.socket.emit('message', Buffer.from(JSON.stringify({ id: 'stop-1', action: 'stop', payload: { threadId: 'thread-1' } })));
+  await new Promise(resolve => setImmediate(resolve));
+  await new Promise(resolve => setImmediate(resolve));
+  client.close();
+
+  assert.deepEqual(received.map(event => event.action), ['send', 'stop']);
+  assert.deepEqual(completed.map(event => event.action), ['send']);
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].action, 'stop');
+  assert.equal(failed[0].error.code, 'THREAD_NOT_RUNNING');
 });
 
 test('desktop-agent 同步任务超时后会释放后续同步', async () => {

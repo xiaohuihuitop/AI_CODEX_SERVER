@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 const os = require('node:os');
+const { getAgentStatusPath } = require('./desktop-agent-status');
 
 function generateDeviceToken() {
   return `codex_${crypto.randomBytes(24).toString('base64url')}`;
@@ -40,6 +41,7 @@ function buildAgentEnv(config) {
     CODEX_CLOUD_URL: normalized.serverUrl,
     CODEX_DEVICE_TOKEN: normalized.token,
     CODEX_DEVICE_NAME: normalized.deviceName,
+    CODEX_AGENT_STATUS_PATH: getAgentStatusPath(normalized.token),
   };
 }
 
@@ -48,5 +50,6 @@ module.exports = {
   buildMobileUrl,
   createDefaultManagerConfig,
   generateDeviceToken,
+  getAgentStatusPath,
   normalizeManagerConfig,
 };

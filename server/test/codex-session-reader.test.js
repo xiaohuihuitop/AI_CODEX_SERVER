@@ -547,3 +547,17 @@ test('final_answer 后缺少 task_complete 时也视为完成', () => {
   assert.equal(status.status, 'complete');
   assert.equal(status.final, '最终回复');
 });
+
+test('同一轮最终回复的双记录只保留一个最终步骤', () => {
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const status = reader.parseStatus({
+    file: path.join(fixtureRoot, 'sessions', '2026-08-05T02-00-00-000Z-12345678-1234-1234-1234-1234567890ab.jsonl'),
+  });
+  const finalSteps = status.turns[0].steps.filter(item => item.kind === 'final');
+
+  assert.equal(finalSteps.length, 1);
+  assert.equal(finalSteps[0].text, '最终回复');
+});

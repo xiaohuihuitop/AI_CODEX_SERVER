@@ -20,7 +20,10 @@ test('云端和桌面端入口文件存在并使用固定 token 环境变量', (
   assert.match(agent, /function syncProvider\(\)/);
   assert.match(agent, /api\.isBusy\(\)/);
   assert.match(agent, /const busy = api\.isBusy\(\)/);
-  assert.match(agent, /if \(!busy && now - lastDiscoveryAt >= discoveryIntervalMs\)/);
+  assert.match(agent, /pendingControlSyncThreadId/);
+  assert.match(agent, /if \(!busy && !hasPendingControlTarget && now - lastDiscoveryAt >= discoveryIntervalMs\)/);
+  assert.match(agent, /selectSyncBatch/);
+  assert.match(agent, /优先同步目标对话运行态/);
   assert.doesNotMatch(agent, /if \(api\.isBusy\(\)\) \{\s*return null;\s*\}/);
   assert.match(agent, /createCodexAppServerClient/);
   assert.match(agent, /createCodexDesktopThreadCatalog/);

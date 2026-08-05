@@ -42,6 +42,25 @@ function findExistingAgentSnapshot(processMatchText, processNamePattern = '^node
 }
 
 /**
+ * AI:结束 Windows Agent 及其 app-server 子进程，避免重启后遗留后台会话服务。
+ *
+ * @param {number} pid Agent 主进程 PID。
+ * @returns {void}
+ */
+function terminateAgentProcessTree(pid) {
+  const targetPid = Number(pid);
+  if (!Number.isInteger(targetPid) || targetPid <= 0) throw new Error('无效的 Agent PID。');
+  if (process.platform !== 'win32') {
+    process.kill(targetPid);
+    return;
+  }
+  execFileSync('taskkill.exe', ['/PID', String(targetPid), '/T', '/F'], {
+    windowsHide: true,
+    stdio: 'ignore',
+  });
+}
+
+/**
  * 追加有限长度的日志行。
  *
  * @param {string[]} lines 日志缓存。
@@ -69,6 +88,7 @@ class DesktopAgentProcess {
     this.processNamePattern = options.processNamePattern || '^node(\\.exe)?$';
     this.processFinder = options.processFinder || findExistingAgentSnapshot;
     this.killProcess = options.killProcess || process.kill;
+    this.killProcessTree = options.killProcessTree || terminateAgentProcessTree;
     this.spawnProcess = options.spawnImpl || spawn;
     this.stopTimeoutMs = options.stopTimeoutMs || DEFAULT_STOP_TIMEOUT_MS;
     this.stopPollMs = options.stopPollMs || DEFAULT_STOP_POLL_MS;
@@ -146,7 +166,8 @@ class DesktopAgentProcess {
   stop() {
     const running = this.getRunningSnapshot();
     if (!running) return { running: false, pid: null };
-    if (this.child && this.child.pid === running.pid) this.child.kill();
+    if (process.platform === 'win32') this.killProcessTree(running.pid);
+    else if (this.child && this.child.pid === running.pid) this.child.kill();
     else this.killProcess(running.pid);
     return { running: false, pid: running.pid };
   }
@@ -223,4 +244,5 @@ module.exports = {
   appendLog,
   createDesktopAgentProcess,
   findExistingAgentSnapshot,
+  terminateAgentProcessTree,
 };

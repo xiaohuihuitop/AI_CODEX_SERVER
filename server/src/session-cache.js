@@ -359,6 +359,7 @@ function parseSession(lines, threadId, since = '') {
   };
   const addStep = (step, options = {}) => {
     const enriched = Object.assign({ turnId: currentTurnId }, step);
+    const replace = options.replace || enriched.kind === 'final';
     const dedupeKey = enriched.kind === 'commentary'
       ? `${enriched.turnId}\u0000${enriched.kind}\u0000${enriched.time}\u0000${enriched.text}`
       : '';
@@ -371,10 +372,10 @@ function parseSession(lines, threadId, since = '') {
       if (!Number.isNaN(currentMs) && previousMs !== undefined && Math.abs(currentMs - previousMs) <= 1500) return;
       if (!Number.isNaN(currentMs)) recentCommentarySteps.set(recentKey, currentMs);
     }
-    if (options.visible !== false) pushOrReplace(steps, enriched, options.replace);
+    if (options.visible !== false) pushOrReplace(steps, enriched, replace);
     if (!enriched.turnId) return;
     const turn = ensureTurn(enriched.turnId);
-    pushOrReplace(turn.steps, enriched, options.replace);
+    pushOrReplace(turn.steps, enriched, replace);
     if (enriched.kind === 'start') turn.startedAt = enriched.time || turn.startedAt;
     if (enriched.kind === 'final') turn.final = enriched.text || turn.final;
     if (enriched.kind === 'complete') {

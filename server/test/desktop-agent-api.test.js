@@ -25,6 +25,7 @@ test('desktop-agent API 缺少 Desktop 线程目录时明确拒绝读取列表',
 
 test('desktop-agent API 恢复同一 threadId 后再发起回合', async () => {
   const calls = [];
+  const progress = [];
   const appServer = {
     resumeThread: async threadId => calls.push(['resume', threadId]),
     startTurn: async (threadId, text) => {
@@ -32,7 +33,11 @@ test('desktop-agent API 恢复同一 threadId 后再发起回合', async () => {
       return { turn: { id: 'turn-1' } };
     },
   };
-  const api = createDesktopAgentApi({ appServer, now: () => 1780910000000 });
+  const api = createDesktopAgentApi({
+    appServer,
+    now: () => 1780910000000,
+    onControlProgress: event => progress.push(event),
+  });
 
   const result = await api.handle('send', { threadId: 'thread-1', text: '你好' });
 
@@ -43,6 +48,14 @@ test('desktop-agent API 恢复同一 threadId 后再发起回合', async () => {
     since: '2026-06-08T09:13:20.000Z',
   });
   assert.deepEqual(calls, [['resume', 'thread-1'], ['start', 'thread-1', '你好']]);
+  assert.deepEqual(progress.map(event => event.phase), [
+    'send.received',
+    'send.resume.started',
+    'send.resume.completed',
+    'send.turn.started',
+  ]);
+  assert.equal(progress[0].textLength, 2);
+  assert.equal(progress[3].turnId, 'turn-1');
 });
 
 test('desktop-agent API 恢复失败不会创建替代回合', async () => {

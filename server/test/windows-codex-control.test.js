@@ -293,10 +293,24 @@ test('手机端自动刷新保留滚动位置', () => {
   assert.match(html, /id="refresh"[^>]+title="重新读取对话列表和当前对话历史"[^>]*>刷新<\/button>/);
   assert.match(html, /function captureScroll/);
   assert.match(html, /function restoreScroll/);
-  assert.match(html, /const rows = mergePendingLocalMessages\(selectedThreadId, data\.messages \|\| \[\]\)/);
+  assert.match(html, /const rows = mergePendingLocalMessages\(requestedThreadId, data\.messages \|\| \[\]\)/);
   assert.match(html, /message\(row\.role, row\.text \|\| '', \{ scrollToBottom: false, turnId: row\.turnId \|\| '', pending: Boolean\(row\.pending\), id: row\.id \|\| '' \}\)/);
   assert.match(html, /await loadHistory\(data, \{ preserveScroll: true \}\)/);
   assert.match(html, /await loadHistory\(null, \{ preserveScroll: true \}\)/);
+});
+
+test('网页端切换线程后不会由旧请求回写运行状态', () => {
+  const html = fs.readFileSync(indexPath, 'utf8');
+  const loadHistoryStart = html.indexOf('async function loadHistory(statusData = null, options = {}) {');
+  const loadHistoryEnd = html.indexOf('async function fetchStatus(watch = {}) {', loadHistoryStart);
+  const loadHistoryFunction = html.slice(loadHistoryStart, loadHistoryEnd);
+
+  assert.notEqual(loadHistoryStart, -1);
+  assert.notEqual(loadHistoryEnd, -1);
+  assert.match(loadHistoryFunction, /const requestedThreadId = selectedThreadId;/);
+  assert.match(loadHistoryFunction, /thread=\$\{encodeURIComponent\(requestedThreadId\)\}/);
+  assert.match(loadHistoryFunction, /if \(requestedThreadId !== selectedThreadId \|\| data\.threadId !== requestedThreadId\) return;/);
+  assert.match(loadHistoryFunction, /statusData\?\.threadId === requestedThreadId/);
 });
 
 test('手机端显示线程运行状态指示点', () => {
@@ -428,7 +442,7 @@ test('网页端历史刷新保留未确认本地用户消息', () => {
   assert.match(mergeFunction, /if \(hasHistoryMessage\(rows, 'user', pending\.text, pending\.baseMessageCount\)\) continue/);
   assert.match(mergeFunction, /localRows\.push\(\{ role: 'user', text: pending\.text, id: pending\.userId \}\)/);
   assert.match(mergeFunction, /rows\.splice\(insertAt \+ localIndex, 0, localRows\[localIndex\]\)/);
-  assert.match(html, /const rows = mergePendingLocalMessages\(selectedThreadId, data\.messages \|\| \[\]\)/);
+  assert.match(html, /const rows = mergePendingLocalMessages\(requestedThreadId, data\.messages \|\| \[\]\)/);
   assert.match(html, /bindPendingLocalSendTurn\(runningTurn\.turnId\)/);
   assert.match(html, /let sendAccepted = false/);
   assert.match(html, /if \(!sendAccepted\) \{[\s\S]*removePendingLocalSend\(pendingLocal\)/);

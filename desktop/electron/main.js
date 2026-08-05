@@ -18,6 +18,7 @@ const {
   saveConfig,
 } = require('../src/desktop-manager-server');
 const { appendLog, createDesktopAgentProcess } = require('../src/desktop-agent-process');
+const { resolveAppServerStatus } = require('../src/app-server-status');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const CONFIG_PATH = getDefaultConfigPath();
@@ -55,14 +56,7 @@ function appendManagerLog(message) {
 }
 
 function appServerStatus(agent) {
-  const lines = [...(agent.lastOutput || []), ...(agent.lastError || [])];
-  const latestError = [...lines].reverse().find(line => line.includes('App Server 不可用'));
-  const ready = [...lines].reverse().find(line => line.includes('App Server 已初始化'));
-  if (latestError && (!ready || lines.lastIndexOf(latestError) > lines.lastIndexOf(ready))) {
-    return { ok: false, message: latestError.replace(/^.*?App Server /, '') };
-  }
-  if (ready && agent.running) return { ok: true, message: '本机 stdio 会话服务已就绪' };
-  return { ok: false, message: agent.running ? '等待 App Server 初始化' : 'Agent 未运行' };
+  return resolveAppServerStatus(agent, config);
 }
 
 function recordAppServerState(appServer) {

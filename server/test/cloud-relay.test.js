@@ -396,6 +396,31 @@ test('云端缓存支持渲染为用户消息、处理过程、最终回复顺�
   ]);
 });
 
+test('云端缓存对同一轮最终回复双记录只保留一个步骤', () => {
+  const cache = createCloudSessionCache();
+  cache.applySync('final-dedup-token', {
+    openThreadIds: ['thread-final-dedup'],
+    sessions: [{
+      threadId: 'thread-final-dedup',
+      threadName: '最终回复去重线程',
+      projectName: 'demo',
+      reset: true,
+      lines: [
+        JSON.stringify({ timestamp: '2026-08-05T02:00:00.000Z', type: 'event_msg', payload: { type: 'user_message', message: '测试最终回复去重' } }),
+        JSON.stringify({ timestamp: '2026-08-05T02:00:01.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-final-dedup' } }),
+        JSON.stringify({ timestamp: '2026-08-05T02:00:02.000Z', type: 'event_msg', payload: { type: 'agent_message', phase: 'final_answer', message: '最终回复' } }),
+        JSON.stringify({ timestamp: '2026-08-05T02:00:02.000Z', type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ text: '最终回复' }] } }),
+        JSON.stringify({ timestamp: '2026-08-05T02:00:03.000Z', type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn-final-dedup', last_agent_message: '最终回复' } }),
+      ],
+    }],
+  });
+
+  const status = cache.status('final-dedup-token', 'thread-final-dedup');
+  const finalSteps = status.turns[0].steps.filter(item => item.kind === 'final');
+  assert.equal(finalSteps.length, 1);
+  assert.equal(finalSteps[0].text, '最终回复');
+});
+
 test('云端会话缓存只在同步入站时解析常规历史和状态', () => {
   let parseCount = 0;
   const cache = createCloudSessionCache({
