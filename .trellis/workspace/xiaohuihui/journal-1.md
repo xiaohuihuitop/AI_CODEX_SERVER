@@ -71,3 +71,37 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 4: 修复 Linux CI 进程测试隔离
+
+**Date**: 2026-08-05
+**Task**: 修复 Linux CI 进程测试隔离
+**Branch**: `master`
+
+### Summary
+
+修复跨端同步后续发布中的 Linux CI 失败，确认构建与 Release 完整成功。
+
+### Main Changes
+
+- 为 DesktopAgentProcess 注入平台依赖，保持生产默认行为不变。
+- Windows 进程树测试显式指定 win32，并覆盖非 Windows 终止路径。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d55f797` | (see git log) |
+| `a0d8996` | (see git log) |
+| `68cfba8` | (see git log) |
+
+### Testing
+
+- [OK] 常规 npm test 162/162 通过。
+- [OK] Linux 平台模拟 npm test 162/162 通过。
+- [OK] GitHub Actions build-v2.17 全部步骤成功。
+
+### Status
+
+[OK] **Completed**
