@@ -2,7 +2,11 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { PassThrough } = require('node:stream');
 const test = require('node:test');
-const { CodexAppServerClient } = require('../../desktop/src/codex-app-server-client');
+const {
+  CodexAppServerClient,
+  findDesktopCodexExecutable,
+  resolveAppServerLaunch,
+} = require('../../desktop/src/codex-app-server-client');
 
 function createChild() {
   const child = new EventEmitter();
@@ -22,6 +26,51 @@ function respond(child, id, result) {
   child.stdout.write(`${JSON.stringify({ id: String(id), result })}\n`);
 }
 
+function createTestClient(child, options = {}) {
+  return new CodexAppServerClient({
+    spawnProcess: () => child,
+    launchResolver: () => ({ command: 'codex-test.exe', args: ['app-server'], source: 'test' }),
+    ...options,
+  });
+}
+
+test('Windows 优先选择最新 Codex Desktop 内置程序', () => {
+  const localAppData = 'C:\\Users\\tester\\AppData\\Local';
+  const root = 'C:\\Users\\tester\\AppData\\Local\\OpenAI\\Codex\\bin';
+  const filesystem = {
+    readdirSync: directory => {
+      assert.equal(directory, root);
+      return [
+        { name: 'old', isDirectory: () => true },
+        { name: 'current', isDirectory: () => true },
+      ];
+    },
+    statSync: file => ({
+      isFile: () => true,
+      mtimeMs: file.includes('current') ? 20 : 10,
+    }),
+  };
+
+  const executable = findDesktopCodexExecutable({ localAppData, filesystem });
+  assert.equal(executable, `${root}\\current\\codex.exe`);
+  assert.deepEqual(resolveAppServerLaunch({ platform: 'win32', localAppData, filesystem }), {
+    command: executable,
+    args: ['app-server'],
+    source: 'desktop',
+  });
+});
+
+test('Windows 找不到 Codex Desktop 内置程序时明确失败', () => {
+  const filesystem = {
+    readdirSync: () => [],
+    statSync: () => ({ isFile: () => false, mtimeMs: 0 }),
+  };
+  assert.throws(
+    () => resolveAppServerLaunch({ platform: 'win32', localAppData: 'C:\\missing', filesystem }),
+    error => error.code === 'APP_SERVER_EXECUTABLE_NOT_FOUND',
+  );
+});
+
 test('app-server 客户端初始化后按未归档更新时间读取线程', async () => {
   const child = createChild();
   const writes = [];
@@ -34,7 +83,7 @@ test('app-server 客户端初始化后按未归档更新时间读取线程', asy
       nextCursor: 'next',
     });
   });
-  const client = new CodexAppServerClient({ spawnProcess: () => child });
+  const client = createTestClient(child);
 
   const result = await client.listThreads();
 
@@ -61,7 +110,7 @@ test('app-server 客户端按同一 threadId 恢复、发起和中断回合', as
     if (message.method === 'turn/start') respond(child, message.id, { turn: { id: 'turn-1' } });
     if (message.method === 'turn/interrupt') respond(child, message.id, {});
   });
-  const client = new CodexAppServerClient({ spawnProcess: () => child });
+  const client = createTestClient(child);
 
   await client.resumeThread('thread-1');
   await client.startTurn('thread-1', '来自手机的消息');
@@ -96,7 +145,7 @@ test('app-server 请求超时和异常退出会清理待处理请求', async () 
     const message = JSON.parse(String(data));
     if (message.method === 'initialize') respond(child, message.id, {});
   });
-  const client = new CodexAppServerClient({ spawnProcess: () => child, requestTimeoutMs: 20 });
+  const client = createTestClient(child, { requestTimeoutMs: 20 });
   await client.start();
   await assert.rejects(() => client.request('thread/list', {}), error => error.code === 'APP_SERVER_TIMEOUT');
   const pending = client.request('thread/read', {});

@@ -16,7 +16,7 @@ desktop/
   desktop-manager-server.js     旧版本地 Web 管理入口
   server.js                     本机局域网网页服务入口
   electron/                     Electron 图形管理器
-  scripts/                      PowerShell CDP 控制脚本
+  scripts/                      PowerShell CDP 诊断脚本
   src/                          业务模块
   public/                       本机网页端静态文件
   package.json
@@ -27,7 +27,8 @@ desktop/
 - Windows 10 或更高版本。
 - Node.js 20 或更高版本。
 - 已安装 Codex Desktop。
-- Codex Desktop 需要通过 `127.0.0.1:9229` 开放 CDP 调试端口。
+- 正常发送和停止由 Codex Desktop 内置 `codex.exe app-server` 完成。Windows Agent 会自动从 `%LOCALAPPDATA%\OpenAI\Codex\bin` 选择最新安装版本，不能依赖 PATH 中的全局 CLI。
+- `127.0.0.1:9229` 的 CDP 仅用于诊断或旧脚本，不是同步和发送的前置条件。
 
 ## 安装依赖
 
@@ -49,7 +50,7 @@ npm run start:manager:gui
 - 配置设备名。
 - 启动功能：启动或重连 Windows Agent。
 - 停止功能：停止 Agent 并关闭自动启动。
-- 重启 Codex 生效 CDP：重启 Codex Desktop 并附加本机 CDP 参数。
+- 重启 Codex 生效 CDP：仅为诊断或旧脚本重启 Codex Desktop 并附加本机 CDP 参数。
 - 最小化到系统托盘，托盘菜单可恢复窗口或退出管理器。
 
 示例配置：
@@ -119,7 +120,7 @@ npm run start:manager
 
 该入口用于调试或兼容旧流程，正式使用推荐 Electron 图形管理器。
 
-## CDP 控制
+## CDP 诊断
 
 控制脚本位于：
 
@@ -127,7 +128,9 @@ npm run start:manager
 desktop/scripts/win-codex-control.ps1
 ```
 
-它通过 Codex Desktop 的本机 CDP 端口读取当前打开窗口，并在对应线程里输入和发送消息。当前没有其他控制路径。
+它通过 Codex Desktop 的本机 CDP 端口执行旧版窗口读取和输入诊断。正式 Windows Agent 使用内置 `codex.exe app-server` 的 JSON-RPC stdio 控制目标线程，不依赖 CDP。
+
+如果管理器显示 App Server 未就绪，先检查日志中的 `App Server 启动` 行：它必须指向 `%LOCALAPPDATA%\OpenAI\Codex\bin\<版本>\codex.exe`，而不是 npm 全局安装目录。
 
 ## 配置保存位置
 

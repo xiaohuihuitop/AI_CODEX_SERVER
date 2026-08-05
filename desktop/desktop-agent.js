@@ -232,6 +232,10 @@ async function syncProvider() {
 }
 
 reportAppServerStatus('starting', appServerStatusMessage, true);
+appServer.on('launch', ({ command, source }) => {
+  const type = source === 'desktop' ? 'Codex Desktop 内置程序' : '系统 PATH 程序';
+  console.log(`App Server 启动：${type}，${command}`);
+});
 appServer.on('ready', () => {
   lastAppServerError = '';
   reportAppServerStatus('ready', '本机 stdio 会话服务已就绪', true);

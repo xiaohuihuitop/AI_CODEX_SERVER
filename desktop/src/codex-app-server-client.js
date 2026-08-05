@@ -1,5 +1,7 @@
 const { spawn } = require('node:child_process');
 const { EventEmitter } = require('node:events');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 
@@ -13,17 +15,76 @@ function statusFromProtocol(status) {
 }
 
 /**
+ * AI:定位 Codex Desktop 当前安装版本附带的 app-server 可执行文件。
+ *
+ * @param {{localAppData?: string, filesystem?: typeof fs}} options 环境与文件系统依赖。
+ * @returns {string} 最新内置 codex.exe 的绝对路径，未找到时返回空字符串。
+ */
+function findDesktopCodexExecutable(options = {}) {
+  const filesystem = options.filesystem || fs;
+  const localAppData = String(options.localAppData || process.env.LOCALAPPDATA || '').trim();
+  if (!localAppData) return '';
+
+  const binDirectory = path.join(localAppData, 'OpenAI', 'Codex', 'bin');
+  let entries;
+  try {
+    entries = filesystem.readdirSync(binDirectory, { withFileTypes: true });
+  } catch {
+    return '';
+  }
+
+  const candidates = entries.map(entry => {
+    if (!entry || typeof entry.isDirectory !== 'function' || !entry.isDirectory()) return null;
+    const executable = path.join(binDirectory, entry.name, 'codex.exe');
+    try {
+      const stat = filesystem.statSync(executable);
+      if (!stat.isFile()) return null;
+      return { executable, mtimeMs: Number(stat.mtimeMs) || 0 };
+    } catch {
+      return null;
+    }
+  }).filter(Boolean);
+
+  candidates.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  return candidates[0] ? candidates[0].executable : '';
+}
+
+/**
+ * AI:生成与 Codex Desktop 会话格式匹配的 app-server 启动命令。
+ *
+ * @param {{platform?: string, localAppData?: string, filesystem?: typeof fs}} options 平台与文件系统依赖。
+ * @returns {{command: string, args: string[], source: string}} 子进程命令。
+ * @throws {Error} Windows 未安装可用 Codex Desktop 时抛出明确错误。
+ */
+function resolveAppServerLaunch(options = {}) {
+  const platform = options.platform || process.platform;
+  if (platform !== 'win32') {
+    return { command: 'codex', args: ['app-server'], source: 'path' };
+  }
+
+  const executable = findDesktopCodexExecutable(options);
+  if (!executable) {
+    throw createAppServerError(
+      '未找到 Codex Desktop 内置的 codex.exe，无法启动与桌面会话格式匹配的 App Server。',
+      'APP_SERVER_EXECUTABLE_NOT_FOUND',
+    );
+  }
+  return { command: executable, args: ['app-server'], source: 'desktop' };
+}
+
+/**
  * AI:管理本机 codex app-server 的 JSON-RPC stdio 连接。
  */
 class CodexAppServerClient extends EventEmitter {
   /**
-   * @param {{spawnProcess?: Function, requestTimeoutMs?: number, logger?: object}} options 子进程与协议配置。
+   * @param {{spawnProcess?: Function, requestTimeoutMs?: number, logger?: object, launchResolver?: Function}} options 子进程与协议配置。
    */
   constructor(options = {}) {
     super();
     this.spawnProcess = options.spawnProcess || spawn;
     this.requestTimeoutMs = Math.max(1000, Number(options.requestTimeoutMs) || DEFAULT_REQUEST_TIMEOUT_MS);
     this.logger = options.logger || console;
+    this.launchResolver = options.launchResolver || resolveAppServerLaunch;
     this.child = null;
     this.starting = null;
     this.nextRequestId = 1;
@@ -54,11 +115,17 @@ class CodexAppServerClient extends EventEmitter {
   }
 
   async startInternal() {
-    const command = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : 'codex';
-    const args = process.platform === 'win32' ? ['/d', '/s', '/c', 'codex app-server'] : ['app-server'];
+    let launch;
+    try {
+      launch = this.launchResolver();
+    } catch (error) {
+      throw error && error.code
+        ? error
+        : createAppServerError(`无法定位 codex app-server：${error.message}`, 'APP_SERVER_START_FAILED');
+    }
     let child;
     try {
-      child = this.spawnProcess(command, args, {
+      child = this.spawnProcess(launch.command, launch.args, {
         stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       });
@@ -69,6 +136,7 @@ class CodexAppServerClient extends EventEmitter {
       throw createAppServerError('codex app-server 未提供可用的 stdio 通道。', 'APP_SERVER_START_FAILED');
     }
     this.child = child;
+    this.emit('launch', launch);
     this.attachChild(child);
     try {
       const initialized = await this.request('initialize', {
@@ -270,5 +338,7 @@ module.exports = {
   CodexAppServerClient,
   createCodexAppServerClient,
   createAppServerError,
+  findDesktopCodexExecutable,
+  resolveAppServerLaunch,
   statusFromProtocol,
 };

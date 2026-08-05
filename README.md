@@ -7,7 +7,7 @@ Codex Windows Bridge 用于把 Windows 上的 Codex Desktop 对话同步到手�
 项目按三端拆分：
 
 ```text
-desktop/  Windows 桌面管理器、Agent、本机网页和 CDP 控制脚本
+desktop/  Windows 桌面管理器、Agent、本机网页和 CDP 诊断脚本
 server/   云端 relay、网页入口、Docker 部署和 GitHub Actions 构建
 app/      Android-only uni-app 手机端
 ```
@@ -25,12 +25,12 @@ app/      Android-only uni-app 手机端
         v
 Windows desktop-agent
         |
-        | 本机 CDP 127.0.0.1:9229
+        | 同版本 App Server JSON-RPC stdio
         v
-Codex Desktop
+Codex Desktop 内置 codex.exe
 ```
 
-云端只保存会话同步缓存和转发控制指令，不直接访问电脑上的 Codex Desktop。Codex Desktop 的 CDP 端口只监听 Windows 本机 `127.0.0.1:9229`。
+云端只保存会话同步缓存和转发控制指令，不直接访问电脑上的 Codex Desktop。Windows Agent 会从 Codex Desktop 当前安装目录解析内置 `codex.exe` 并启动 `app-server`，避免全局 npm CLI 与 Desktop 会话格式版本不一致。CDP 端口仅用于本机诊断和旧脚本，不参与正式发送链路，也不应暴露到公网。
 
 ## 功能概览
 
@@ -89,7 +89,7 @@ npm run start:manager:gui
 设备名称：home-pc
 ```
 
-然后点击“启动功能”。如果 Codex 控制显示不可用，点击“重启 Codex 生效 CDP”。
+然后点击“启动功能”。管理器会显示 App Server 状态；如果未就绪，确认 Windows 已安装并可正常打开 Codex Desktop。`重启 Codex 生效 CDP` 仅用于 CDP 诊断，不是手机发送消息的前置条件。
 
 ### 3. 启动 Android 手机端
 
@@ -124,7 +124,7 @@ npm run check
 
 ## 注意事项
 
-- 当前控制链路依赖 Codex Desktop UI 和 CDP，Codex Desktop 版本变化可能影响控制脚本。
+- 当前控制链路依赖 Codex Desktop 内置 App Server；Windows Agent 必须使用与 Desktop 同一安装版本的 `codex.exe`，不能用 PATH 中的全局旧版 CLI 代替。
 - 云端 relay 建议只暴露必要端口，并使用强随机 token。
 - 手机端和桌面端必须使用同一个 token 才能打通同一台电脑。
 - 多台电脑建议每台电脑使用不同 token。
