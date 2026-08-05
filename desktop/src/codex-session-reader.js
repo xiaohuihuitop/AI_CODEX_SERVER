@@ -606,7 +606,55 @@ class CodexSessionReader {
     }
     return rows
       .sort((left, right) => Number(right.mtimeMs || 0) - Number(left.mtimeMs || 0))
-      .slice(0, Math.max(1, Math.min(Number(limit) || 160, 160)));
+      .slice(0, Math.max(1, Math.min(Number(limit) || 160, 1000)));
+  }
+
+  /**
+   * AI:将线程目录映射到本地 JSONL，同步时保留目录给出的 threadId 顺序。
+   *
+   * @param {Array<{id?: string, name?: string, title?: string, cwd?: string, updatedAt?: number|string}>} threads 线程目录。
+   * @param {{preferLocalName?: boolean}} options 标题优先级选项。
+   * @returns {Array<object>} 可读取 JSONL 的线程目标。
+   */
+  discoverCatalogThreadSessions(threads, options = {}) {
+    const values = Array.isArray(threads) ? threads : [];
+    const localById = new Map(this.discoverThreadSessions(Math.max(1000, values.length)).map(target => [target.threadId, target]));
+    return values.map(thread => {
+      const threadId = String(thread && thread.id || '').trim();
+      const local = localById.get(threadId);
+      if (!local) return null;
+      const updatedAt = Number(thread.updatedAt);
+      const catalogName = String(thread.name || thread.title || '').trim();
+      const cwd = String(thread.cwd || '').trim() || local.cwd;
+      return Object.assign({}, local, {
+        threadName: options.preferLocalName ? local.threadName || catalogName : catalogName || local.threadName,
+        cwd,
+        projectName: projectNameFromCwd(cwd),
+        updatedAt: Number.isFinite(updatedAt) && updatedAt > 0
+          ? new Date(updatedAt * 1000).toISOString()
+          : local.updatedAt,
+      });
+    }).filter(Boolean);
+  }
+
+  /**
+   * AI:将 app-server 已过滤的未归档线程映射到本地 JSONL，同步时保留服务端 threadId 顺序。
+   *
+   * @param {Array<{id?: string, name?: string, cwd?: string, updatedAt?: number|string}>} threads app-server 线程列表。
+   * @returns {Array<object>} 可读取 JSONL 的线程目标。
+   */
+  discoverAppServerThreadSessions(threads) {
+    return this.discoverCatalogThreadSessions(threads);
+  }
+
+  /**
+   * AI:将 Desktop 侧栏线程目录映射到本地 JSONL，优先保留侧栏已生成的线程标题。
+   *
+   * @param {Array<{id?: string, name?: string, cwd?: string, updatedAt?: number|string}>} threads Desktop 线程列表。
+   * @returns {Array<object>} 可读取 JSONL 的线程目标。
+   */
+  discoverDesktopThreadSessions(threads) {
+    return this.discoverCatalogThreadSessions(threads, { preferLocalName: true });
   }
 
   /**
@@ -614,7 +662,7 @@ class CodexSessionReader {
    *
    * @param {Array<object>} targets 打开线程会话目标。
    * @param {Map<string, {size: number}>|object} offsets 已同步偏移。
-   * @param {{initialLineLimit?: number}} options 同步选项。
+   * @param {{initialLineLimit?: number, maxTargets?: number}} options 同步选项。
    * @returns {{sessions: Array<object>, openThreadIds: string[]}} 会话同步快照。
    */
   readKnownThreadSync(targets, offsets = new Map(), options = {}) {
@@ -623,9 +671,10 @@ class CodexSessionReader {
     const initialLineLimit = Math.max(1, Math.min(Number(options.initialLineLimit) || 800, 5000));
     const snapshotMessageLimit = Math.max(0, Math.min(Number(options.snapshotMessageLimit) || 0, 100));
     const syncByteLimit = Math.max(1024, Number(options.syncByteLimit) || 512 * 1024);
+    const maxTargets = Math.max(1, Number(options.maxTargets) || Number.MAX_SAFE_INTEGER);
     let syncedBytes = 0;
 
-    for (const target of targets || []) {
+    for (const target of (targets || []).slice(0, maxTargets)) {
       if (!target || !target.threadId || !target.file) continue;
       let stat = null;
       try {

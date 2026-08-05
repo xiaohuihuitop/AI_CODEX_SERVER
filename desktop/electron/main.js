@@ -15,15 +15,12 @@ const {
   getDefaultConfigPath,
   loadConfig,
   probeCloud,
-  probeCodexDebug,
   saveConfig,
 } = require('../src/desktop-manager-server');
-const { createDesktopAgentProcess } = require('../src/desktop-agent-process');
-const { restartCodexDesktopWithDebug } = require('../src/codex-desktop-process');
+const { appendLog, createDesktopAgentProcess } = require('../src/desktop-agent-process');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const CONFIG_PATH = getDefaultConfigPath();
-const CODEX_DEBUG_PORT = Number(process.env.CODEX_DEBUG_PORT || 9229);
 const MANAGER_VERSION = app.getVersion();
 const TRAY_ICON_PNG_BASE64 = 'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAAUUlEQVR4nGMQlFD/P5CYYdQBow4YdQA+SYu9P6iCh74D+Ja+JAsPTwcQA0YdQDcHDHgaGHXAqANGHTDg5QDdHICMiQHDpz1ADzzqgFEHjDoAAFZ6baw6ZLM1AAAAAElFTkSuQmCC';
 
@@ -49,6 +46,33 @@ const agentController = createAgentController();
 let config = loadConfig(CONFIG_PATH);
 let mainWindow = null;
 let tray = null;
+const managerLogs = [];
+let previousAppServerState = '';
+
+function appendManagerLog(message) {
+  const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  appendLog(managerLogs, `[${timestamp}] ${message}`);
+}
+
+function appServerStatus(agent) {
+  const lines = [...(agent.lastOutput || []), ...(agent.lastError || [])];
+  const latestError = [...lines].reverse().find(line => line.includes('App Server 不可用'));
+  const ready = [...lines].reverse().find(line => line.includes('App Server 已初始化'));
+  if (latestError && (!ready || lines.lastIndexOf(latestError) > lines.lastIndexOf(ready))) {
+    return { ok: false, message: latestError.replace(/^.*?App Server /, '') };
+  }
+  if (ready && agent.running) return { ok: true, message: '本机 stdio 会话服务已就绪' };
+  return { ok: false, message: agent.running ? '等待 App Server 初始化' : 'Agent 未运行' };
+}
+
+function recordAppServerState(appServer) {
+  const state = appServer.ok ? 'ready' : `unavailable:${appServer.message || ''}`;
+  if (state === previousAppServerState) return;
+  previousAppServerState = state;
+  appendManagerLog(appServer.ok
+    ? 'App Server 已就绪：通过本机 stdio 管理 Codex 会话'
+    : `App Server 未就绪：${appServer.message || '等待 Agent 初始化'}`);
+}
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -143,19 +167,22 @@ async function startAgentIfEnabled() {
  */
 async function getState() {
   const normalized = normalizeManagerConfig(config);
-  const [cloud, codex] = await Promise.all([probeCloud(normalized), probeCodexDebug()]);
+  const cloud = await probeCloud(normalized);
+  const agent = agentController.status();
+  const appServer = appServerStatus(agent);
+  recordAppServerState(appServer);
   return {
     ok: true,
     managerVersion: MANAGER_VERSION,
     config: normalized,
     mobileUrl: normalized.serverUrl && normalized.token ? buildMobileUrl(normalized) : '',
     agentEnv: buildAgentEnv(normalized),
-    agent: agentController.status(),
+    agent,
+    managerLogs: [...managerLogs],
     cloud,
-    codex,
+    appServer,
     ports: {
       cloud: serverPortFromUrl(normalized.serverUrl),
-      codexDebug: codex.port || CODEX_DEBUG_PORT,
     },
   };
 }
@@ -222,6 +249,7 @@ ipcMain.handle('manager:restart-agent', async () => {
 
 ipcMain.handle('manager:clear-logs', () => {
   agentController.clearLogs();
+  managerLogs.length = 0;
   return getState();
 });
 
@@ -231,11 +259,6 @@ ipcMain.handle('manager:open-mobile', async () => {
     throw new Error('请先填写云端服务器地址和固定 Token。');
   }
   await shell.openExternal(buildMobileUrl(normalized));
-  return getState();
-});
-
-ipcMain.handle('manager:restart-codex', async () => {
-  await restartCodexDesktopWithDebug();
   return getState();
 });
 

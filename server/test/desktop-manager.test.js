@@ -94,6 +94,12 @@ test('桌面管理器提供日志清除操作', () => {
   assert.match(agent, /对话同步准备：/);
   assert.match(agent, /同步请求已发送：/);
   assert.match(agent, /服务器已确认同步：/);
+  assert.match(agent, /App Server 已初始化：/);
+  assert.match(agent, /App Server 不可用：/);
+  assert.match(agent, /回合状态已更新：/);
+  assert.match(main, /function appServerStatus\(agent\)/);
+  assert.match(main, /App Server 未就绪：/);
+  assert.doesNotMatch(main, /restartCodexDesktopWithDebug/);
 });
 
 test('桌面管理器统一使用固定目录、固定名称并展示版本', () => {

@@ -304,6 +304,38 @@ test('发现本机全部会话时不依赖 Codex 当前打开的窗口', () => {
   assert.equal(targets.some(target => target.threadName === '测试线程'), true);
 });
 
+test('app-server 未归档列表仅映射同一 threadId 的本地 JSONL', () => {
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+
+  const targets = reader.discoverAppServerThreadSessions([
+    { id: 'ffffffff-aaaa-bbbb-cccc-dddddddddddd', name: 'app-server 标题', cwd: 'C:\\repo\\running', updatedAt: 1780910000 },
+    { id: '00000000-0000-0000-0000-000000000000', name: '不存在的会话' },
+  ]);
+
+  assert.deepEqual(targets.map(target => target.threadId), ['ffffffff-aaaa-bbbb-cccc-dddddddddddd']);
+  assert.equal(targets[0].threadName, 'app-server 标题');
+  assert.equal(targets[0].projectName, 'running');
+  assert.equal(targets[0].updatedAt, '2026-06-08T09:13:20.000Z');
+});
+
+test('Desktop 线程目录能映射 app-server 不可见的本地 JSONL', () => {
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+
+  const targets = reader.discoverDesktopThreadSessions([
+    { id: 'ffffffff-aaaa-bbbb-cccc-dddddddddddd', name: 'Desktop 状态标题', cwd: 'C:\\repo\\desktop', updatedAt: 1780910000 },
+  ]);
+
+  assert.deepEqual(targets.map(target => target.threadId), ['ffffffff-aaaa-bbbb-cccc-dddddddddddd']);
+  assert.equal(targets[0].threadName, '运行中线程');
+  assert.equal(targets[0].projectName, 'desktop');
+});
+
 test('首轮同步受字节预算限制时仍上传全部线程元数据', () => {
   const offsets = new Map();
   const reader = new CodexSessionReader({
@@ -324,6 +356,27 @@ test('首轮同步受字节预算限制时仍上传全部线程元数据', () =>
   assert.equal(sync.sessions.length, targets.length);
   assert.equal(sync.sessions.some(session => session.metadataOnly), true);
   assert.equal(offsets.size < targets.length, true);
+});
+
+test('分批同步只解析当前批次，避免长时间阻塞 Agent 心跳', () => {
+  const offsets = new Map();
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const targets = reader.discoverOpenThreadSessions([
+    { projectName: 'demo', threadName: '测试线程' },
+    { projectName: 'demo', threadName: '第二线程' },
+    { projectName: 'demo', threadName: '运行中线程' },
+  ]);
+  const sync = reader.readKnownThreadSync(targets, offsets, {
+    snapshotMessageLimit: 10,
+    maxTargets: 2,
+  });
+
+  assert.deepEqual(sync.openThreadIds, targets.slice(0, 2).map(target => target.threadId));
+  assert.equal(sync.sessions.length, 2);
+  assert.equal(offsets.size, 2);
 });
 
 test('紧凑会话快照在首轮同步时保留最近消息和当前状态', () => {
@@ -364,6 +417,18 @@ test('桌面已空闲时结束缺少 JSONL 终止事件的运行状态', () => {
   assert.equal(status.status, 'complete');
   assert.equal(status.completedAt, '2026-06-08T10:15:00.000Z');
   assert.equal(status.turns.at(-1).status, 'complete');
+});
+
+test('未知 app-server 运行态不会覆盖 Desktop JSONL 的运行状态', () => {
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const running = reader.parseStatus({ threadId: 'ffffffff-aaaa-bbbb-cccc-dddddddddddd' });
+  const status = applyDesktopRuntimeStatus(running, { state: 'unknown', observedAt: '2026-06-08T10:15:00.000Z' });
+
+  assert.equal(status.active, true);
+  assert.equal(status.status, 'running');
 });
 
 test('桌面仍在运行时覆盖 JSONL 中上一轮的完成状态', () => {

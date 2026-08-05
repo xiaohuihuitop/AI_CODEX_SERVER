@@ -1,109 +1,83 @@
-const { CodexSessionReader } = require('./codex-session-reader');
-const { WindowsCodexController } = require('./windows-codex-controller');
+const { createCodexAppServerClient } = require('./codex-app-server-client');
 
-function createHttpError(code, message, status) {
+function requestError(message, code, status) {
   return Object.assign(new Error(message), { code, status });
 }
 
 class DesktopAgentApi {
+  /**
+   * @param {{reader?: object, appServer?: object, listThreads?: Function, now?: Function}} options 本机会话与 app-server 依赖。
+   */
   constructor(options = {}) {
-    this.reader = options.reader || new CodexSessionReader();
-    this.controller = options.controller || new WindowsCodexController();
+    this.reader = options.reader || {};
+    this.appServer = options.appServer || createCodexAppServerClient();
+    this.listThreadsProvider = options.listThreads;
     this.now = options.now || (() => Date.now());
-    this.activeControlTasks = 0;
-    this.controlQueue = Promise.resolve();
+    this.busy = false;
+  }
+
+  isBusy() {
+    return this.busy;
   }
 
   async handle(action, payload = {}) {
-    if (action === 'threads') return this.threads();
-    if (action === 'history') return this.history(payload);
-    if (action === 'status') return this.status(payload);
-    if (action === 'send') return this.send(payload);
-    if (action === 'stop') return this.stop(payload);
-    throw createHttpError('ACTION_NOT_ALLOWED', '不支持的 Agent 动作。', 400);
+    if (this.busy) throw requestError('桌面 Agent 正在处理上一条控制命令。', 'AGENT_BUSY', 409);
+    this.busy = true;
+    try {
+      if (action === 'threads') return await this.listThreads();
+      if (action === 'send') return await this.send(payload);
+      if (action === 'stop') return await this.stop(payload);
+      throw requestError('不支持的 Agent 动作。', 'ACTION_NOT_ALLOWED', 400);
+    } finally {
+      this.busy = false;
+    }
   }
 
-  async threads() {
-    const openThreads = await this.controller.listOpenThreads();
-    const rows = this.reader.listOpenThreads(openThreads);
-    return Array.isArray(rows) ? { ok: true, threads: rows } : rows;
-  }
-
-  async history(payload) {
-    return this.reader.parseHistory(payload.threadId || payload.thread || '', payload.limit || 120);
-  }
-
-  async status(payload) {
-    return this.reader.parseStatus({
-      threadId: payload.threadId || payload.thread || '',
-      since: payload.since || '',
-    });
+  async listThreads() {
+    if (typeof this.listThreadsProvider !== 'function') {
+      throw requestError('桌面线程目录不可用。', 'THREAD_CATALOG_UNAVAILABLE', 503);
+    }
+    const result = await this.listThreadsProvider();
+    return {
+      ok: true,
+      threads: Array.isArray(result && result.threads) ? result.threads : [],
+      nextCursor: result && result.nextCursor || null,
+    };
   }
 
   async send(payload) {
-    const text = typeof payload.text === 'string' ? payload.text : '';
-    const threadId = typeof payload.threadId === 'string' ? payload.threadId : '';
-    if (!text.trim()) throw createHttpError('EMPTY_TEXT', '请输入文字。', 400);
-    if (!threadId) throw createHttpError('THREAD_ID_REQUIRED', '请选择 Codex 线程。', 400);
-    const target = this.reader.getThreadTarget(threadId);
-    if (!target.available || !target.projectName || !target.threadName) {
-      throw createHttpError('THREAD_TARGET_NOT_FOUND', '未找到 Codex Desktop 线程控制目标。', 404);
+    const threadId = String(payload.threadId || '').trim();
+    const text = String(payload.text || '').trim();
+    if (!threadId) throw requestError('缺少对话标识。', 'THREAD_ID_REQUIRED', 400);
+    if (!text) throw requestError('发送内容不能为空。', 'EMPTY_TEXT', 400);
+
+    try {
+      await this.appServer.resumeThread(threadId);
+    } catch (error) {
+      throw requestError(`无法恢复目标对话：${error.message}`, 'THREAD_RESUME_FAILED', 409);
     }
-    const since = new Date(this.now() - 750).toISOString();
-    await this.runControlTask(() => this.controller.sendToThread(target, text));
+    const started = await this.appServer.startTurn(threadId, text);
+    const turnId = String(started && started.turn && started.turn.id || '').trim();
     return {
       ok: true,
-      sentAt: new Date(this.now()).toISOString(),
-      watch: { since, threadId },
+      watch: { threadId, turnId, since: new Date(this.now()).toISOString() },
     };
   }
 
   async stop(payload) {
-    const threadId = typeof payload.threadId === 'string' ? payload.threadId : '';
-    if (!threadId) throw createHttpError('THREAD_ID_REQUIRED', '请选择 Codex 线程。', 400);
-    const target = this.reader.getThreadTarget(threadId);
-    if (!target.available || !target.projectName || !target.threadName) {
-      throw createHttpError('THREAD_TARGET_NOT_FOUND', '未找到 Codex Desktop 线程控制目标。', 404);
-    }
-    await this.runControlTask(() => this.controller.stopResponse(target));
-    return { ok: true, message: '已向 Codex Desktop 发送停止指令。' };
-  }
-
-  /**
-   * AI:判断 Agent 是否正在控制 Codex Desktop，避免同步任务抢占 UI 控制。
-   *
-   * @returns {boolean} 是否存在控制任务。
-   */
-  isBusy() {
-    return this.activeControlTasks > 0;
-  }
-
-  /**
-   * AI:执行会触碰 Codex Desktop UI 的控制任务。
-   *
-   * @param {Function} task 控制任务。
-   * @returns {Promise<*>} 控制任务结果。
-   */
-  async runControlTask(task) {
-    const run = async () => {
-      this.activeControlTasks += 1;
-      try {
-        return await task();
-      } finally {
-        this.activeControlTasks -= 1;
-      }
-    };
-    const queued = this.controlQueue.then(run, run);
-    this.controlQueue = queued.catch(() => undefined);
-    return queued;
+    const threadId = String(payload.threadId || '').trim();
+    if (!threadId) throw requestError('缺少对话标识。', 'THREAD_ID_REQUIRED', 400);
+    await this.appServer.interruptTurn(threadId);
+    return { ok: true, threadId };
   }
 }
 
-function createDesktopAgentApi(options) {
+function createDesktopAgentApi(options = {}) {
   return new DesktopAgentApi(options);
 }
 
 module.exports = {
   DesktopAgentApi,
   createDesktopAgentApi,
+  requestError,
 };

@@ -310,22 +310,16 @@ test('withTimeout 超时后返回明确错误码', async () => {
 test('desktop-agent API 控制 Codex 时暴露 busy 状态', async () => {
   let releaseControl;
   const api = new DesktopAgentApi({
-    reader: {
-      getThreadTarget: () => ({
-        available: true,
-        projectName: 'demo',
-        threadName: '测试线程',
-      }),
-    },
-    controller: {
-      sendToThread: async () => new Promise(resolve => {
+    appServer: {
+      resumeThread: async () => new Promise(resolve => {
         releaseControl = resolve;
       }),
+      startTurn: async () => ({ turn: { id: 'turn-1' } }),
     },
     now: () => Date.parse('2026-06-08T00:00:00.000Z'),
   });
 
-  const sending = api.send({ threadId: 'thread-1', text: '你好' });
+  const sending = api.handle('send', { threadId: 'thread-1', text: '你好' });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(api.isBusy(), true);
   releaseControl();

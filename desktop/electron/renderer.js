@@ -13,7 +13,6 @@ const elements = {
   configForm: document.getElementById('configForm'),
   restartAgentButton: document.getElementById('restartAgentButton'),
   stopButton: document.getElementById('stopButton'),
-  restartCodexButton: document.getElementById('restartCodexButton'),
   refreshButton: document.getElementById('refreshButton'),
   openMobileButton: document.getElementById('openMobileButton'),
   copyMobileButton: document.getElementById('copyMobileButton'),
@@ -49,7 +48,6 @@ function setBusy(value) {
   [
     elements.restartAgentButton,
     elements.stopButton,
-    elements.restartCodexButton,
     elements.refreshButton,
     elements.openMobileButton,
     elements.copyMobileButton,
@@ -93,13 +91,11 @@ function renderState(nextState, options = {}) {
   elements.agentStatus.textContent = !configured ? '配置不完整' : featureStarted ? '已启动' : '已停止';
   elements.agentDetail.textContent = nextState.agent.pid ? `同步服务 PID ${nextState.agent.pid}` : '手机端暂时不能控制这台电脑';
 
-  setCard(elements.codexCard, nextState.codex.ok);
+  setCard(elements.codexCard, nextState.appServer.ok);
   const cloudPort = nextState.ports.cloud || '未配置';
-  elements.codexStatus.textContent = nextState.codex.ok ? '可用' : '需重启 Codex 生效 CDP';
-  elements.codexDetail.textContent = nextState.codex.ok
-    ? `CDP 端口 ${nextState.ports.codexDebug}`
-    : (nextState.codex.message || `点击“重启 Codex 生效 CDP”，端口 ${nextState.ports.codexDebug}`);
-  elements.portStatus.textContent = `云端 ${cloudPort} / CDP ${nextState.ports.codexDebug}`;
+  elements.codexStatus.textContent = nextState.appServer.ok ? '已连接' : '未就绪';
+  elements.codexDetail.textContent = nextState.appServer.message || '等待 Agent 初始化 App Server';
+  elements.portStatus.textContent = `云端 ${cloudPort} / App Server stdio`;
 
   elements.mobileUrl.textContent = nextState.mobileUrl || '请先填写云端服务器地址和固定 Token。';
   elements.agentEnv.textContent = [
@@ -108,7 +104,11 @@ function renderState(nextState, options = {}) {
     `CODEX_DEVICE_NAME=${nextState.agentEnv.CODEX_DEVICE_NAME || ''}`,
   ].join('\n');
 
-  const logs = [...(nextState.agent.lastOutput || []), ...(nextState.agent.lastError || [])].slice(-499);
+  const logs = [
+    ...(nextState.managerLogs || []),
+    ...(nextState.agent.lastOutput || []),
+    ...(nextState.agent.lastError || []),
+  ].slice(-500);
   elements.agentLog.textContent = [`管理器版本：v${managerVersion}`, ...logs].join('\n');
   elements.lastUpdated.textContent = `最后刷新 ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`;
 }
@@ -150,10 +150,6 @@ elements.restartAgentButton.addEventListener('click', () => {
 
 elements.stopButton.addEventListener('click', () => {
   runAction(() => window.codexManager.pauseFeature());
-});
-
-elements.restartCodexButton.addEventListener('click', () => {
-  runAction(() => window.codexManager.restartCodex());
 });
 
 elements.refreshButton.addEventListener('click', refresh);

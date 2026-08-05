@@ -4,6 +4,7 @@ const DEFAULT_DEBUG_PORT = 9229;
 const DEFAULT_WAIT_TIMEOUT_MS = 15000;
 const CODEX_PACKAGE_NAME = 'OpenAI.Codex';
 const CODEX_APP_ID = 'App';
+const CODEX_GUI_EXECUTABLE = 'ChatGPT.exe';
 
 function quotePowerShellString(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
@@ -45,7 +46,7 @@ function findCodexDesktopProcess() {
   if (process.platform !== 'win32') return null;
   const script = [
     'Get-CimInstance Win32_Process |',
-    "Where-Object { $_.Name -eq 'Codex.exe' -and $_.ExecutablePath -and $_.ExecutablePath.EndsWith('\\app\\Codex.exe') -and $_.CommandLine -notmatch '--type=' } |",
+    `Where-Object { $_.Name -eq '${CODEX_GUI_EXECUTABLE}' -and $_.ExecutablePath -and $_.ExecutablePath.EndsWith('\\app\\${CODEX_GUI_EXECUTABLE}') -and $_.CommandLine -notmatch '--type=' } |`,
     'Sort-Object ProcessId |',
     'Select-Object -First 1 ProcessId,ExecutablePath,CommandLine |',
     'ConvertTo-Json -Compress',
@@ -75,7 +76,7 @@ function findCodexDesktopPackage() {
   const script = [
     `$pkg = Get-AppxPackage -Name ${quotePowerShellString(CODEX_PACKAGE_NAME)} -ErrorAction SilentlyContinue | Sort-Object Version -Descending | Select-Object -First 1;`,
     'if ($null -eq $pkg) { return; }',
-    '$exe = Join-Path $pkg.InstallLocation ' + quotePowerShellString('app\\Codex.exe') + ';',
+    '$exe = Join-Path $pkg.InstallLocation ' + quotePowerShellString(`app\\${CODEX_GUI_EXECUTABLE}`) + ';',
     '[pscustomobject]@{',
     'AppUserModelId = "$($pkg.PackageFamilyName)!' + CODEX_APP_ID + '";',
     'PackageFamilyName = $pkg.PackageFamilyName;',
@@ -109,7 +110,7 @@ function stopCodexDesktopProcesses() {
   if (process.platform !== 'win32') return;
   const script = [
     'Get-CimInstance Win32_Process |',
-    "Where-Object { $_.Name -eq 'Codex.exe' -and $_.ExecutablePath -and $_.ExecutablePath.EndsWith('\\app\\Codex.exe') } |",
+    `Where-Object { $_.Name -eq '${CODEX_GUI_EXECUTABLE}' -and $_.ExecutablePath -and $_.ExecutablePath.EndsWith('\\app\\${CODEX_GUI_EXECUTABLE}') -and $_.CommandLine -notmatch '--type=' } |`,
     'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }',
   ].join(' ');
   runPowerShell(script);
@@ -217,9 +218,32 @@ async function waitForCodexDesktopDebug(options = {}) {
 }
 
 /**
+ * 等待指定 Codex Desktop 主进程退出，确保下一次激活不会复用旧单实例。
+ *
+ * @param {{pid: number, processFinder?: Function, timeoutMs?: number, intervalMs?: number}} options 等待选项。
+ * @returns {Promise<void>} 旧进程退出后完成。
+ */
+async function waitForCodexDesktopProcessStop(options = {}) {
+  const pid = Number(options.pid || 0);
+  const processFinder = options.processFinder || findCodexDesktopProcess;
+  const timeoutMs = options.timeoutMs || DEFAULT_WAIT_TIMEOUT_MS;
+  const intervalMs = options.intervalMs || 250;
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const current = processFinder();
+    if (!current || Number(current.pid) !== pid) return;
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  throw Object.assign(new Error(`Codex Desktop 进程 ${pid} 未能在 ${timeoutMs}ms 内退出。`), {
+    code: 'CODEX_PROCESS_STOP_TIMEOUT',
+    status: 503,
+  });
+}
+
+/**
  * 重启 Codex Desktop 并开放 CDP 调试端口。
  *
- * @param {{debugPort?: number, waitTimeoutMs?: number, processFinder?: Function, packageFinder?: Function, processKiller?: Function, launcher?: Function}} options 重启选项。
+ * @param {{debugPort?: number, waitTimeoutMs?: number, processFinder?: Function, packageFinder?: Function, processKiller?: Function, launcher?: Function, debugWaiter?: Function, processStopWaiter?: Function}} options 重启选项。
  * @returns {Promise<{ok: boolean, appUserModelId: string, executablePath: string, previousPid: number|null, launchedPid: number|null, debugPort: number, codex: object}>} 重启结果。
  */
 async function restartCodexDesktopWithDebug(options = {}) {
@@ -232,6 +256,8 @@ async function restartCodexDesktopWithDebug(options = {}) {
   const packageFinder = options.packageFinder || findCodexDesktopPackage;
   const processKiller = options.processKiller || (() => stopCodexDesktopProcesses());
   const launcher = options.launcher || ((launchTarget, args) => activateCodexDesktopApplication(launchTarget.appUserModelId, args));
+  const debugWaiter = options.debugWaiter || waitForCodexDesktopDebug;
+  const processStopWaiter = options.processStopWaiter || waitForCodexDesktopProcessStop;
 
   const current = processFinder();
   const appPackage = packageFinder();
@@ -241,7 +267,11 @@ async function restartCodexDesktopWithDebug(options = {}) {
 
   if (current?.pid) {
     processKiller(current.pid);
-    await new Promise(resolve => setTimeout(resolve, 2500));
+    await processStopWaiter({
+      pid: current.pid,
+      processFinder,
+      timeoutMs: options.waitTimeoutMs || DEFAULT_WAIT_TIMEOUT_MS,
+    });
   }
   const args = [
     `--remote-debugging-port=${debugPort}`,
@@ -249,7 +279,14 @@ async function restartCodexDesktopWithDebug(options = {}) {
     `--remote-allow-origins=http://127.0.0.1:${debugPort}`,
   ];
   const launchResult = launcher(appPackage, args) || {};
-  const codex = await waitForCodexDesktopDebug({ port: debugPort, timeoutMs: options.waitTimeoutMs || DEFAULT_WAIT_TIMEOUT_MS });
+  const codex = await debugWaiter({ port: debugPort, timeoutMs: options.waitTimeoutMs || DEFAULT_WAIT_TIMEOUT_MS });
+  if (!codex.ok) {
+    throw Object.assign(new Error(`Codex 已重启，但 CDP 未在端口 ${debugPort} 就绪：${codex.message || '未发现可控制窗口。'}`), {
+      code: 'CODEX_DEBUG_NOT_READY',
+      status: 503,
+      codex,
+    });
+  }
   return {
     ok: codex.ok,
     appUserModelId: appPackage.appUserModelId,
@@ -269,5 +306,6 @@ module.exports = {
   probeCodexDesktopDebug,
   restartCodexDesktopWithDebug,
   stopCodexDesktopProcesses,
+  waitForCodexDesktopProcessStop,
   waitForCodexDesktopDebug,
 };
