@@ -105,3 +105,24 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 5: 固化 App Server 控制面并验证跨端收发
+
+**Date**: 2026-08-09
+**Task**: 固化 App Server 控制面并验证跨端收发
+**Branch**: `master`
+
+### Summary
+
+移除正式 CDP 路径，修复跨端历史、状态与发送确认，加入构建门禁并完成 Web 同线程端到端验证。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `8acba93` | (see git log) |
+
+### Status
+
+[OK] **Completed**
