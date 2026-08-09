@@ -126,3 +126,40 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 6: 完成跨端同步与缓存生命周期审计
+
+**Date**: 2026-08-09
+**Task**: 完成跨端同步与缓存生命周期审计
+**Branch**: `master`
+
+### Summary
+
+修复归档缓存物理清理、精确回合确认和实时同步，完成 Web 真实收发及 Windows 管理器构建验证。
+
+### Main Changes
+
+- 归档线程在权威目录同步内物理删除，迟到增量不得复活
+- 手机发送按精确 turnId 持续同步到同一回合完成
+- 删除 CDP 旧入口并固化 App Server 单一控制平面
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4a09905` | (see git log) |
+
+### Testing
+
+- [OK] 服务端测试 159/159，静态检查和差异检查通过
+- [OK] codex_temp Web 真实收发、分页和自动回显通过
+- [OK] 管理器 v0.2.3 构建和 app.asar 校验通过
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- 推送 build-v2.18 触发离线 Docker 镜像构建
