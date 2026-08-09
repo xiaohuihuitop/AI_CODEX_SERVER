@@ -288,6 +288,10 @@ test('云端 relay 从服务器缓存返回历史和状态', async () => {
   }));
   await new Promise(resolve => setTimeout(resolve, 20));
 
+  const agentClosed = new Promise(resolve => agent.once('close', resolve));
+  agent.close();
+  await agentClosed;
+
   const historyRes = await fetch(`http://127.0.0.1:${port}/codex/history?token=cache-token&thread=thread-1`);
   const statusRes = await fetch(`http://127.0.0.1:${port}/codex/status?token=cache-token&thread=thread-1`);
   const history = await readJson(historyRes);
@@ -296,15 +300,100 @@ test('云端 relay 从服务器缓存返回历史和状态', async () => {
   assert.equal(historyRes.status, 200);
   assert.equal(statusRes.status, 200);
   assert.equal(history.cached, true);
-  assert.equal(history.agentOnline, true);
+  assert.equal(history.agentOnline, false);
   assert.deepEqual(history.messages.map(row => ({ role: row.role, text: row.text })), [
     { role: 'user', text: '你好' },
     { role: 'assistant', text: '完成' },
   ]);
   assert.equal(status.cached, true);
-  assert.equal(status.agentOnline, true);
+  assert.equal(status.agentOnline, false);
   assert.equal(status.status, 'complete');
   assert.equal(status.turns[0].steps[0].text, '我在处理');
+
+  agent.close();
+  await closeRelayServer(server);
+});
+
+test('云端 relay 在 Agent 在线时直接读取本机历史页，避免截断缓存遗漏消息', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['history-direct-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+  });
+  const port = await listen(server);
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=history-direct-token`);
+  await new Promise(resolve => agent.once('open', resolve));
+  agent.on('message', data => {
+    const message = JSON.parse(data.toString());
+    if (message.action !== 'history') return;
+    assert.deepEqual(message.payload, { threadId: 'thread-1', limit: '10', before: '20' });
+    agent.send(JSON.stringify({
+      id: message.id,
+      ok: true,
+      result: {
+        ok: true,
+        available: true,
+        threadId: 'thread-1',
+        sessionFile: 'thread-1.jsonl',
+        messages: [{ role: 'user', text: '来自本机的更早消息', turnId: 'turn-1' }],
+        hasMore: true,
+        nextBefore: '10',
+      },
+    }));
+  });
+
+  const res = await fetch(`http://127.0.0.1:${port}/codex/history?token=history-direct-token&thread=thread-1&limit=10&before=20`);
+  const body = await readJson(res);
+
+  assert.equal(res.status, 200);
+  assert.equal(body.cached, false);
+  assert.equal(body.available, true);
+  assert.deepEqual(body.messages.map(item => item.text), ['来自本机的更早消息']);
+  assert.equal(body.nextBefore, '10');
+
+  await closeRelayServer(server);
+});
+
+test('云端 relay 在 Agent 在线时直接读取本机状态，避免快照缓存返回旧完成态', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['status-direct-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+  });
+  const port = await listen(server);
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=status-direct-token`);
+  await new Promise(resolve => agent.once('open', resolve));
+  agent.on('message', data => {
+    const message = JSON.parse(data.toString());
+    if (message.action !== 'status') return;
+    assert.deepEqual(message.payload, { threadId: 'thread-1', since: '2026-08-05T00:00:00.000Z' });
+    agent.send(JSON.stringify({
+      id: message.id,
+      ok: true,
+      result: {
+        ok: true,
+        available: true,
+        threadId: 'thread-1',
+        sessionFile: 'thread-1.jsonl',
+        active: true,
+        status: 'running',
+        preview: '正在处理',
+        final: '',
+        steps: [{ kind: 'reasoning', text: '本机正在处理' }],
+        turns: [{ turnId: 'turn-2', status: 'running', steps: [] }],
+      },
+    }));
+  });
+
+  const res = await fetch(`http://127.0.0.1:${port}/codex/status?token=status-direct-token&thread=thread-1&since=2026-08-05T00%3A00%3A00.000Z`);
+  const body = await readJson(res);
+
+  assert.equal(res.status, 200);
+  assert.equal(body.cached, false);
+  assert.equal(body.agentOnline, true);
+  assert.equal(body.status, 'running');
+  assert.equal(body.active, true);
+  assert.equal(body.steps[0].text, '本机正在处理');
 
   agent.close();
   await closeRelayServer(server);
@@ -359,6 +448,49 @@ test('云端缓存保存紧凑快照并按页面返回历史', () => {
   assert.deepEqual(older.messages.map(row => row.text), ['消息 5', '消息 6', '消息 7', '消息 8']);
   assert.equal(cache.status('snapshot-token', 'thread-snapshot').status, 'complete');
   assert.equal(cache.status('snapshot-token', 'thread-snapshot', '2026-07-29T12:00:00.000Z').status, 'complete');
+});
+
+test('云端缓存接收较短的新快照时保留已缓存的更早历史', () => {
+  const cache = createCloudSessionCache();
+  const messages = Array.from({ length: 8 }, (_, index) => ({
+    role: index % 2 ? 'assistant' : 'user',
+    text: `消息 ${index + 1}`,
+    timestamp: `2026-08-05T00:00:0${index}.000Z`,
+    turnId: `turn-${Math.floor(index / 2) + 1}`,
+  }));
+  cache.applySync('merge-snapshot-token', {
+    openThreadIds: ['thread-snapshot'],
+    sessions: [{
+      threadId: 'thread-snapshot',
+      threadName: '完整快照线程',
+      snapshot: {
+        messages,
+        status: { active: false, status: 'complete', preview: '完成', final: '消息 8', steps: [], turns: [] },
+      },
+    }],
+  });
+  cache.applySync('merge-snapshot-token', {
+    openThreadIds: ['thread-snapshot'],
+    sessions: [{
+      threadId: 'thread-snapshot',
+      threadName: '完整快照线程',
+      snapshot: {
+        messages: messages.slice(-3).concat([{
+          role: 'user',
+          text: '消息 9',
+          timestamp: '2026-08-05T00:00:09.000Z',
+          turnId: 'turn-5',
+        }]),
+        status: { active: true, status: 'running', preview: '处理中', final: '', steps: [], turns: [] },
+      },
+    }],
+  });
+
+  const history = cache.history('merge-snapshot-token', 'thread-snapshot', 20);
+  assert.deepEqual(history.messages.map(item => item.text), [
+    '消息 1', '消息 2', '消息 3', '消息 4', '消息 5', '消息 6', '消息 7', '消息 8', '消息 9',
+  ]);
+  assert.equal(cache.status('merge-snapshot-token', 'thread-snapshot').status, 'running');
 });
 
 test('云端缓存支持渲染为用户消息、处理过程、最终回复顺序', () => {

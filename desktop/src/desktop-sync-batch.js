@@ -25,6 +25,22 @@ function selectSyncBatch(targets, cursor, batchSize, priorityThreadId = '') {
   return { targets: batch, nextCursor: (start + batch.length) % length, prioritized: false };
 }
 
+/**
+ * AI:判断手机控制目标是否已经同步到新的 JSONL 行或完整快照。
+ *
+ * @param {Array<object>} sessions 本轮待上传会话。
+ * @param {string} threadId 需要确认的目标线程。
+ * @returns {boolean} 已取得同步证据时返回 true。
+ */
+function hasControlSyncEvidence(sessions, threadId) {
+  const id = String(threadId || '').trim();
+  return Boolean(id && (sessions || []).some(session => session && session.threadId === id && (
+    Boolean(session.snapshot)
+    || (Array.isArray(session.lines) && session.lines.length > 0)
+  )));
+}
+
 module.exports = {
+  hasControlSyncEvidence,
   selectSyncBatch,
 };

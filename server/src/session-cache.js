@@ -92,6 +92,84 @@ function normalizeSnapshot(snapshot) {
   return { messages, status };
 }
 
+/**
+ * AI:生成快照消息的稳定身份，优先使用 JSONL 固有的时间、回合和正文。
+ *
+ * @param {object} message 消息对象。
+ * @returns {string} 稳定身份。
+ */
+function snapshotMessageKey(message) {
+  return [
+    message && message.role || '',
+    message && message.turnId || '',
+    message && message.timestamp || '',
+    message && message.text || '',
+  ].join('\u0000');
+}
+
+/**
+ * AI:查找完整序列在另一序列中的起点，处理后续较长快照覆盖先前短快照的情况。
+ *
+ * @param {string[]} source 被查询序列。
+ * @param {string[]} target 待查找序列。
+ * @returns {number} 起点，未找到返回 -1。
+ */
+function findSnapshotSequence(source, target) {
+  if (!target.length) return 0;
+  if (target.length > source.length) return -1;
+  for (let start = 0; start <= source.length - target.length; start += 1) {
+    let matched = true;
+    for (let index = 0; index < target.length; index += 1) {
+      if (source[start + index] !== target[index]) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) return start;
+  }
+  return -1;
+}
+
+/**
+ * AI:合并 JSONL 的尾部快照，绝不因较短快照删除已缓存的更早消息。
+ *
+ * @param {Array<object>} existing 已缓存消息。
+ * @param {Array<object>} incoming 本次快照消息。
+ * @returns {Array<object>} 时间顺序稳定的完整消息序列。
+ */
+function mergeSnapshotMessages(existing, incoming) {
+  const previous = Array.isArray(existing) ? existing : [];
+  const next = Array.isArray(incoming) ? incoming : [];
+  if (!previous.length) return next;
+  if (!next.length) return previous;
+
+  const previousKeys = previous.map(snapshotMessageKey);
+  const nextKeys = next.map(snapshotMessageKey);
+  if (findSnapshotSequence(nextKeys, previousKeys) !== -1) return next;
+  if (findSnapshotSequence(previousKeys, nextKeys) !== -1) return previous;
+
+  let overlap = 0;
+  const maxOverlap = Math.min(previousKeys.length, nextKeys.length);
+  for (let size = maxOverlap; size > 0; size -= 1) {
+    const previousTail = previousKeys.slice(previousKeys.length - size);
+    const nextHead = nextKeys.slice(0, size);
+    if (previousTail.every((key, index) => key === nextHead[index])) {
+      overlap = size;
+      break;
+    }
+  }
+  if (overlap) return previous.concat(next.slice(overlap));
+
+  const seen = new Set(previousKeys);
+  const additions = next.filter(message => {
+    const key = snapshotMessageKey(message);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return previous.concat(additions);
+}
+
 class CloudSessionCache {
   /**
    * AI:创建云端会话缓存。
@@ -167,7 +245,10 @@ class CloudSessionCache {
         continue;
       }
       if (row.snapshot) {
-        const parsed = normalizeSnapshot(row.snapshot);
+        const snapshot = normalizeSnapshot(row.snapshot);
+        const parsed = Object.assign({}, snapshot, {
+          messages: mergeSnapshotMessages(existing.parsed && existing.parsed.messages, snapshot.messages),
+        });
         bucket.sessions.set(threadId, {
           threadId,
           name: row.threadName || row.name || existing.name || threadId,

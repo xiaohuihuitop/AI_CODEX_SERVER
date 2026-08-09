@@ -801,12 +801,21 @@ class CodexSessionReader {
    *
    * @param {string} threadId Codex 线程 ID。
    * @param {number|string} limit 最大消息数量。
-   * @returns {{ok: boolean, available: boolean, threadId: string, sessionFile: string, messages: Array<object>}} 历史结果。
+   * @param {number|string} before 从消息总数倒序分页时的结束游标。
+   * @returns {{ok: boolean, available: boolean, threadId: string, sessionFile: string, messages: Array<object>, hasMore: boolean, nextBefore: string}} 历史结果。
    */
-  parseHistory(threadId, limit = 120) {
+  parseHistory(threadId, limit = 120, before = '') {
     const file = this.findFileByThreadId(threadId);
     if (!file) {
-      return { ok: true, available: false, threadId, sessionFile: '', messages: [] };
+      return {
+        ok: true,
+        available: false,
+        threadId,
+        sessionFile: '',
+        messages: [],
+        hasMore: false,
+        nextBefore: '',
+      };
     }
     const messages = [];
     let currentTurnId = '';
@@ -834,12 +843,21 @@ class CodexSessionReader {
         }
       }
     }
+    const max = Math.max(1, Math.min(Number(limit) || 120, 200));
+    const beforeText = String(before || '').trim();
+    const requestedBefore = Number(beforeText);
+    const end = beforeText && Number.isInteger(requestedBefore) && requestedBefore >= 0 && requestedBefore <= messages.length
+      ? requestedBefore
+      : messages.length;
+    const start = Math.max(0, end - max);
     return {
       ok: true,
       available: true,
       threadId,
       sessionFile: path.basename(file),
-      messages: messages.slice(-Math.max(1, Math.min(Number(limit) || 120, 200))),
+      messages: messages.slice(start, end),
+      hasMore: start > 0,
+      nextBefore: start > 0 ? String(start) : '',
     };
   }
 

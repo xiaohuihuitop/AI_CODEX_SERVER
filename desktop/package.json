@@ -1,23 +1,24 @@
 {
   "name": "codex-desktop-client",
-  "version": "0.2.0",
+  "version": "0.2.3",
   "private": true,
   "type": "commonjs",
   "description": "Windows desktop client and agent for Codex bridge",
   "author": "codex-bridge contributors",
   "main": "electron/main.js",
   "scripts": {
-    "start": "node server.js",
+    "start": "node desktop-agent.js",
     "start:agent": "node desktop-agent.js",
     "start:manager": "node desktop-manager-server.js",
     "start:manager:gui": "electron electron/main.js",
     "start:manager:gui:legacy": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-desktop-manager-gui.ps1",
-    "build:manager:win": "electron-builder --win dir"
+    "build:manager:win": "electron-builder --win dir && node scripts/verify-manager-artifact.js"
   },
   "dependencies": {
     "ws": "^8.21.0"
   },
   "devDependencies": {
+    "@electron/asar": "^3.4.1",
     "electron": "42.3.3",
     "electron-builder": "^26.15.2"
   },
@@ -35,12 +36,8 @@
       "electron/**/*",
       "src/**/*",
       "desktop-agent.js",
-      "scripts/win-codex-control.ps1",
       "package.json",
       "node_modules/**/*"
-    ],
-    "asarUnpack": [
-      "scripts/*.ps1"
     ],
     "win": {
       "target": [

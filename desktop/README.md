@@ -2,21 +2,19 @@
 
 ## 定位
 
-`desktop` 是 Windows 电脑端，包含三个入口：
+`desktop` 是 Windows 电脑端，包含两个正式入口：
 
 - Electron 图形管理器：给普通用户配置和管理同步功能。
 - Windows Agent：连接云端 relay，同步 Codex Desktop 当前打开对话。
-- 本机网页服务：用于局域网调试或不经过云端的本机模式。
 
 ## 目录结构
 
 ```text
-desktop/
+  desktop/
   desktop-agent.js              Windows Agent 入口
   desktop-manager-server.js     旧版本地 Web 管理入口
-  server.js                     本机局域网网页服务入口
   electron/                     Electron 图形管理器
-  scripts/                      PowerShell CDP 诊断脚本
+  scripts/                      仅保留开发期管理器辅助脚本
   src/                          业务模块
   public/                       本机网页端静态文件
   package.json
@@ -28,7 +26,7 @@ desktop/
 - Node.js 20 或更高版本。
 - 已安装 Codex Desktop。
 - 正常发送和停止由 Codex Desktop 内置 `codex.exe app-server` 完成。Windows Agent 会自动从 `%LOCALAPPDATA%\OpenAI\Codex\bin` 选择最新安装版本，不能依赖 PATH 中的全局 CLI。
-- `127.0.0.1:9229` 的 CDP 仅用于诊断或旧脚本，不是同步和发送的前置条件。
+- CDP 不是本项目的产品能力，也不是同步和发送的前置条件。Windows 管理器不会为了调试端口关闭、重启或控制 Codex Desktop。
 
 ## 安装依赖
 
@@ -50,7 +48,7 @@ npm run start:manager:gui
 - 配置设备名。
 - 启动功能：启动或重连 Windows Agent。
 - 停止功能：停止 Agent 并关闭自动启动。
-- 重启 Codex 生效 CDP：仅为诊断或旧脚本重启 Codex Desktop 并附加本机 CDP 参数。
+- 会话服务：显示本机 App Server 是否已就绪，以及当前使用的内置 Codex 运行时版本。
 - 最小化到系统托盘，托盘菜单可恢复窗口或退出管理器。
 
 示例配置：
@@ -96,21 +94,8 @@ npm run start:agent
 $env:CODEX_AGENT_SYNC_INTERVAL_MS="2000"
 $env:CODEX_AGENT_DISCOVERY_INTERVAL_MS="10000"
 $env:CODEX_AGENT_INITIAL_SYNC_LINES="1000"
+$env:CODEX_AGENT_CONTROL_SYNC_TIMEOUT_MS="30000"
 ```
-
-## 本机局域网网页服务
-
-```powershell
-npm start
-```
-
-默认监听：
-
-```text
-0.0.0.0:8787
-```
-
-启动日志会输出本机和局域网访问地址。局域网模式主要用于调试，云端部署建议使用 `server`。
 
 ## 旧版 Web 管理入口
 
@@ -120,17 +105,7 @@ npm run start:manager
 
 该入口用于调试或兼容旧流程，正式使用推荐 Electron 图形管理器。
 
-## CDP 诊断
-
-控制脚本位于：
-
-```text
-desktop/scripts/win-codex-control.ps1
-```
-
-它通过 Codex Desktop 的本机 CDP 端口执行旧版窗口读取和输入诊断。正式 Windows Agent 使用内置 `codex.exe app-server` 的 JSON-RPC stdio 控制目标线程，不依赖 CDP。
-
-如果管理器显示 App Server 未就绪，先检查日志中的 `App Server 启动` 行：它必须指向 `%LOCALAPPDATA%\OpenAI\Codex\bin\<版本>\codex.exe`，而不是 npm 全局安装目录。
+如果管理器显示 App Server 未就绪，先检查日志中的 `App Server 启动` 行：它必须指向 `%LOCALAPPDATA%\OpenAI\Codex\bin\<版本>\codex.exe`，而不是 npm 全局安装目录。排查手机/Web 展示异常时，应检查会话目录、JSONL 同步和 relay 状态，不能切换到 CDP 控制。
 
 ## 配置保存位置
 
@@ -152,8 +127,4 @@ npm test
 npm run check
 ```
 
-PowerShell 控制脚本语法检查：
-
-```powershell
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$null = [scriptblock]::Create((Get-Content -LiteralPath '..\desktop\scripts\win-codex-control.ps1' -Raw)); 'ok'"
-```
+`npm run build:manager:win` 在 Electron 打包后会自动检查 `app.asar`，构建产物包含 CDP 控制代码、CDP 重启入口或旧控制脚本时会直接失败。

@@ -21,9 +21,9 @@ function listJs(dir) {
 
 const files = [
   path.join(serverRoot, 'cloud-server.js'),
-  path.join(desktopRoot, 'server.js'),
   path.join(desktopRoot, 'desktop-agent.js'),
   path.join(desktopRoot, 'desktop-manager-server.js'),
+  path.join(desktopRoot, 'scripts', 'verify-manager-artifact.js'),
   ...listJs(path.join(serverRoot, 'src')),
   ...listJs(path.join(desktopRoot, 'src')),
   ...listJs(path.join(desktopRoot, 'electron')),

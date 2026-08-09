@@ -340,3 +340,32 @@ state correctly, but several commands still re-parsed event payload fields with
 local casts. The fix was to make the core event layer own `ThreadChannelEvent`
 and `isThreadEvent`, make `reduceChannelMetadata` the only channel metadata
 projection, and make `reduceThreads` the only thread replay reducer.
+
+---
+
+## 项目约束：Codex Desktop App Server 控制链路
+
+正式的发送、停止和运行状态只走 Codex Desktop 内置 `codex.exe app-server` 的 JSON-RPC
+stdio；CDP 不是产品链路的一部分，仓库和打包产物均不得保留 CDP 控制、重启或 UI 自动化入口：
+
+```text
+manager-config
+  -> CODEX_CLOUD_URL / CODEX_DEVICE_TOKEN / CODEX_DEVICE_NAME
+  -> desktop-agent
+  -> %LOCALAPPDATA%\OpenAI\Codex\bin\<版本>\codex.exe app-server
+  -> resumeThread / startTurn / interruptTurn
+  -> 本地 Codex JSONL 与云端 relay
+```
+
+- Windows 商店版 Codex 的 AUMID 激活不会稳定传递 Chromium CDP 参数；正式代码不得为了
+  CDP 关闭、重启或结束 Codex Desktop 进程，也不得通过 CDP 推断线程、消息或运行状态。
+- 管理器只展示 App Server 状态和其使用的内置 Codex 版本。旧配置中的 `debugPort` 必须忽略，
+  不得再出现在 Agent 环境变量或正式管理界面。
+- 发消息前必须先 `resumeThread`，再 `startTurn`，并要求返回有效 `turn.id`；停止使用
+  `interruptTurn`。失败必须向 relay 返回真实错误，不能伪造已发送或已完成。
+- Agent 状态心跳必须由真实 App Server 生命周期驱动；管理器不能把进程存在等同于会话服务就绪。
+- 展示或同步异常只能在目录、JSONL、relay 或渲染层排查，不能以“桌面 UI 没变化”为由替换控制通道。
+- 若确需改变控制通道，变更前必须同时提供能力矩阵、同一线程的端到端证据和明确审批；任何一项缺失
+  都不得开始实现。
+- 回归验证至少覆盖：构建产物不含 CDP 控制代码、网页发送能写入目标本地 JSONL 并收到回复、管理器状态
+  显示 App Server 就绪和内置 Codex 版本。详细契约见 [Codex 控制平面](../backend/codex-control-plane.md)。

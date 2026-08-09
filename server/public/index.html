@@ -326,6 +326,7 @@
     let threadListRequest = null;
     let currentThreadStatus = null;
     let pendingWatch = null;
+    let sending = false;
     let historyReloadedForCompletion = false;
     let runningHistoryRequest = null;
     let runningHistorySyncAt = 0;
@@ -840,8 +841,37 @@
      * @returns {void}
      */
     function setRunning(running) {
-      sendButton.disabled = running;
-      stopButton.disabled = !running;
+      const waitingForDesktop = pendingWatch?.threadId === selectedThreadId;
+      sendButton.disabled = Boolean(running || sending || waitingForDesktop);
+      stopButton.disabled = Boolean(!running || sending || waitingForDesktop);
+    }
+
+    /**
+     * 判断当前状态是否已经确认本次控制命令已进入桌面端。
+     *
+     * @param {object} status 当前线程状态。
+     * @returns {boolean} 已确认返回 true。
+     */
+    function isCommandConfirmed(status) {
+      return Boolean(
+        pendingWatch
+        && pendingWatch.threadId === status?.threadId
+        && syncState.fresh
+        && Number(status.syncVersion) > Number(pendingWatch.acceptedSyncVersion)
+        && (status.active || status.status === 'running' || status.status === 'complete' || status.status === 'error'
+          || (pendingWatch.kind === 'stop' && !status.active && status.status !== 'running')),
+      );
+    }
+
+    /**
+     * 清理已被新同步快照确认的控制等待状态。
+     *
+     * @returns {void}
+     */
+    function clearConfirmedCommandWatch() {
+      pendingWatch = null;
+      if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
+      commandConfirmTimer = null;
     }
 
     /**
@@ -868,6 +898,7 @@
     function updateThreadStatus(statusData = null) {
       const row = threadRows.find(item => item.id === selectedThreadId);
       const scopedStatus = statusData?.threadId === selectedThreadId ? statusData : null;
+      if (scopedStatus && isCommandConfirmed(scopedStatus)) clearConfirmedCommandWatch();
       const awaitingDesktopConfirmation = pendingWatch?.threadId === selectedThreadId && pendingWatch.kind === 'send-pending';
       if (awaitingDesktopConfirmation) {
         threadStatusEl.classList.remove('thread-status--running', 'thread-status--complete');
@@ -1060,22 +1091,21 @@
       if (!requestedThreadId) return;
       const data = await fetchStatus({ ...watch, threadId: requestedThreadId });
       if (requestedThreadId !== selectedThreadId || data.threadId !== selectedThreadId) return;
-      const commandConfirmed = pendingWatch
-        && pendingWatch.threadId === data.threadId
-        && Number(data.syncVersion) > Number(pendingWatch.acceptedSyncVersion)
-        && (data.active || data.status === 'running' || data.status === 'complete'
-          || (pendingWatch.kind === 'stop' && !data.active && data.status !== 'running'));
-      if (commandConfirmed) {
-        pendingWatch = null;
-        if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
-        commandConfirmTimer = null;
+      const waitingForDesktop = pendingWatch && pendingWatch.threadId === data.threadId;
+      const commandConfirmed = isCommandConfirmed(data);
+      if ((data.status === 'complete' || data.status === 'error') && waitingForDesktop && !commandConfirmed) {
+        currentThreadStatus = data;
+        bindPendingAssistantTurn(data);
+        updateThreadStatus(data);
+        renderProcessPanel(data);
+        notice('正在等待电脑确认本次发送...');
+        return;
       }
       if (data.status === 'complete' || data.status === 'error') {
         currentThreadStatus = data;
         bindPendingAssistantTurn(data);
         updateThreadStatus(data);
         renderProcessPanel(data);
-        if (pendingWatch?.threadId === data.threadId) pendingWatch = null;
         if (!historyReloadedForCompletion) {
           historyReloadedForCompletion = true;
           await loadHistory(data, { preserveScroll: true });
@@ -1196,10 +1226,10 @@
       }
       applyAgentOnline(data);
       if (!syncState.fresh && pendingWatch && (data.type === 'sync-status' || data.agentOnline === false)) {
-        pendingWatch = null;
+        pendingWatch = Object.assign({}, pendingWatch, { unconfirmed: true });
         if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
         commandConfirmTimer = null;
-        notice('电脑同步超时，操作结果未确认。');
+        notice('电脑同步超时，操作结果未确认，已停止继续发送。');
       }
       return true;
     }
@@ -1214,8 +1244,8 @@
       if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
       commandConfirmTimer = setTimeout(() => {
         if (!pendingWatch || pendingWatch.threadId !== watch.threadId) return;
-        pendingWatch = null;
-        notice('电脑尚未确认本次操作，请手动刷新后核对。');
+        pendingWatch = Object.assign({}, pendingWatch, { unconfirmed: true });
+        notice('电脑尚未确认本次操作，已停止继续发送；请刷新后核对。');
       }, 12000);
     }
 
@@ -1267,19 +1297,18 @@
       event.preventDefault();
       const text = textEl.value;
       if (!text.trim()) return;
+      const selectedRow = threadRows.find(item => item.id === selectedThreadId);
+      const currentStatus = currentThreadStatus?.status || selectedRow?.status || '';
+      const currentActive = Boolean(currentThreadStatus?.active) || Boolean(selectedRow?.active);
+      if (sending || pendingWatch || currentActive || currentStatus === 'running') {
+        notice('当前对话尚未完成或发送结果未确认，不能继续发送。');
+        return;
+      }
       textEl.value = '';
-      const sentAt = Date.now();
-      const pendingLocal = registerPendingLocalSend(selectedThreadId, text, sentAt, messagesEl.querySelectorAll('.message').length);
-      pendingWatch = {
-        threadId: selectedThreadId,
-        kind: 'send-pending',
-        acceptedSyncVersion: syncState.version,
-      };
-      message('user', text, { id: pendingLocal.userId });
-      const pending = message('assistant', '已发送，等待 Codex 回复...', { pending: true, id: pendingLocal.assistantId });
+      sending = true;
+      setRunning(false);
       notice('正在发送给电脑 Codex...');
       historyReloadedForCompletion = false;
-      let sendAccepted = false;
       try {
         const res = await api('/send', {
           method: 'POST',
@@ -1288,19 +1317,21 @@
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || '发送失败');
-        sendAccepted = true;
+        const sentAt = Date.now();
+        const pendingLocal = registerPendingLocalSend(selectedThreadId, text, sentAt, messagesEl.querySelectorAll('.message').length);
         pendingWatch = Object.assign({}, data.watch || { threadId: selectedThreadId }, {
           acceptedSyncVersion: Number(data.acceptedSyncVersion) || syncState.version,
         });
+        message('user', text, { id: pendingLocal.userId });
+        message('assistant', '已发送，等待 Codex 回复...', { pending: true, id: pendingLocal.assistantId });
         waitForCommandConfirmation(pendingWatch);
         await pollStatus(pendingWatch);
       } catch (error) {
-        if (!sendAccepted) {
-          removePendingLocalSend(pendingLocal);
-          if (pendingWatch?.threadId === pendingLocal.threadId) pendingWatch = null;
-        }
-        pending.textContent = error.message;
-        setRunning(false);
+        if (!textEl.value) textEl.value = text;
+        notice(error.message);
+      } finally {
+        sending = false;
+        updateThreadStatus(currentThreadStatus);
       }
     });
 

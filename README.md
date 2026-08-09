@@ -7,7 +7,7 @@ Codex Windows Bridge 用于把 Windows 上的 Codex Desktop 对话同步到手�
 项目按三端拆分：
 
 ```text
-desktop/  Windows 桌面管理器、Agent、本机网页和 CDP 诊断脚本
+desktop/  Windows 桌面管理器和 Agent
 server/   云端 relay、网页入口、Docker 部署和 GitHub Actions 构建
 app/      Android-only uni-app 手机端
 ```
@@ -30,7 +30,7 @@ Windows desktop-agent
 Codex Desktop 内置 codex.exe
 ```
 
-云端只保存会话同步缓存和转发控制指令，不直接访问电脑上的 Codex Desktop。Windows Agent 会从 Codex Desktop 当前安装目录解析内置 `codex.exe` 并启动 `app-server`，避免全局 npm CLI 与 Desktop 会话格式版本不一致。CDP 端口仅用于本机诊断和旧脚本，不参与正式发送链路，也不应暴露到公网。
+云端只保存会话同步缓存和转发控制指令，不直接访问电脑上的 Codex Desktop。Windows Agent 会从 Codex Desktop 当前安装目录解析内置 `codex.exe` 并启动 `app-server`，避免全局 npm CLI 与 Desktop 会话格式版本不一致。CDP 不是项目产品能力，不参与发送、停止、同步或管理器启动。
 
 ## 功能概览
 
@@ -89,7 +89,7 @@ npm run start:manager:gui
 设备名称：home-pc
 ```
 
-然后点击“启动功能”。管理器会显示 App Server 状态；如果未就绪，确认 Windows 已安装并可正常打开 Codex Desktop。`重启 Codex 生效 CDP` 仅用于 CDP 诊断，不是手机发送消息的前置条件。
+然后点击“启动功能”。管理器会显示 App Server 状态；如果未就绪，确认 Windows 已安装并可正常打开 Codex Desktop。Windows 商店版 Codex 不支持通过外部参数稳定启用 CDP，因此管理器不会为此关闭或重启 Codex；CDP 不是手机发送消息的前置条件。
 
 ### 3. 启动 Android 手机端
 

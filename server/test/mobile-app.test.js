@@ -211,21 +211,26 @@ test('uni-app Android 手机端轮询刷新不强制推动阅读位置和处理�
   assert.match(index, /manualRefresh\(\)[\s\S]*refreshAll\(\{ scrollToBottom: false \}\)/);
 });
 
-test('uni-app Android 手机端发送后立即追加本地消息', () => {
+test('uni-app Android 手机端仅在 Agent 已受理后追加本地消息', () => {
   const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+  const sendFunction = index.match(/async function send\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
 
-  assert.match(index, /const sentAt = Date\.now\(\);/);
-  assert.match(index, /const pending = registerPendingLocalSend\(selectedThreadId\.value, text, sentAt, messages\.value\.length\);/);
-  assert.match(index, /messages\.value = messages\.value\.concat\(\[/);
-  assert.match(index, /\{ role: 'user', text, id: pending\.userId \}/);
-  assert.match(index, /\{ role: 'assistant', text: '已发送，等待 Codex 回复\.\.\.', pending: true, id: pending\.assistantId \}/);
-  assert.match(index, /kind: 'send-pending'/);
-  assert.match(index, /if \(pendingWatch\.value && pendingWatch\.value\.threadId === pending\.threadId\) pendingWatch\.value = null;/);
+  assert.match(index, /const canSend = computed\(\(\) => \{/);
+  assert.match(index, /:disabled="!canSend"/);
+  assert.match(sendFunction, /if \(!canSend\.value\) \{[\s\S]*当前对话尚未完成或发送结果未确认/);
+  assert.match(sendFunction, /const data = await sendMessage\([\s\S]*?const sentAt = Date\.now\(\);[\s\S]*?const pending = registerPendingLocalSend\(/);
+  assert.match(sendFunction, /messages\.value = messages\.value\.concat\(\[/);
+  assert.match(sendFunction, /\{ role: 'user', text, id: pending\.userId \}/);
+  assert.match(sendFunction, /\{ role: 'assistant', text: '已发送，等待 Codex 回复\.\.\.', pending: true, id: pending\.assistantId \}/);
+  assert.match(sendFunction, /pendingWatch\.value = Object\.assign\(\{\}, data\.watch \|\| \{ threadId: selectedThreadId\.value \}, \{/);
+  assert.match(sendFunction, /acceptedSyncVersion: Number\(data\.acceptedSyncVersion\) \|\| syncState\.value\.version/);
+  assert.match(sendFunction, /if \(canUpdateTask\(token\) && !messageText\.value\) messageText\.value = text;/);
   assert.match(index, /await scrollToBottom\(\);/);
 });
 
 test('uni-app Android 手机端历史刷新保留未确认本地用户消息', () => {
   const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+  const sendFunction = index.match(/async function send\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
   const mergeFunction = index.match(/function mergePendingLocalMessages\(threadId, historyRows\) \{([\s\S]*?)\n\}/)?.[1] || '';
 
   assert.match(index, /const pendingLocalSends = ref\(\[\]\);/);
@@ -242,7 +247,8 @@ test('uni-app Android 手机端历史刷新保留未确认本地用户消息', (
   assert.match(mergeFunction, /rows\.splice\(insertAt \+ localIndex, 0, localRows\[localIndex\]\);/);
   assert.match(index, /function mergeLoadedHistory\(existingRows, latestRows\)/);
   assert.match(index, /messages\.value = mergePendingLocalMessages\(requestedThreadId, mergeLoadedHistory\(messages\.value, data\.messages \|\| \[\]\)\);/);
-  assert.match(index, /catch \(error\) \{[\s\S]*removePendingLocalSend\(pending\);[\s\S]*setNotice\(error\.message\);/);
+  assert.match(index, /catch \(error\) \{[\s\S]*if \(canUpdateTask\(token\) && !messageText\.value\) messageText\.value = text;[\s\S]*setNotice\(error\.message\);/);
+  assert.doesNotMatch(sendFunction, /removePendingLocalSend\(pending\)/);
   assert.match(index, /bindPendingLocalSendTurn\(runningTurn\.turnId\);/);
 });
 
@@ -345,7 +351,7 @@ test('uni-app Android 手机端切换对话时显示等待 UI 并防止旧请求
   assert.match(index, /v-if="switchingThread" class="switch-loading"/);
   assert.match(index, /正在载入对话/);
   assert.match(index, /:disabled="loading \|\| switchingThread"/);
-  assert.match(index, /:disabled="sending \|\| switchingThread \|\| !selectedThreadId"/);
+  assert.match(index, /:disabled="!canSend"/);
   assert.match(index, /const requestSeq = switchRequestSeq \+ 1;/);
   assert.match(index, /switchingThread\.value = true;/);
   assert.match(index, /messages\.value = \[\];/);

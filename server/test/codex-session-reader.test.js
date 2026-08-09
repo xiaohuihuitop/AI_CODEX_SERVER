@@ -485,6 +485,20 @@ test('解析线程历史', () => {
   assert.equal(history.messages[1].turnId, 'turn-1');
 });
 
+test('解析线程历史支持按稳定游标读取更早消息页', () => {
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const newest = reader.parseHistory('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', 1);
+  const older = reader.parseHistory('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', 1, newest.nextBefore);
+
+  assert.deepEqual(newest.messages.map(item => item.text), ['你好，我在 Windows 上。']);
+  assert.equal(newest.hasMore, true);
+  assert.deepEqual(older.messages.map(item => item.text), ['你好 Codex']);
+  assert.equal(older.hasMore, false);
+});
+
 test('解析线程历史时保留 task_complete 中的最终回复', () => {
   const reader = new CodexSessionReader({
     sessionsDir: path.join(fixtureRoot, 'sessions'),

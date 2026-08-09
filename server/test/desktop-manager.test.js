@@ -49,6 +49,12 @@ test('桌面管理器默认配置使用固定随机 token', () => {
   assert.equal(config.autoStart, false);
 });
 
+test('桌面管理器读取旧配置时忽略废弃 CDP 端口', () => {
+  const config = normalizeManagerConfig({ debugPort: 'abc' });
+
+  assert.equal(Object.hasOwn(config, 'debugPort'), false);
+});
+
 test('桌面管理器支持 HTTP 端口形式的群晖地址', () => {
   const config = normalizeManagerConfig({
     serverUrl: 'http://192.168.1.20:8008/',
@@ -96,12 +102,14 @@ test('桌面管理器提供日志清除操作', () => {
   assert.match(agent, /对话同步准备：/);
   assert.match(agent, /同步请求已发送：/);
   assert.match(agent, /服务器已确认同步：/);
-  assert.match(agent, /App Server 已初始化：/);
-  assert.match(agent, /App Server 不可用：/);
-  assert.match(agent, /回合状态已更新：/);
-  assert.match(main, /function appServerStatus\(agent\)/);
+  assert.match(agent, /正在恢复目标对话：/);
+  assert.match(agent, /手机回合已确认：/);
+  assert.match(agent, /手机控制同步完成：/);
+  assert.match(main, /resolveAppServerStatus/);
   assert.match(main, /App Server 未就绪：/);
   assert.doesNotMatch(main, /restartCodexDesktopWithDebug/);
+  assert.doesNotMatch(renderer, /CODEX_DEBUG_PORT=/);
+  assert.doesNotMatch(html, /id="debugPort"/);
 });
 
 test('桌面管理器统一使用固定目录、固定名称并展示版本', () => {
@@ -112,7 +120,7 @@ test('桌面管理器统一使用固定目录、固定名称并展示版本', ()
 
   assert.equal(pkg.build.directories.output, 'dist');
   assert.equal(pkg.productName, 'Codex Desktop 管理器');
-  assert.equal(pkg.version, '0.2.0');
+  assert.equal(pkg.version, '0.2.3');
   assert.match(main, /const MANAGER_VERSION = app\.getVersion\(\)/);
   assert.match(main, /Codex Desktop 管理器 v\$\{MANAGER_VERSION\} 已启动/);
   assert.match(html, /id="managerVersion"/);
@@ -182,7 +190,7 @@ test('桌面管理器页面包含 Agent 控制和状态区域', () => {
   assert.doesNotMatch(html, /启动 Agent/);
   assert.match(html, /Agent 上线\/重连/);
   assert.match(html, /停止 Agent/);
-  assert.match(html, /Codex Desktop/);
+  assert.match(html, /会话服务/);
   assert.match(html, /http:\/\/example\.com:8008\/\?token=token_replace_with_random_value/);
 });
 
@@ -208,7 +216,7 @@ test('桌面管理器 HTTP 接口支持保存配置和控制 Agent', async () =>
     agentController,
     probes: {
       cloud: async () => ({ configured: true, ok: true, online: true, status: 200, message: '' }),
-      codex: async () => ({ ok: true, targetCount: 1, message: '' }),
+      appServer: async () => ({ ok: true, message: '本机 stdio 会话服务已就绪', codexVersion: '0.144.0' }),
     },
   });
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -237,7 +245,7 @@ test('桌面管理器 HTTP 接口支持保存配置和控制 Agent', async () =>
     const status = await fetch(`http://127.0.0.1:${port}/status`);
     const statusBody = await status.json();
     assert.equal(statusBody.cloud.online, true);
-    assert.equal(statusBody.codex.ok, true);
+    assert.equal(statusBody.appServer.ok, true);
     assert.equal(statusBody.agent.running, true);
 
     const stop = await fetch(`http://127.0.0.1:${port}/agent/stop`, { method: 'POST' });
@@ -249,24 +257,12 @@ test('桌面管理器 HTTP 接口支持保存配置和控制 Agent', async () =>
   }
 });
 
-test('桌面管理器 Codex 控制只统计可控制 App 目标', async () => {
-  const { probeCodexDebug } = require('../../desktop/src/desktop-manager-server');
-  const result = await probeCodexDebug({
-    fetchWithTimeout: async () => ({
-      json: async () => [
-        { url: 'app://-/index.html' },
-        { url: 'devtools://devtools/bundled/inspector.html' },
-        { url: 'chrome-extension://example/background.html' },
-        { url: 'about:blank' },
-        { url: 'app://-/other.html' },
-      ],
-    }),
-  });
+test('旧版本地管理页不再暴露 CDP 配置或探测', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../../desktop/src/desktop-manager-server.js'), 'utf8');
 
-  assert.equal(result.ok, true);
-  assert.equal(result.targetCount, 5);
-  assert.equal(result.appTargetCount, 1);
-  assert.equal(result.port, 9229);
+  assert.match(source, /resolveAppServerStatus/);
+  assert.doesNotMatch(source, /probeCodexDebug/);
+  assert.doesNotMatch(source, /debugPort/);
 });
 
 test('Electron 停止功能会关闭自动启动并停止 Agent', () => {

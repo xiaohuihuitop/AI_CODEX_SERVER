@@ -94,8 +94,8 @@ function renderState(nextState, options = {}) {
 
   setCard(elements.codexCard, nextState.appServer.ok);
   const cloudPort = nextState.ports.cloud || '未配置';
-  elements.codexStatus.textContent = nextState.appServer.ok ? '已连接' : '未就绪';
-  elements.codexDetail.textContent = nextState.appServer.message || '等待 Agent 初始化 App Server';
+  elements.codexStatus.textContent = nextState.appServer.ok ? '已就绪' : '未就绪';
+  elements.codexDetail.textContent = nextState.appServer.message || '等待 App Server 初始化';
   const codexVersion = String(nextState.appServer.codexVersion || '').trim();
   elements.codexVersion.textContent = codexVersion ? `当前 Codex：v${codexVersion}` : '';
   elements.portStatus.textContent = `云端 ${cloudPort} / App Server stdio`;

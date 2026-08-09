@@ -95,7 +95,7 @@
 
     <view class="composer">
       <textarea v-model="messageText" class="input" auto-height maxlength="-1" placeholder="发消息给电脑 Codex" />
-      <button class="send-button" :disabled="sending || switchingThread || !selectedThreadId" @click="send">发送</button>
+      <button class="send-button" :disabled="!canSend" @click="send">发送</button>
       <button class="stop-button" :disabled="!canStop" @click="stop">停止</button>
     </view>
   </view>
@@ -190,7 +190,13 @@ const complete = computed(() => {
   const selectedStatus = selectedThread.value && selectedThread.value.status;
   return !running.value && (currentStatus === 'complete' || selectedStatus === 'complete');
 });
-const canStop = computed(() => running.value && !sending.value && !switchingThread.value);
+const canStop = computed(() => running.value && !sending.value && !switchingThread.value && !(pendingWatch.value && pendingWatch.value.threadId === selectedThreadId.value));
+const canSend = computed(() => {
+  const status = (currentThreadStatus.value && currentThreadStatus.value.status) || (selectedThread.value && selectedThread.value.status) || '';
+  const active = Boolean(currentThreadStatus.value && currentThreadStatus.value.active) || Boolean(selectedThread.value && selectedThread.value.active);
+  const waitingForDesktop = Boolean(pendingWatch.value && pendingWatch.value.threadId === selectedThreadId.value);
+  return Boolean(selectedThreadId.value && !sending.value && !switchingThread.value && !waitingForDesktop && !active && status !== 'running');
+});
 const serverDotClass = computed(() => serverState.value.online ? 'dot-green' : serverState.value.offline ? 'dot-red' : 'dot-gray');
 const agentDotClass = computed(() => agentState.value.online ? 'dot-green' : 'dot-gray');
 const threadDotClass = computed(() => running.value ? 'dot-blue' : complete.value ? 'dot-green' : 'dot-gray');
@@ -198,7 +204,9 @@ const serverText = computed(() => serverState.value.online ? '服务器已连' :
 const agentText = computed(() => agentState.value.online ? 'Agent 在线' : agentState.value.message || 'Agent 未知');
 const threadText = computed(() => {
   if (!syncState.value.fresh && agentState.value.online) return '状态未确认';
-  if (pendingWatch.value && pendingWatch.value.threadId === selectedThreadId.value) return '等待电脑确认';
+  if (pendingWatch.value && pendingWatch.value.threadId === selectedThreadId.value) {
+    return pendingWatch.value.unconfirmed ? '发送未确认' : '等待电脑确认';
+  }
   return running.value ? '对话进行中' : complete.value ? '对话已完成' : '对话空闲';
 });
 const timelineItems = computed(() => {
@@ -808,10 +816,10 @@ function applyRelayState(data) {
   };
   applyAgentOnline(data);
   if (!syncState.value.fresh && pendingWatch.value && (data.type === 'sync-status' || data.agentOnline === false)) {
-    pendingWatch.value = null;
+    pendingWatch.value = Object.assign({}, pendingWatch.value, { unconfirmed: true });
     if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
     commandConfirmTimer = null;
-    setNotice('电脑同步超时，发送结果未确认。');
+    setNotice('电脑同步超时，发送结果未确认，已停止继续发送。');
   }
   return true;
 }
@@ -826,8 +834,8 @@ function waitForCommandConfirmation(watch) {
   if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
   commandConfirmTimer = setTimeout(() => {
     if (!pendingWatch.value || pendingWatch.value.threadId !== watch.threadId) return;
-    pendingWatch.value = null;
-    setNotice('电脑尚未确认本次操作，请手动刷新后核对。');
+    pendingWatch.value = Object.assign({}, pendingWatch.value, { unconfirmed: true });
+    setNotice('电脑尚未确认本次操作，已停止继续发送；请刷新后核对。');
   }, 12000);
 }
 
@@ -889,8 +897,9 @@ function applyThreadStatus(status) {
   syncManualProcessOpenState(status);
   const commandConfirmed = pendingWatch.value
     && pendingWatch.value.threadId === status.threadId
+    && syncState.value.fresh
     && Number(status.syncVersion) > Number(pendingWatch.value.acceptedSyncVersion)
-    && (status.active || status.status === 'running' || status.status === 'complete'
+    && (status.active || status.status === 'running' || status.status === 'complete' || status.status === 'error'
       || (pendingWatch.value.kind === 'stop' && !status.active && status.status !== 'running'));
   if (commandConfirmed) {
     pendingWatch.value = null;
@@ -1067,6 +1076,17 @@ async function pollStatus(watch = pendingWatch.value || {}) {
   const data = await getStatus(config.value, Object.assign({}, watch, { threadId: requestedThreadId }), { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
   if (!canUpdateTask(token)) return;
   if (requestedThreadId !== selectedThreadId.value || data.threadId !== selectedThreadId.value) return;
+  const waitingForDesktop = pendingWatch.value && pendingWatch.value.threadId === data.threadId;
+  const commandConfirmed = waitingForDesktop
+    && syncState.value.fresh
+    && Number(data.syncVersion) > Number(pendingWatch.value.acceptedSyncVersion)
+    && (data.active || data.status === 'running' || data.status === 'complete' || data.status === 'error'
+      || (pendingWatch.value.kind === 'stop' && !data.active && data.status !== 'running'));
+  if ((data.status === 'complete' || data.status === 'error') && waitingForDesktop && !commandConfirmed) {
+    if (!applyThreadStatus(data)) return;
+    setNotice('正在等待电脑确认本次发送...');
+    return;
+  }
   if (data.status === 'complete' || data.status === 'error') {
     if (!applyThreadStatus(data)) return;
     const shouldScroll = followBottom.value;
@@ -1096,37 +1116,31 @@ async function send() {
   if (!canUpdateTask(token)) return;
   const text = messageText.value.trim();
   if (!text || !selectedThreadId.value) return;
+  if (!canSend.value) {
+    setNotice('当前对话尚未完成或发送结果未确认，不能继续发送。');
+    return;
+  }
   messageText.value = '';
   sending.value = true;
   followBottom.value = true;
   historyReloadedForCompletion.value = false;
-  const sentAt = Date.now();
-  const pending = registerPendingLocalSend(selectedThreadId.value, text, sentAt, messages.value.length);
-  pendingWatch.value = {
-    threadId: selectedThreadId.value,
-    kind: 'send-pending',
-    acceptedSyncVersion: syncState.value.version,
-  };
-  messages.value = messages.value.concat([
-    { role: 'user', text, id: pending.userId },
-    { role: 'assistant', text: '已发送，等待 Codex 回复...', pending: true, id: pending.assistantId },
-  ]);
-  await scrollToBottom();
-  let sendAccepted = false;
   try {
     const data = await sendMessage(config.value, { threadId: selectedThreadId.value, text }, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token)) return;
-    sendAccepted = true;
+    const sentAt = Date.now();
+    const pending = registerPendingLocalSend(selectedThreadId.value, text, sentAt, messages.value.length);
     pendingWatch.value = Object.assign({}, data.watch || { threadId: selectedThreadId.value }, {
       acceptedSyncVersion: Number(data.acceptedSyncVersion) || syncState.value.version,
     });
+    messages.value = messages.value.concat([
+      { role: 'user', text, id: pending.userId },
+      { role: 'assistant', text: '已发送，等待 Codex 回复...', pending: true, id: pending.assistantId },
+    ]);
+    await scrollToBottom();
     waitForCommandConfirmation(pendingWatch.value);
     await pollStatus(pendingWatch.value);
   } catch (error) {
-    if (!sendAccepted) {
-      removePendingLocalSend(pending);
-      if (pendingWatch.value && pendingWatch.value.threadId === pending.threadId) pendingWatch.value = null;
-    }
+    if (canUpdateTask(token) && !messageText.value) messageText.value = text;
     setNotice(error.message);
   } finally {
     if (canUpdateTask(token)) sending.value = false;

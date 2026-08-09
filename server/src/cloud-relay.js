@@ -388,11 +388,26 @@ function createCloudRelayServer(options = {}) {
       if (req.method === 'GET' && req.url.startsWith('/codex/history')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const threadId = url.searchParams.get('thread') || '';
+        if (isAgentOnline(state, token)) {
+          const direct = await forwardToAgent(state, token, 'history', {
+            threadId,
+            limit: url.searchParams.get('limit') || 120,
+            before: url.searchParams.get('before') || '',
+          }, requestTimeoutMs);
+          return sendJson(res, 200, Object.assign({}, direct, { cached: false }, relayStateForToken(state, token)));
+        }
         return sendJson(res, 200, Object.assign(state.cache.history(token, threadId, url.searchParams.get('limit') || 120, url.searchParams.get('before') || ''), relayStateForToken(state, token)));
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/status')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const threadId = url.searchParams.get('thread') || '';
+        if (isAgentOnline(state, token)) {
+          const direct = await forwardToAgent(state, token, 'status', {
+            threadId,
+            since: url.searchParams.get('since') || '',
+          }, requestTimeoutMs);
+          return sendJson(res, 200, Object.assign({}, direct, { cached: false }, relayStateForToken(state, token)));
+        }
         return sendJson(res, 200, Object.assign(state.cache.status(token, threadId, url.searchParams.get('since') || ''), relayStateForToken(state, token)));
       }
       if (req.method === 'POST' && req.url.startsWith('/send')) {

@@ -3,7 +3,7 @@ const EventEmitter = require('node:events');
 const test = require('node:test');
 const { agentUrlFromServerUrl, createDesktopAgentClient, handleAgentRequest, isRecoverableSocketError, withTimeout } = require('../../desktop/src/desktop-agent-client');
 const { DesktopAgentApi } = require('../../desktop/src/desktop-agent-api');
-const { selectSyncBatch } = require('../../desktop/src/desktop-sync-batch');
+const { hasControlSyncEvidence, selectSyncBatch } = require('../../desktop/src/desktop-sync-batch');
 
 test('desktop-agent 将 HTTPS 云端地址转换为 WSS Agent 地址', () => {
   assert.equal(
@@ -31,6 +31,15 @@ test('手机控制后的目标线程优先同步且不打乱常规轮转游标',
   assert.equal(regular.prioritized, false);
   assert.deepEqual(regular.targets.map(item => item.threadId), ['thread-2', 'thread-3']);
   assert.equal(regular.nextCursor, 0);
+});
+
+test('手机控制目标只有同步到新 JSONL 或快照后才解除优先同步', () => {
+  assert.equal(hasControlSyncEvidence([], 'thread-1'), false);
+  assert.equal(hasControlSyncEvidence([{ threadId: 'thread-1', metadataOnly: true }], 'thread-1'), false);
+  assert.equal(hasControlSyncEvidence([{ threadId: 'thread-1', lines: [] }], 'thread-1'), false);
+  assert.equal(hasControlSyncEvidence([{ threadId: 'thread-1', lines: ['{"type":"event_msg"}'] }], 'thread-1'), true);
+  assert.equal(hasControlSyncEvidence([{ threadId: 'thread-1', snapshot: { messages: [] } }], 'thread-1'), true);
+  assert.equal(hasControlSyncEvidence([{ threadId: 'thread-2', snapshot: { messages: [] } }], 'thread-1'), false);
 });
 
 test('desktop-agent 只处理带 id 和 action 的请求', async () => {
@@ -383,10 +392,11 @@ test('desktop-agent API 控制 Codex 时暴露 busy 状态', async () => {
   let releaseControl;
   const api = new DesktopAgentApi({
     appServer: {
-      resumeThread: async () => new Promise(resolve => {
+      resumeThread: async () => {},
+      startTurn: async () => new Promise(resolve => {
         releaseControl = resolve;
       }),
-      startTurn: async () => ({ turn: { id: 'turn-1' } }),
+      interruptTurn: async () => {},
     },
     now: () => Date.parse('2026-06-08T00:00:00.000Z'),
   });
@@ -394,7 +404,7 @@ test('desktop-agent API 控制 Codex 时暴露 busy 状态', async () => {
   const sending = api.handle('send', { threadId: 'thread-1', text: '你好' });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(api.isBusy(), true);
-  releaseControl();
+  releaseControl({ turn: { id: 'turn-1' } });
   await sending;
   assert.equal(api.isBusy(), false);
 });

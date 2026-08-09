@@ -4,7 +4,7 @@ const { createCodexAppServerClient } = require('./src/codex-app-server-client');
 const { createCodexDesktopThreadCatalog } = require('./src/codex-desktop-thread-catalog');
 const { CodexSessionReader } = require('./src/codex-session-reader');
 const { AGENT_STATUS_HEARTBEAT_MS, writeAgentStatus } = require('./src/desktop-agent-status');
-const { selectSyncBatch } = require('./src/desktop-sync-batch');
+const { hasControlSyncEvidence, selectSyncBatch } = require('./src/desktop-sync-batch');
 
 const serverUrl = process.env.CODEX_CLOUD_URL || '';
 const token = process.env.CODEX_DEVICE_TOKEN || '';
@@ -22,16 +22,18 @@ const desktopCatalog = createCodexDesktopThreadCatalog();
 const syncOffsets = new Map();
 const discoveryIntervalMs = Math.max(5000, Number(process.env.CODEX_AGENT_DISCOVERY_INTERVAL_MS || 10000));
 const syncBatchSize = Math.max(1, Number(process.env.CODEX_AGENT_SYNC_BATCH_SIZE || 1));
+const controlSyncTimeoutMs = Math.max(5000, Number(process.env.CODEX_AGENT_CONTROL_SYNC_TIMEOUT_MS || 30000));
 let knownThreadTargets = [];
 let lastDiscoveryAt = 0;
-let lastAppServerError = '';
 let syncBatchCursor = 0;
 let pendingCatalogMetadata = true;
+let pendingControlSyncThreadId = '';
+let pendingControlSyncDeadline = 0;
+let lastAppServerError = '';
 let appServerState = 'starting';
 let appServerStatusMessage = '正在初始化本机 stdio 会话服务';
 let appServerCodexVersion = '';
 let lastAppServerStatusAt = 0;
-let pendingControlSyncThreadId = '';
 
 /**
  * AI:将 app-server 生命周期写入管理器可跨进程读取的本机状态文件。
@@ -87,12 +89,20 @@ function nextSyncBatch(targets) {
   return selection.targets;
 }
 
+/**
+ * AI:从当前 Desktop 侧栏目标中解析控制线程，目录可能在上次发现后刚发生变化。
+ *
+ * @param {string} threadId Codex 线程 ID。
+ * @returns {object} 控制目标或不可用标记。
+ */
 const api = createDesktopAgentApi({
   reader,
   appServer,
   onControlProgress: logControlProgress,
   listThreads: async () => {
     const listed = discoverDesktopThreadTargets();
+    knownThreadTargets = listed.targets;
+    lastDiscoveryAt = Date.now();
     return {
       threads: listed.targets.map(target => ({
         id: target.threadId,
@@ -151,7 +161,11 @@ function logControlProgress(event) {
     return;
   }
   if (event.phase === 'send.turn.started') {
-    console.log(`手机回合已启动：${thread}，回合 ${String(event.turnId || '').slice(0, 8)}…`);
+    console.log(`手机回合已启动：${thread}，等待 App Server 返回回合标识`);
+    return;
+  }
+  if (event.phase === 'send.turn.completed') {
+    console.log(`手机回合已确认：${thread}，回合 ${String(event.turnId || '').slice(0, 8)}…`);
     return;
   }
   if (event.phase === 'send.resume.failed' || event.phase === 'send.turn.failed') {
@@ -163,7 +177,7 @@ function logControlProgress(event) {
     return;
   }
   if (event.phase === 'stop.completed') {
-    console.log(`手机停止请求已完成：${thread}`);
+    console.log(`Codex Desktop 停止请求已完成：${thread}`);
     return;
   }
   if (event.phase === 'stop.failed') console.error(`手机停止失败：${thread}，${event.error || '未知错误'}`);
@@ -210,8 +224,14 @@ async function syncProvider() {
     snapshotMessageLimit: Number(process.env.CODEX_AGENT_SNAPSHOT_MESSAGES || 50),
     syncByteLimit: Number(process.env.CODEX_AGENT_SYNC_BYTE_LIMIT || 512 * 1024),
   });
-  if (synchronizedControlThreadId && batch.some(target => target.threadId === synchronizedControlThreadId)) {
+  if (synchronizedControlThreadId && hasControlSyncEvidence(snapshot.sessions, synchronizedControlThreadId)) {
     pendingControlSyncThreadId = '';
+    pendingControlSyncDeadline = 0;
+    console.log(`手机控制同步完成：${describeControlThread(synchronizedControlThreadId)}`);
+  } else if (synchronizedControlThreadId && now >= pendingControlSyncDeadline) {
+    console.error(`手机控制同步未确认：${describeControlThread(synchronizedControlThreadId)}，等待 Desktop 写入超时`);
+    pendingControlSyncThreadId = '';
+    pendingControlSyncDeadline = 0;
   }
   if (catalogMetadata.length) pendingCatalogMetadata = false;
   const sessions = catalogMetadata.length ? catalogMetadata : snapshot.sessions;
@@ -269,7 +289,6 @@ const ws = createDesktopAgentClient({
   api,
   syncProvider,
   syncIntervalMs: Number(process.env.CODEX_AGENT_SYNC_INTERVAL_MS || 1000),
-  // AI:首次同步需要等待 app-server 冷启动和本地历史快照，15 秒会使在线 Agent 长期不上传会话。
   syncTimeoutMs: Number(process.env.CODEX_AGENT_SYNC_TIMEOUT_MS || 45000),
 });
 
@@ -279,13 +298,16 @@ ws.on('open', () => {
   knownThreadTargets = [];
   syncBatchCursor = 0;
   pendingCatalogMetadata = true;
+  pendingControlSyncThreadId = '';
+  pendingControlSyncDeadline = 0;
   console.log(`Desktop agent connected: ${deviceName}`);
   console.log('同步游标已重置：将重新上传本地对话列表和历史快照');
 });
 
 ws.on('control-complete', ({ action, payload }) => {
   pendingControlSyncThreadId = String(payload && payload.threadId || '').trim();
-  console.log(`控制命令已确认：${action}，优先同步目标对话运行态`);
+  pendingControlSyncDeadline = Date.now() + controlSyncTimeoutMs;
+  console.log(`控制命令已确认：${action}，持续优先同步目标对话直到读取到新记录`);
 });
 ws.on('control-failed', ({ action, payload, error }) => {
   console.error(`手机控制命令失败：${action}，${describeControlThread(payload && payload.threadId)}，${error.code || 'UNKNOWN'}：${error.message || '未知错误'}`);

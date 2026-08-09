@@ -21,16 +21,21 @@ test('云端和桌面端入口文件存在并使用固定 token 环境变量', (
   assert.match(agent, /api\.isBusy\(\)/);
   assert.match(agent, /const busy = api\.isBusy\(\)/);
   assert.match(agent, /pendingControlSyncThreadId/);
+  assert.match(agent, /pendingControlSyncDeadline/);
   assert.match(agent, /if \(!busy && !hasPendingControlTarget && now - lastDiscoveryAt >= discoveryIntervalMs\)/);
   assert.match(agent, /selectSyncBatch/);
-  assert.match(agent, /优先同步目标对话运行态/);
+  assert.match(agent, /持续优先同步目标对话直到读取到新记录/);
+  assert.match(agent, /hasControlSyncEvidence/);
+  assert.match(agent, /CODEX_AGENT_CONTROL_SYNC_TIMEOUT_MS \|\| 30000/);
   assert.doesNotMatch(agent, /if \(api\.isBusy\(\)\) \{\s*return null;\s*\}/);
   assert.match(agent, /createCodexAppServerClient/);
   assert.match(agent, /createCodexDesktopThreadCatalog/);
   assert.match(agent, /discoverDesktopThreadSessions/);
   assert.doesNotMatch(agent, /appServer\.listThreads/);
-  assert.match(agent, /appServer\.getThreadRuntime/);
   assert.doesNotMatch(agent, /WindowsCodexController/);
+  assert.match(agent, /appServer\.getThreadRuntime/);
+  assert.match(agent, /reportAppServerStatus/);
+  assert.match(agent, /本机 stdio 会话服务已就绪/);
   assert.match(agent, /syncOffsets\.clear\(\)/);
   assert.match(agent, /readKnownThreadSync/);
   assert.match(agent, /CODEX_AGENT_SYNC_INTERVAL_MS/);
@@ -88,8 +93,8 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(electronMain, /autoStart: true/);
   assert.match(electronMain, /autoStart: false/);
   assert.match(electronMain, /function serverPortFromUrl\(serverUrl\)/);
+  assert.match(electronMain, /resolveAppServerStatus/);
   assert.match(electronMain, /function appServerStatus\(agent\)/);
-  assert.match(electronMain, /const appServer = appServerStatus\(agent\)/);
   assert.match(electronMain, /App Server 已就绪：通过本机 stdio 管理 Codex 会话/);
   assert.match(electronMain, /ports:\s*\{[\s\S]*cloud: serverPortFromUrl\(normalized\.serverUrl\),/);
   assert.match(electronPreload, /contextBridge/);
@@ -105,9 +110,10 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.doesNotMatch(electronHtml, /startButton/);
   assert.match(electronHtml, /启动功能/);
   assert.match(electronHtml, /停止功能/);
-  assert.doesNotMatch(electronHtml, /重启 Codex 生效 CDP/);
+  assert.doesNotMatch(electronHtml, /重启 Codex 启用 CDP/);
   assert.match(electronHtml, /id="portStatus"/);
   assert.match(electronHtml, /id="codexVersion"/);
+  assert.doesNotMatch(electronHtml, /id="debugPort"/);
   assert.match(electronHtml, /功能状态/);
   assert.match(electronHtml, /云端连接/);
   assert.match(electronHtml, /会话服务/);
@@ -115,15 +121,14 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(electronRenderer, /云端 \$\{cloudPort\} \/ App Server stdio/);
   assert.match(electronRenderer, /nextState\.appServer\.ok/);
   assert.match(electronRenderer, /nextState\.appServer\.codexVersion/);
-  assert.doesNotMatch(electronRenderer, /Codex App 目标/);
-  assert.doesNotMatch(electronRenderer, /可控制目标 \$\{nextState\.codex\.targetCount\}/);
+  assert.match(electronRenderer, /已就绪/);
   assert.match(electronRenderer, /function isConfigured\(config\)/);
   assert.match(electronRenderer, /featureStarted/);
   assert.match(electronRenderer, /已启动/);
   assert.match(electronRenderer, /已停止/);
   assert.match(electronRenderer, /配置不完整/);
-  assert.doesNotMatch(electronRenderer, /CDP 未连接/);
-  assert.doesNotMatch(electronMain, /probeCodexDebug/);
+  assert.match(electronRenderer, /等待 App Server 初始化/);
+  assert.doesNotMatch(electronMain, /restartCodexDesktopWithDebug/);
   assert.match(electronRenderer, /window\.codexManager\.pauseFeature\(\)/);
   assert.match(electronRenderer, /async function refreshSilently\(\)/);
   assert.match(electronRenderer, /const SILENT_REFRESH_MS = 15000/);
@@ -135,7 +140,9 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(electronRenderer, /if \(interactive\) elements\.saveState\.textContent = '状态已更新'/);
   assert.equal(desktopPkg.scripts['start:manager:gui'], 'electron electron/main.js');
   assert.equal(desktopPkg.scripts['start:manager:gui:legacy'], 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-desktop-manager-gui.ps1');
-  assert.deepEqual(desktopPkg.build.asarUnpack, ['scripts/*.ps1']);
+  assert.equal(Object.hasOwn(desktopPkg.build, 'asarUnpack'), false);
+  assert.equal(desktopPkg.scripts.start, 'node desktop-agent.js');
+  assert.match(desktopPkg.scripts['build:manager:win'], /verify-manager-artifact\.js/);
   assert.equal(desktopPkg.devDependencies.electron, '42.3.3');
 });
 
@@ -144,8 +151,6 @@ test('根目录只保留三端业务目录、README 和 Git 基础设施', () =>
     path.join(desktopDir, 'desktop-agent.js'),
     path.join(desktopDir, 'desktop-manager-server.js'),
     path.join(desktopDir, 'electron', 'main.js'),
-    path.join(desktopDir, 'public', 'index.html'),
-    path.join(desktopDir, 'scripts', 'win-codex-control.ps1'),
     path.join(serverDir, 'cloud-server.js'),
     path.join(serverDir, 'Dockerfile'),
     path.join(serverDir, 'README.md'),
@@ -158,7 +163,7 @@ test('根目录只保留三端业务目录、README 和 Git 基础设施', () =>
     path.join(mobileDir, 'pages', 'index', 'index.vue'),
     path.join(mobileDir, 'docs', '使用说明.md'),
   ];
-  const allowedRoot = new Set(['.agents', '.codex', '.git', '.gitattributes', '.github', '.gitignore', '.trellis', 'AGENTS.md', 'README.md', 'desktop', 'server', 'app']);
+  const allowedRoot = new Set(['.agents', '.codex', '.git', '.gitattributes', '.github', '.gitignore', '.trellis', 'AGENTS.md', 'README.md', 'desktop', 'server', 'app', 'docs']);
 
   for (const file of expectedFiles) assert.equal(fs.existsSync(file), true, file);
   assert.equal(fs.existsSync(path.join(desktopDir, 'README.md')), true);
@@ -166,7 +171,7 @@ test('根目录只保留三端业务目录、README 和 Git 基础设施', () =>
   assert.deepEqual(rootNames.filter(name => !allowedRoot.has(name)).sort(), []);
   assert.equal(fs.existsSync(path.join(rootDir, 'desktop-client')), false);
   assert.equal(fs.existsSync(path.join(rootDir, 'mobile-app')), false);
-  assert.equal(fs.existsSync(path.join(rootDir, 'docs')), false);
+  assert.equal(fs.existsSync(path.join(rootDir, 'docs', 'temp')), true);
   assert.equal(fs.existsSync(path.join(rootDir, 'test')), false);
   assert.equal(fs.existsSync(path.join(rootDir, 'package.json')), false);
   assert.equal(fs.existsSync(path.join(rootDir, 'package-lock.json')), false);

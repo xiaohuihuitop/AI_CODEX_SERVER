@@ -4,6 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { buildAgentEnv, buildMobileUrl, createDefaultManagerConfig, normalizeManagerConfig } = require('./desktop-manager');
 const { createDesktopAgentProcess } = require('./desktop-agent-process');
+const { resolveAppServerStatus } = require('./app-server-status');
 const { readBody, sendJson, sendOptions } = require('./http-utils');
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -99,30 +100,6 @@ async function probeCloud(config) {
 }
 
 /**
- * 探测 Codex Desktop CDP 端口状态。
- *
- * @returns {Promise<{ok: boolean, targetCount: number, appTargetCount: number, port: number, message?: string}>} CDP 状态。
- */
-async function probeCodexDebug(options = {}) {
-  const port = Number(process.env.CODEX_DEBUG_PORT || 9229);
-  try {
-    const fetcher = options.fetchWithTimeout || fetchWithTimeout;
-    const res = await fetcher(`http://127.0.0.1:${port}/json/list`, STATUS_TIMEOUT_MS);
-    const targets = await res.json();
-    const appTargets = Array.isArray(targets) ? targets.filter(target => target && target.url === 'app://-/index.html') : [];
-    return {
-      ok: appTargets.length > 0,
-      targetCount: Array.isArray(targets) ? targets.length : 0,
-      appTargetCount: appTargets.length,
-      port,
-      message: '',
-    };
-  } catch (error) {
-    return { ok: false, targetCount: 0, appTargetCount: 0, port, message: error.message };
-  }
-}
-
-/**
  * 解析表单配置。
  *
  * @param {string} body 表单请求体。
@@ -146,8 +123,9 @@ function parseForm(body) {
  * @returns {string} HTML 页面。
  */
 function renderHtml(config, agentStatus) {
-  const mobileUrl = config.serverUrl && config.token ? buildMobileUrl(config) : '';
-  const agentEnv = JSON.stringify(buildAgentEnv(config), null, 2);
+  const normalized = normalizeManagerConfig(config);
+  const mobileUrl = normalized.serverUrl && normalized.token ? buildMobileUrl(normalized) : '';
+  const agentEnv = JSON.stringify(buildAgentEnv(normalized), null, 2);
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -187,24 +165,24 @@ function renderHtml(config, agentStatus) {
       <div class="status-grid">
         <div class="status"><strong>云端</strong><span id="cloud"><span class="dot"></span>检测中</span><div class="muted" id="cloudDetail"></div></div>
         <div class="status"><strong>Agent</strong><span id="agent"><span class="dot ${agentStatus.running ? 'ok' : ''}"></span>${agentStatus.running ? '运行中' : '未运行'}</span><div class="muted" id="agentDetail">${agentStatus.pid ? `PID ${agentStatus.pid}` : ''}</div></div>
-        <div class="status"><strong>Codex Desktop</strong><span id="codex"><span class="dot"></span>检测中</span><div class="muted" id="codexDetail"></div></div>
+        <div class="status"><strong>会话服务</strong><span id="appServer"><span class="dot"></span>检测中</span><div class="muted" id="appServerDetail"></div></div>
       </div>
     </section>
     <section>
       <form method="post" action="/config" id="configForm">
         <label>云端服务器地址</label>
-        <input name="serverUrl" value="${escapeHtml(config.serverUrl)}" placeholder="http://群晖IP:8008">
+        <input name="serverUrl" value="${escapeHtml(normalized.serverUrl)}" placeholder="http://群晖IP:8008">
         <div class="row">
           <div>
             <label>固定 Token</label>
-            <input name="token" value="${escapeHtml(config.token)}">
+            <input name="token" value="${escapeHtml(normalized.token)}">
           </div>
           <div>
             <label>设备名称</label>
-            <input name="deviceName" value="${escapeHtml(config.deviceName)}">
+            <input name="deviceName" value="${escapeHtml(normalized.deviceName)}">
           </div>
         </div>
-        <label><input type="checkbox" name="autoStart" ${config.autoStart ? 'checked' : ''}> 开机自启</label>
+        <label><input type="checkbox" name="autoStart" ${normalized.autoStart ? 'checked' : ''}> 开机自启</label>
         <div class="actions">
           <button type="submit">保存配置</button>
           <button type="button" id="restartAgent">Agent 上线/重连</button>
@@ -233,7 +211,7 @@ function renderHtml(config, agentStatus) {
       const data = await res.json();
       setStatus('cloud', data.cloud.ok, data.cloud.ok ? '可访问' : '不可访问', data.cloud.online ? 'Agent 已在线' : (data.cloud.message || 'Agent 未在线'));
       setStatus('agent', data.agent.running, data.agent.running ? '运行中' : '未运行', data.agent.pid ? 'PID ' + data.agent.pid : '');
-      setStatus('codex', data.codex.ok, data.codex.ok ? 'CDP 已开放' : 'CDP 不可用', data.codex.message || '');
+      setStatus('appServer', data.appServer.ok, data.appServer.ok ? '已就绪' : '未就绪', data.appServer.message || '');
       document.getElementById('agentLog').textContent = [...(data.agent.lastOutput || []), ...(data.agent.lastError || [])].slice(-10).join('\\n');
     }
     async function postAction(url) {
@@ -266,18 +244,21 @@ function createDesktopManagerServer(options = {}) {
   const agentController = options.agentController || createDesktopAgentProcess({ cwd: options.cwd || path.join(__dirname, '..') });
   const probes = {
     cloud: options.probes?.cloud || probeCloud,
-    codex: options.probes?.codex || probeCodexDebug,
+    appServer: options.probes?.appServer || resolveAppServerStatus,
   };
 
   async function getStatus() {
-    const [cloud, codex] = await Promise.all([probes.cloud(config), probes.codex()]);
+    const [cloud, appServer] = await Promise.all([
+      probes.cloud(config),
+      Promise.resolve(probes.appServer(agentController.status(), config)),
+    ]);
     return {
       ok: true,
       config,
       mobileUrl: config.serverUrl && config.token ? buildMobileUrl(config) : '',
       agent: agentController.status(),
       cloud,
-      codex,
+      appServer,
     };
   }
 
@@ -324,7 +305,6 @@ module.exports = {
   getDefaultConfigPath,
   loadConfig,
   probeCloud,
-  probeCodexDebug,
   renderHtml,
   saveConfig,
 };
