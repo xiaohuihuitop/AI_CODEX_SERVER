@@ -74,7 +74,8 @@ function findDesktopCodexExecutable(options = {}) {
   const localAppData = String(options.localAppData || process.env.LOCALAPPDATA || '').trim();
   if (!localAppData) return '';
 
-  const binDirectory = path.join(localAppData, 'OpenAI', 'Codex', 'bin');
+  // AI:该函数专门定位 Windows 安装目录，不能使用宿主系统的路径规则。
+  const binDirectory = path.win32.join(localAppData, 'OpenAI', 'Codex', 'bin');
   let entries;
   try {
     entries = filesystem.readdirSync(binDirectory, { withFileTypes: true });
@@ -84,7 +85,7 @@ function findDesktopCodexExecutable(options = {}) {
 
   const candidates = entries.map(entry => {
     if (!entry || typeof entry.isDirectory !== 'function' || !entry.isDirectory()) return null;
-    const executable = path.join(binDirectory, entry.name, 'codex.exe');
+    const executable = path.win32.join(binDirectory, entry.name, 'codex.exe');
     try {
       const stat = filesystem.statSync(executable);
       if (!stat.isFile()) return null;

@@ -16,6 +16,7 @@ docs/temp/*
 ```
 
 - 不得依赖本机未跟踪文件、历史构建产物、全局依赖或预先存在的目录让测试通过。
+- 解析固定平台路径时必须使用对应实现；例如在任意宿主系统解析 Windows 安装目录时使用 `path.win32`，不得使用随宿主变化的 `path` 默认方法。
 - 新增仓库结构断言后，必须确认目标文件已被 Git 跟踪：
 
 ```powershell
@@ -41,3 +42,4 @@ git ls-files docs/temp/.gitkeep
 ## 已知回归
 
 - `server/test/entrypoints.test.js` 会校验 `docs/temp` 存在。该目录必须通过 `docs/temp/.gitkeep` 保留，防止本机已有空目录掩盖干净检出失败。
+- `findDesktopCodexExecutable()` 在 Linux CI 中仍需解析 Windows 安装路径，必须使用 `path.win32.join()`，不能由 runner 平台决定分隔符。
