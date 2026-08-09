@@ -211,12 +211,19 @@ class CloudSessionCache {
     const bucket = this.bucket(token);
     const updatedAt = new Date().toISOString();
     bucket.updatedAt = updatedAt;
-    const nextOpen = [];
+    const hasAuthoritativeList = Array.isArray(payload.openThreadIds);
+    const openThreadIds = hasAuthoritativeList
+      ? Array.from(new Set(payload.openThreadIds.map(item => String(item || '').trim()).filter(Boolean)))
+      : bucket.openThreadIds;
+    const openThreadSet = new Set(openThreadIds);
+    let appliedSessionCount = 0;
+    let removedSessionCount = 0;
 
     for (const row of payload.sessions || []) {
       const threadId = String(row.threadId || '').trim();
-      if (!threadId) continue;
-      nextOpen.push(threadId);
+      // AI:增量内容只能更新当前权威打开线程，避免迟到消息让已归档缓存复活。
+      if (!threadId || !openThreadSet.has(threadId)) continue;
+      appliedSessionCount += 1;
       const existing = bucket.sessions.get(threadId) || { lines: [] };
       if (row.metadataOnly) {
         if (bucket.sessions.has(threadId)) {
@@ -287,13 +294,36 @@ class CloudSessionCache {
       });
     }
 
-    if (Array.isArray(payload.openThreadIds)) {
-      bucket.openThreadIds = payload.openThreadIds.map(item => String(item || '').trim()).filter(Boolean);
-    } else if (nextOpen.length) {
-      bucket.openThreadIds = nextOpen;
+    if (hasAuthoritativeList) {
+      // AI:权威目录在本次同步内同时驱动展示与物理清理，局部 sessions 增量无权保留已归档内容。
+      for (const threadId of bucket.sessions.keys()) {
+        if (!openThreadSet.has(threadId)) {
+          bucket.sessions.delete(threadId);
+          removedSessionCount += 1;
+        }
+      }
+      bucket.openThreadIds = openThreadIds;
     }
 
-    return { ok: true, updatedAt, sessionCount: bucket.sessions.size };
+    return {
+      ok: true,
+      updatedAt,
+      sessionCount: bucket.sessions.size,
+      appliedSessionCount,
+      removedSessionCount,
+    };
+  }
+
+  /**
+   * AI:判断线程是否仍属于电脑当前权威打开列表。
+   *
+   * @param {string} token 设备 token。
+   * @param {string} threadId 线程 ID。
+   * @returns {boolean} 线程当前是否打开。
+   */
+  hasOpenThread(token, threadId) {
+    const id = String(threadId || '').trim();
+    return Boolean(id && this.bucket(token).openThreadIds.includes(id));
   }
 
   /**
@@ -332,7 +362,9 @@ class CloudSessionCache {
    * @returns {{ok: boolean, available: boolean, threadId: string, sessionFile: string, messages: Array<object>, cached: boolean}} 历史结果。
    */
   history(token, threadId, limit = 120, before = '') {
-    const session = this.bucket(token).sessions.get(String(threadId || ''));
+    const session = this.hasOpenThread(token, threadId)
+      ? this.bucket(token).sessions.get(String(threadId || ''))
+      : null;
     if (!session) return { ok: true, available: false, threadId, sessionFile: '', messages: [], cached: true };
     const max = Math.max(1, Math.min(Number(limit) || 120, 200));
     const messages = session.parsed.messages || [];
@@ -363,7 +395,9 @@ class CloudSessionCache {
    * @returns {object} 状态结果。
    */
   status(token, threadId, since = '') {
-    const session = this.bucket(token).sessions.get(String(threadId || ''));
+    const session = this.hasOpenThread(token, threadId)
+      ? this.bucket(token).sessions.get(String(threadId || ''))
+      : null;
     if (!session) {
       return { ok: true, available: false, active: false, status: 'missing', threadId, sessionFile: '', preview: '', final: '', steps: [], turns: [], cached: true };
     }

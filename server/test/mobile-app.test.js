@@ -322,6 +322,10 @@ test('uni-app Android 手机端运行状态同时要求 Agent 在线和同步新
   assert.match(index, /function applyRelayState\(data\)/);
   assert.match(index, /syncVersion/);
   assert.match(index, /syncFresh/);
+  assert.match(index, /function isCommandConfirmed\(status, watch\)/);
+  assert.match(index, /confirmedControlTurnIds/);
+  assert.match(index, /confirmedTurnIds\.indexOf\(watch\.turnId\)\s*!==\s*-1/);
+  assert.match(index, /kind: 'send'/);
   assert.match(fetchThreadRowsFunction, /!applyRelayState\(data\)/);
   assert.doesNotMatch(fetchThreadRowsFunction, /agentState\.value = \{ online: true/);
   assert.match(threadDotFunction, /if \(!agentState\.value\.online\) return 'dot-gray';/);

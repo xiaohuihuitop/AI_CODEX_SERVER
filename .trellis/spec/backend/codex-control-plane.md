@@ -64,3 +64,71 @@ await appServer.interruptTurn(threadId);
 #### 正确
 
 先记录 App Server 回合标识和 JSONL 同步证据；若显示不一致，仅修复目录、状态或渲染投影。变更控制通道必须先完成能力矩阵、同线程端到端测试并获得明确审批。
+
+## 场景：权威目录清理与手机回合实时同步
+
+### 1. 范围 / 触发条件
+
+- 触发条件：修改 `openThreadIds`、Relay 会话缓存、Agent 同步游标、手机发送确认或实时刷新。
+- 电脑端侧栏是线程存在性的唯一权威来源；本地 JSONL 是已发送消息和完成状态的事实来源，未发送草稿不进入同步链路。
+
+### 2. 签名
+
+```js
+cache.applySync(token, {
+  openThreadIds: ['thread-id'],
+  sessions: [],
+  confirmedControlTurnIds: ['turn-id'],
+});
+
+inspectControlSyncEvidence(sessions, threadId, turnId);
+advanceControlSyncState(state, evidence, now);
+```
+
+- `openThreadIds: string[]`：本 Key 当前未归档线程的完整集合；显式空数组表示清空。
+- `sessions: object[]`：允许分批、增量或仅元数据，不能决定线程是否继续存在。
+- `confirmedControlTurnIds: string[]`：只包含已在目标线程 JSONL 中观察到的精确 App Server `turn.id`。
+
+### 3. 契约
+
+- `applySync` 必须在同一次调用内删除不在显式 `openThreadIds` 中的 `bucket.sessions` 对象，并返回 `removedSessionCount`。
+- 缺少 `openThreadIds` 的局部增量不得删除其他线程，也不得让已退出上一份权威集合的线程复活。
+- Agent 每秒执行一次轻量 Desktop 目录成员检查；稳定目录不得周期性全量扫描全部 JSONL。
+- 归档线程从同步目标移除时必须删除其本地同步游标，使重新打开后从完整快照重建。
+- 手机发送分两阶段：目标 `turn.id` 的用户消息落盘后确认发送，但继续优先同步该线程；同一 `turn.id` 的 `task_complete` 出现后才解除优先同步。
+- Relay 和手机/Web 不能用无关线程的 `syncVersion` 增长确认本次发送。
+
+### 4. 校验与错误矩阵
+
+| 条件 | 必须行为 |
+| --- | --- |
+| `openThreadIds: []` | 当前 Key 的 `sessions` 物理清空，返回同步确认 |
+| 未提供 `openThreadIds` | 仅应用合法增量，不执行目录清理 |
+| 增量线程不在当前权威集合 | 忽略该增量，不创建缓存对象 |
+| 历史/状态/控制请求指向归档线程 | 返回不可用或 `THREAD_NOT_OPEN`，不得穿透在线 Agent |
+| 同步包含其他回合或仅版本增长 | 不确认当前手机发送 |
+| 目标用户消息已落盘但回合未完成 | 确认该 `turn.id`，继续每秒优先同步目标线程 |
+| 目标回合完成 | 上传最终回复与完成状态，然后解除优先同步 |
+
+### 5. 正常 / 基准 / 异常案例
+
+- 正常：手机发送后约一个同步周期内看到用户消息，Codex 完成后下一个同步周期看到最终回复和完成状态。
+- 基准：目录成员未变化时，Agent 只做 SQLite 目录检查和当前批次增量读取，不全量解析所有会话。
+- 异常：线程归档后迟到的 JSONL 增量到达 Relay；Relay 忽略它，列表、历史、状态和控制接口仍不可访问该线程。
+
+### 6. 必需测试
+
+- `server/test/cloud-relay.test.js`：断言物理删除、空权威集合、字段缺失、迟到增量、Key 隔离、重开和在线 Agent 穿透阻断。
+- `server/test/desktop-agent.test.js`：断言目录轻量重排、归档移除游标、精确回合落盘/完成证据及两阶段状态推进。
+- `server/test/mobile-app.test.js`：断言手机只接受 `confirmedControlTurnIds` 中的精确 `turn.id`，并兼容 Android 调试基座。
+- 端到端：Web 发送唯一标识，核对同一 JSONL 的用户消息、`task_complete`、最终回复、Relay 精确回合确认和无需手动刷新的页面回显。
+
+### 7. 错误与正确做法
+
+#### 错误
+
+读到手机用户消息后立即清除 Agent 的优先同步目标，随后让最终回复等待普通轮转；或用任意 `syncVersion` 增长判定本次发送完成。
+
+#### 正确
+
+用户消息落盘只完成发送确认，Agent 仍保留同一线程为优先目标；只有读取到相同 `turn.id` 的完成证据后才解除优先同步。线程是否存在只由显式权威目录决定。

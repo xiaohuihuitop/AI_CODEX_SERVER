@@ -11,6 +11,7 @@ const legacyControlFiles = [
   path.join('src', 'windows-codex-controller.js'),
   path.join('src', 'codex-desktop-process.js'),
   path.join('scripts', 'win-codex-control.ps1'),
+  path.join('scripts', 'codex-desktop-manager-gui.ps1'),
 ];
 
 const productionSources = [
@@ -33,6 +34,7 @@ test('正式控制平面不保留 CDP 控制实现或旧本机桥接入口', () 
 
   const packageJson = JSON.parse(fs.readFileSync(path.join(desktopDir, 'package.json'), 'utf8'));
   assert.equal(packageJson.scripts.start, 'node desktop-agent.js');
+  assert.equal(Object.hasOwn(packageJson.scripts, 'start:manager:gui:legacy'), false);
   assert.equal(packageJson.build.files.includes('scripts/win-codex-control.ps1'), false);
   assert.equal(Object.hasOwn(packageJson.build, 'asarUnpack'), false);
 });

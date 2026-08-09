@@ -895,18 +895,35 @@ function applyThreadStatus(status) {
   currentThreadStatus.value = status;
   bindPendingAssistantTurn(status);
   syncManualProcessOpenState(status);
-  const commandConfirmed = pendingWatch.value
-    && pendingWatch.value.threadId === status.threadId
-    && syncState.value.fresh
-    && Number(status.syncVersion) > Number(pendingWatch.value.acceptedSyncVersion)
-    && (status.active || status.status === 'running' || status.status === 'complete' || status.status === 'error'
-      || (pendingWatch.value.kind === 'stop' && !status.active && status.status !== 'running'));
+  const commandConfirmed = isCommandConfirmed(status, pendingWatch.value);
   if (commandConfirmed) {
     pendingWatch.value = null;
     if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
     commandConfirmTimer = null;
   }
   return true;
+}
+
+/**
+ * AI:只用目标 App Server 回合证据确认发送，停止命令继续使用新同步后的空闲状态确认。
+ *
+ * @param {object} status 当前线程状态。
+ * @param {object|null} watch 待确认控制窗口。
+ * @returns {boolean} 控制命令已被目标线程同步确认时返回 true。
+ */
+function isCommandConfirmed(status, watch) {
+  if (!watch || watch.threadId !== status.threadId || !syncState.value.fresh) return false;
+  const stateConfirmed = status.active || status.status === 'running' || status.status === 'complete' || status.status === 'error';
+  if (watch.kind === 'send') {
+    const confirmedTurnIds = Array.isArray(status.confirmedControlTurnIds) ? status.confirmedControlTurnIds : [];
+    return Boolean(watch.turnId && confirmedTurnIds.indexOf(watch.turnId) !== -1 && stateConfirmed);
+  }
+  return Boolean(
+    watch.kind === 'stop'
+    && Number(status.syncVersion) > Number(watch.acceptedSyncVersion)
+    && !status.active
+    && status.status !== 'running'
+  );
 }
 
 /**
@@ -1077,11 +1094,7 @@ async function pollStatus(watch = pendingWatch.value || {}) {
   if (!canUpdateTask(token)) return;
   if (requestedThreadId !== selectedThreadId.value || data.threadId !== selectedThreadId.value) return;
   const waitingForDesktop = pendingWatch.value && pendingWatch.value.threadId === data.threadId;
-  const commandConfirmed = waitingForDesktop
-    && syncState.value.fresh
-    && Number(data.syncVersion) > Number(pendingWatch.value.acceptedSyncVersion)
-    && (data.active || data.status === 'running' || data.status === 'complete' || data.status === 'error'
-      || (pendingWatch.value.kind === 'stop' && !data.active && data.status !== 'running'));
+  const commandConfirmed = waitingForDesktop && isCommandConfirmed(data, pendingWatch.value);
   if ((data.status === 'complete' || data.status === 'error') && waitingForDesktop && !commandConfirmed) {
     if (!applyThreadStatus(data)) return;
     setNotice('正在等待电脑确认本次发送...');
@@ -1130,6 +1143,7 @@ async function send() {
     const sentAt = Date.now();
     const pending = registerPendingLocalSend(selectedThreadId.value, text, sentAt, messages.value.length);
     pendingWatch.value = Object.assign({}, data.watch || { threadId: selectedThreadId.value }, {
+      kind: 'send',
       acceptedSyncVersion: Number(data.acceptedSyncVersion) || syncState.value.version,
     });
     messages.value = messages.value.concat([

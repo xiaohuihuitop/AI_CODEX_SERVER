@@ -20,12 +20,16 @@ test('云端和桌面端入口文件存在并使用固定 token 环境变量', (
   assert.match(agent, /function syncProvider\(\)/);
   assert.match(agent, /api\.isBusy\(\)/);
   assert.match(agent, /const busy = api\.isBusy\(\)/);
-  assert.match(agent, /pendingControlSyncThreadId/);
-  assert.match(agent, /pendingControlSyncDeadline/);
-  assert.match(agent, /if \(!busy && !hasPendingControlTarget && now - lastDiscoveryAt >= discoveryIntervalMs\)/);
+  assert.match(agent, /let pendingControlSync = null/);
+  assert.match(agent, /pendingControlSync\.threadId/);
+  assert.match(agent, /if \(!busy && now - lastCatalogCheckAt >= catalogCheckIntervalMs\)/);
+  assert.match(agent, /reconcileDesktopCatalog/);
   assert.match(agent, /selectSyncBatch/);
   assert.match(agent, /持续优先同步目标对话直到读取到新记录/);
-  assert.match(agent, /hasControlSyncEvidence/);
+  assert.match(agent, /inspectControlSyncEvidence/);
+  assert.match(agent, /advanceControlSyncState/);
+  assert.match(agent, /手机发送已落盘/);
+  assert.match(agent, /手机回合完整同步/);
   assert.match(agent, /CODEX_AGENT_CONTROL_SYNC_TIMEOUT_MS \|\| 30000/);
   assert.doesNotMatch(agent, /if \(api\.isBusy\(\)\) \{\s*return null;\s*\}/);
   assert.match(agent, /createCodexAppServerClient/);
@@ -44,13 +48,15 @@ test('云端和桌面端入口文件存在并使用固定 token 环境变量', (
   assert.match(agent, /CODEX_AGENT_DISCOVERY_INTERVAL_MS \|\| 10000/);
   assert.match(agent, /CODEX_AGENT_SYNC_BATCH_SIZE \|\| 1/);
   assert.match(agent, /openThreadIds: knownThreadTargets\.map\(target => target\.threadId\)/);
+  assert.match(agent, /confirmedControlTurnIds/);
+  assert.match(agent, /syncOffsets\.delete\(threadId\)/);
+  assert.match(agent, /CODEX_AGENT_CATALOG_CHECK_INTERVAL_MS \|\| 1000/);
   assert.match(agent, /ws\.on\('control-complete'/);
   assert.match(agent, /lastDiscoveryAt = 0/);
 });
 
 test('桌面管理小软件入口使用本地管理端口和配置模块', () => {
   const manager = fs.readFileSync(path.join(desktopDir, 'desktop-manager-server.js'), 'utf8');
-  const gui = fs.readFileSync(path.join(desktopDir, 'scripts', 'codex-desktop-manager-gui.ps1'), 'utf8');
   const electronMain = fs.readFileSync(path.join(desktopDir, 'electron', 'main.js'), 'utf8');
   const electronPreload = fs.readFileSync(path.join(desktopDir, 'electron', 'preload.js'), 'utf8');
   const electronHtml = fs.readFileSync(path.join(desktopDir, 'electron', 'renderer.html'), 'utf8');
@@ -60,14 +66,6 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(manager, /createDesktopManagerServer/);
   assert.match(manager, /CODEX_MANAGER_PORT/);
   assert.match(manager, /Codex Desktop Manager/);
-  assert.match(gui, /System\.Windows\.Forms/);
-  assert.match(gui, /function U/);
-  assert.match(gui, /\\u7ba1\\u7406\\u5668/);
-  assert.doesNotMatch(gui, /[^\x00-\x7F]/);
-  assert.match(gui, /Start-Agent/);
-  assert.match(gui, /Stop-Agent/);
-  assert.match(gui, /function Get-AgentProcess/);
-  assert.match(gui, /\$AgentScriptPath/);
   assert.match(electronMain, /BrowserWindow/);
   assert.match(electronMain, /Tray/);
   assert.match(electronMain, /nativeImage/);
@@ -139,7 +137,7 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(electronRenderer, /if \(interactive\) setBusy\(false\)/);
   assert.match(electronRenderer, /if \(interactive\) elements\.saveState\.textContent = '状态已更新'/);
   assert.equal(desktopPkg.scripts['start:manager:gui'], 'electron electron/main.js');
-  assert.equal(desktopPkg.scripts['start:manager:gui:legacy'], 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-desktop-manager-gui.ps1');
+  assert.equal(Object.hasOwn(desktopPkg.scripts, 'start:manager:gui:legacy'), false);
   assert.equal(Object.hasOwn(desktopPkg.build, 'asarUnpack'), false);
   assert.equal(desktopPkg.scripts.start, 'node desktop-agent.js');
   assert.match(desktopPkg.scripts['build:manager:win'], /verify-manager-artifact\.js/);

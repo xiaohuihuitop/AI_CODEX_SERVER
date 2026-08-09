@@ -525,7 +525,7 @@ class CodexSessionReader {
   }
 
   /**
-   * AI:低频发现当前打开线程对应的会话文件，避免每次增量同步都扫目录和调用 CDP。
+   * AI:低频发现当前打开线程对应的会话文件，避免每次增量同步都扫描完整会话目录。
    *
    * @param {Array<{projectName: string, threadName: string}>} openTargets 当前打开线程目标。
    * @returns {Array<object>} 打开线程会话目标。

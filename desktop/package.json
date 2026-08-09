@@ -11,7 +11,6 @@
     "start:agent": "node desktop-agent.js",
     "start:manager": "node desktop-manager-server.js",
     "start:manager:gui": "electron electron/main.js",
-    "start:manager:gui:legacy": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/codex-desktop-manager-gui.ps1",
     "build:manager:win": "electron-builder --win dir && node scripts/verify-manager-artifact.js"
   },
   "dependencies": {

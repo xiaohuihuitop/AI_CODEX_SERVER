@@ -853,13 +853,17 @@
      * @returns {boolean} 已确认返回 true。
      */
     function isCommandConfirmed(status) {
+      if (!pendingWatch || pendingWatch.threadId !== status?.threadId || !syncState.fresh) return false;
+      const stateConfirmed = status.active || status.status === 'running' || status.status === 'complete' || status.status === 'error';
+      if (pendingWatch.kind === 'send') {
+        const confirmedTurnIds = Array.isArray(status.confirmedControlTurnIds) ? status.confirmedControlTurnIds : [];
+        return Boolean(pendingWatch.turnId && confirmedTurnIds.includes(pendingWatch.turnId) && stateConfirmed);
+      }
       return Boolean(
-        pendingWatch
-        && pendingWatch.threadId === status?.threadId
-        && syncState.fresh
+        pendingWatch.kind === 'stop'
         && Number(status.syncVersion) > Number(pendingWatch.acceptedSyncVersion)
-        && (status.active || status.status === 'running' || status.status === 'complete' || status.status === 'error'
-          || (pendingWatch.kind === 'stop' && !status.active && status.status !== 'running')),
+        && !status.active
+        && status.status !== 'running'
       );
     }
 
@@ -899,7 +903,7 @@
       const row = threadRows.find(item => item.id === selectedThreadId);
       const scopedStatus = statusData?.threadId === selectedThreadId ? statusData : null;
       if (scopedStatus && isCommandConfirmed(scopedStatus)) clearConfirmedCommandWatch();
-      const awaitingDesktopConfirmation = pendingWatch?.threadId === selectedThreadId && pendingWatch.kind === 'send-pending';
+      const awaitingDesktopConfirmation = pendingWatch?.threadId === selectedThreadId && pendingWatch.kind === 'send';
       if (awaitingDesktopConfirmation) {
         threadStatusEl.classList.remove('thread-status--running', 'thread-status--complete');
         threadStatusEl.title = '正在等待电脑确认发送';
@@ -1320,6 +1324,7 @@
         const sentAt = Date.now();
         const pendingLocal = registerPendingLocalSend(selectedThreadId, text, sentAt, messagesEl.querySelectorAll('.message').length);
         pendingWatch = Object.assign({}, data.watch || { threadId: selectedThreadId }, {
+          kind: 'send',
           acceptedSyncVersion: Number(data.acceptedSyncVersion) || syncState.version,
         });
         message('user', text, { id: pendingLocal.userId });

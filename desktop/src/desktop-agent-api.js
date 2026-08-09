@@ -35,7 +35,7 @@ class DesktopAgentApi {
   }
 
   async handle(action, payload = {}) {
-    // AI:本地读取不占用桌面控制锁，避免手机刷新因 CDP 控制执行而被拒绝。
+    // AI:本地读取不占用 App Server 控制锁，避免手机刷新被发送或停止操作阻塞。
     if (action === 'history') return this.history(payload);
     if (action === 'status') return this.status(payload);
     if (this.busy) throw requestError('桌面 Agent 正在处理上一条控制命令。', 'AGENT_BUSY', 409);

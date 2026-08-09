@@ -26,6 +26,8 @@ test('云端手机网页端通过实时通道接收状态更新，不使用固�
   assert.match(html, /new WebSocket\(url\)/);
   assert.match(html, /\/mobile\?token=/);
   assert.match(html, /data\.type === 'session-updated'/);
+  assert.match(html, /confirmedControlTurnIds/);
+  assert.match(html, /confirmedTurnIds\.includes\(pendingWatch\.turnId\)/);
   assert.doesNotMatch(html, /setInterval\(/);
 });
 
@@ -104,6 +106,42 @@ test('云端 relay 向同 token 手机推送 Agent 状态和会话更新事件',
 
   mobile.close();
   await closeRelayServer(server);
+});
+
+test('云端 relay 对空权威目录清理也返回同步确认', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['empty-ack-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+  });
+  const port = await listen(server);
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=empty-ack-token`);
+  await new Promise(resolve => agent.once('open', resolve));
+
+  try {
+    const acknowledged = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('空权威目录同步未收到确认')), 300);
+      agent.on('message', data => {
+        const message = JSON.parse(data.toString());
+        if (message.type !== 'session-sync-ack') return;
+        clearTimeout(timer);
+        resolve(message);
+      });
+    });
+    agent.send(JSON.stringify({
+      type: 'session-sync',
+      payload: { openThreadIds: [], sessions: [] },
+    }));
+    const ack = await acknowledged;
+
+    assert.equal(ack.sessionCount, 0);
+    assert.equal(ack.appliedSessionCount, 0);
+    assert.equal(ack.removedSessionCount, 0);
+    assert.ok(ack.updatedAt);
+  } finally {
+    agent.close();
+    await closeRelayServer(server);
+  }
 });
 
 test('云端 relay 在 Agent 未继续同步时标记状态过期并冻结版本', async () => {
@@ -206,6 +244,7 @@ test('云端 relay 将手机发送请求转发给 Agent', async () => {
   const opened = new Promise(resolve => agent.once('open', resolve));
   agent.on('message', data => {
     const message = JSON.parse(data.toString());
+    if (!message.action) return;
     assert.equal(message.action, 'send');
     assert.deepEqual(message.payload, { text: '你好', threadId: 'thread-1' });
     agent.send(JSON.stringify({
@@ -216,6 +255,14 @@ test('云端 relay 将手机发送请求转发给 Agent', async () => {
   });
 
   await opened;
+  agent.send(JSON.stringify({
+    type: 'session-sync',
+    payload: {
+      openThreadIds: ['thread-1'],
+      sessions: [{ threadId: 'thread-1', threadName: '发送线程', metadataOnly: true }],
+    },
+  }));
+  await new Promise(resolve => setTimeout(resolve, 20));
   const res = await fetch(`http://127.0.0.1:${port}/send?token=send-token`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -240,10 +287,20 @@ test('云端 relay 在 Agent 断开时立即结束待转发请求', async () => 
   const port = await listen(server);
   const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=disconnect-token`);
 
-  agent.on('message', () => {
+  agent.on('message', data => {
+    const message = JSON.parse(data.toString());
+    if (!message.action) return;
     agent.close();
   });
   await new Promise(resolve => agent.once('open', resolve));
+  agent.send(JSON.stringify({
+    type: 'session-sync',
+    payload: {
+      openThreadIds: ['thread-1'],
+      sessions: [{ threadId: 'thread-1', threadName: '断线线程', metadataOnly: true }],
+    },
+  }));
+  await new Promise(resolve => setTimeout(resolve, 20));
 
   const res = await fetch(`http://127.0.0.1:${port}/send?token=disconnect-token`, {
     method: 'POST',
@@ -323,6 +380,14 @@ test('云端 relay 在 Agent 在线时直接读取本机历史页，避免截断
   const port = await listen(server);
   const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=history-direct-token`);
   await new Promise(resolve => agent.once('open', resolve));
+  agent.send(JSON.stringify({
+    type: 'session-sync',
+    payload: {
+      openThreadIds: ['thread-1'],
+      sessions: [{ threadId: 'thread-1', threadName: '历史线程', metadataOnly: true }],
+    },
+  }));
+  await new Promise(resolve => setTimeout(resolve, 20));
   agent.on('message', data => {
     const message = JSON.parse(data.toString());
     if (message.action !== 'history') return;
@@ -363,6 +428,14 @@ test('云端 relay 在 Agent 在线时直接读取本机状态，避免快照缓
   const port = await listen(server);
   const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=status-direct-token`);
   await new Promise(resolve => agent.once('open', resolve));
+  agent.send(JSON.stringify({
+    type: 'session-sync',
+    payload: {
+      openThreadIds: ['thread-1'],
+      sessions: [{ threadId: 'thread-1', threadName: '状态线程', metadataOnly: true }],
+    },
+  }));
+  await new Promise(resolve => setTimeout(resolve, 20));
   agent.on('message', data => {
     const message = JSON.parse(data.toString());
     if (message.action !== 'status') return;
@@ -399,6 +472,144 @@ test('云端 relay 在 Agent 在线时直接读取本机状态，避免快照缓
   await closeRelayServer(server);
 });
 
+test('云端 relay 清理归档线程后拒绝历史状态和控制请求穿透到在线 Agent', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['archived-route-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+  });
+  const port = await listen(server);
+  const forwardedActions = [];
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=archived-route-token`);
+  await new Promise(resolve => agent.once('open', resolve));
+  agent.on('message', data => {
+    const message = JSON.parse(data.toString());
+    if (!message.id || !message.action) return;
+    forwardedActions.push(message.action);
+    const result = message.action === 'history'
+      ? { ok: true, available: true, threadId: 'thread-archived', messages: [{ role: 'user', text: '旧内容' }] }
+      : message.action === 'status'
+        ? { ok: true, available: true, threadId: 'thread-archived', active: false, status: 'complete', steps: [], turns: [] }
+        : { ok: true, threadId: 'thread-archived', turnId: 'stale-turn' };
+    agent.send(JSON.stringify({ id: message.id, ok: true, result }));
+  });
+
+  try {
+    agent.send(JSON.stringify({
+      type: 'session-sync',
+      payload: {
+        openThreadIds: ['thread-archived'],
+        sessions: [{ threadId: 'thread-archived', threadName: '即将归档', metadataOnly: true }],
+      },
+    }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    agent.send(JSON.stringify({
+      type: 'session-sync',
+      payload: { openThreadIds: [], sessions: [] },
+    }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    const historyRes = await fetch(`http://127.0.0.1:${port}/codex/history?token=archived-route-token&thread=thread-archived`);
+    const statusRes = await fetch(`http://127.0.0.1:${port}/codex/status?token=archived-route-token&thread=thread-archived`);
+    const sendRes = await fetch(`http://127.0.0.1:${port}/send?token=archived-route-token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ threadId: 'thread-archived', text: '不应发送' }),
+    });
+    const stopRes = await fetch(`http://127.0.0.1:${port}/codex/stop?token=archived-route-token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ threadId: 'thread-archived' }),
+    });
+    const [history, status, send, stop] = await Promise.all([
+      readJson(historyRes), readJson(statusRes), readJson(sendRes), readJson(stopRes),
+    ]);
+
+    assert.equal(history.available, false);
+    assert.equal(status.available, false);
+    assert.equal(sendRes.status, 409);
+    assert.equal(send.code, 'THREAD_NOT_OPEN');
+    assert.equal(stopRes.status, 409);
+    assert.equal(stop.code, 'THREAD_NOT_OPEN');
+    assert.deepEqual(forwardedActions, []);
+  } finally {
+    agent.close();
+    await closeRelayServer(server);
+  }
+});
+
+test('云端 relay 只用目标回合证据确认手机发送而不接受无关同步版本', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['control-confirm-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+  });
+  const port = await listen(server);
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=control-confirm-token`);
+  await new Promise(resolve => agent.once('open', resolve));
+  agent.on('message', data => {
+    const message = JSON.parse(data.toString());
+    if (!message.action) return;
+    if (message.action === 'send') {
+      agent.send(JSON.stringify({
+        id: message.id,
+        ok: true,
+        result: { ok: true, watch: { threadId: 'thread-1', turnId: 'turn-control-1', since: '2026-08-09T00:00:00.000Z' } },
+      }));
+      return;
+    }
+    if (message.action === 'status') {
+      agent.send(JSON.stringify({
+        id: message.id,
+        ok: true,
+        result: { ok: true, available: true, threadId: 'thread-1', active: false, status: 'complete', steps: [], turns: [] },
+      }));
+    }
+  });
+
+  try {
+    agent.send(JSON.stringify({
+      type: 'session-sync',
+      payload: {
+        openThreadIds: ['thread-1'],
+        sessions: [{ threadId: 'thread-1', threadName: '控制确认线程', metadataOnly: true }],
+      },
+    }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const send = await readJson(await fetch(`http://127.0.0.1:${port}/send?token=control-confirm-token`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ threadId: 'thread-1', text: '开始测试' }),
+    }));
+
+    agent.send(JSON.stringify({
+      type: 'session-sync',
+      payload: { openThreadIds: ['thread-1'], sessions: [] },
+    }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const unrelated = await readJson(await fetch(`http://127.0.0.1:${port}/codex/status?token=control-confirm-token&thread=thread-1`));
+
+    agent.send(JSON.stringify({
+      type: 'session-sync',
+      payload: {
+        openThreadIds: ['thread-1'],
+        sessions: [],
+        confirmedControlTurnIds: ['turn-control-1'],
+      },
+    }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    const confirmed = await readJson(await fetch(`http://127.0.0.1:${port}/codex/status?token=control-confirm-token&thread=thread-1`));
+
+    assert.equal(send.watch.turnId, 'turn-control-1');
+    assert.equal(unrelated.syncVersion > send.acceptedSyncVersion, true);
+    assert.equal((unrelated.confirmedControlTurnIds || []).includes('turn-control-1'), false);
+    assert.equal((confirmed.confirmedControlTurnIds || []).includes('turn-control-1'), true);
+  } finally {
+    agent.close();
+    await closeRelayServer(server);
+  }
+});
+
 test('云端缓存保留只含元数据的打开线程', () => {
   const cache = createCloudSessionCache();
   cache.applySync('metadata-token', {
@@ -419,6 +630,120 @@ test('云端缓存保留只含元数据的打开线程', () => {
     projectName: 'demo',
   }]);
   assert.equal(cache.history('metadata-token', 'thread-meta').available, true);
+});
+
+test('云端缓存收到权威线程列表后物理删除已归档线程', () => {
+  const cache = createCloudSessionCache();
+  cache.applySync('archive-token', {
+    openThreadIds: ['thread-keep', 'thread-archive'],
+    sessions: [
+      {
+        threadId: 'thread-keep',
+        threadName: '保留线程',
+        snapshot: {
+          messages: [{ role: 'user', text: '保留内容' }],
+          status: { active: false, status: 'complete', preview: '保留内容', final: '', steps: [], turns: [] },
+        },
+      },
+      {
+        threadId: 'thread-archive',
+        threadName: '归档线程',
+        snapshot: {
+          messages: [{ role: 'user', text: '必须删除的内容' }],
+          status: { active: false, status: 'complete', preview: '必须删除的内容', final: '', steps: [], turns: [] },
+        },
+      },
+    ],
+  });
+
+  cache.applySync('archive-token', {
+    openThreadIds: ['thread-keep'],
+    sessions: [{ threadId: 'thread-keep', threadName: '保留线程', metadataOnly: true }],
+  });
+
+  assert.deepEqual(cache.threads('archive-token').threads.map(thread => thread.id), ['thread-keep']);
+  assert.equal(cache.history('archive-token', 'thread-archive').available, false);
+  assert.equal(cache.status('archive-token', 'thread-archive').available, false);
+  assert.equal(cache.bucket('archive-token').sessions.has('thread-archive'), false);
+});
+
+test('云端缓存区分空权威列表与不含目录字段的增量同步', () => {
+  const cache = createCloudSessionCache();
+  cache.applySync('empty-list-token', {
+    openThreadIds: ['thread-1', 'thread-2'],
+    sessions: [
+      { threadId: 'thread-1', threadName: '线程 1', metadataOnly: true },
+      { threadId: 'thread-2', threadName: '线程 2', metadataOnly: true },
+    ],
+  });
+
+  cache.applySync('empty-list-token', {
+    sessions: [{ threadId: 'thread-1', threadName: '线程 1 已更新', metadataOnly: true }],
+  });
+  assert.deepEqual(cache.threads('empty-list-token').threads.map(thread => thread.id), ['thread-1', 'thread-2']);
+  assert.equal(cache.bucket('empty-list-token').sessions.size, 2);
+
+  cache.applySync('empty-list-token', { openThreadIds: [], sessions: [] });
+  assert.deepEqual(cache.threads('empty-list-token').threads, []);
+  assert.equal(cache.bucket('empty-list-token').sessions.size, 0);
+});
+
+test('云端缓存清理后忽略已归档线程的迟到增量', () => {
+  const cache = createCloudSessionCache();
+  cache.applySync('late-increment-token', {
+    openThreadIds: ['thread-archived'],
+    sessions: [{ threadId: 'thread-archived', threadName: '归档前', metadataOnly: true }],
+  });
+  cache.applySync('late-increment-token', { openThreadIds: [], sessions: [] });
+  cache.applySync('late-increment-token', {
+    sessions: [{
+      threadId: 'thread-archived',
+      threadName: '不应复活',
+      snapshot: {
+        messages: [{ role: 'user', text: '迟到内容' }],
+        status: { active: false, status: 'complete', preview: '迟到内容', final: '', steps: [], turns: [] },
+      },
+    }],
+  });
+
+  assert.equal(cache.bucket('late-increment-token').sessions.has('thread-archived'), false);
+  assert.equal(cache.history('late-increment-token', 'thread-archived').available, false);
+  assert.deepEqual(cache.threads('late-increment-token').threads, []);
+});
+
+test('云端缓存清理按 Key 隔离且重新打开线程后可重建缓存', () => {
+  const cache = createCloudSessionCache();
+  for (const token of ['computer-a', 'computer-b']) {
+    cache.applySync(token, {
+      openThreadIds: ['shared-thread-id'],
+      sessions: [{
+        threadId: 'shared-thread-id',
+        threadName: token,
+        snapshot: {
+          messages: [{ role: 'user', text: token }],
+          status: { active: false, status: 'complete', preview: token, final: '', steps: [], turns: [] },
+        },
+      }],
+    });
+  }
+
+  cache.applySync('computer-a', { openThreadIds: [], sessions: [] });
+  assert.equal(cache.history('computer-a', 'shared-thread-id').available, false);
+  assert.equal(cache.history('computer-b', 'shared-thread-id').messages[0].text, 'computer-b');
+
+  cache.applySync('computer-a', {
+    openThreadIds: ['shared-thread-id'],
+    sessions: [{
+      threadId: 'shared-thread-id',
+      threadName: '重新打开',
+      snapshot: {
+        messages: [{ role: 'user', text: '重新同步的新内容' }],
+        status: { active: true, status: 'running', preview: '重新同步', final: '', steps: [], turns: [] },
+      },
+    }],
+  });
+  assert.deepEqual(cache.history('computer-a', 'shared-thread-id').messages.map(message => message.text), ['重新同步的新内容']);
+  assert.equal(cache.status('computer-a', 'shared-thread-id').status, 'running');
 });
 
 test('云端缓存保存紧凑快照并按页面返回历史', () => {

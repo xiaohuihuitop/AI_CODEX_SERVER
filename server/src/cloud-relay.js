@@ -52,7 +52,13 @@ function legacyKeyStore(tokens) {
 
 function syncHealthFor(state, token) {
   if (!state.syncHealth.has(token)) {
-    state.syncHealth.set(token, { version: 0, lastSyncedAt: '', stale: true, timer: null });
+    state.syncHealth.set(token, {
+      version: 0,
+      lastSyncedAt: '',
+      stale: true,
+      timer: null,
+      confirmedControlTurns: new Map(),
+    });
   }
   return state.syncHealth.get(token);
 }
@@ -64,14 +70,22 @@ function relayStateForToken(state, token) {
     syncVersion: health.version,
     lastSyncedAt: health.lastSyncedAt,
     syncFresh: Boolean(isAgentOnline(state, token) && !health.stale && health.lastSyncedAt),
+    confirmedControlTurnIds: Array.from(health.confirmedControlTurns.keys()),
   };
 }
 
-function markSessionSynced(state, token, staleMs) {
+function markSessionSynced(state, token, staleMs, confirmedControlTurnIds = []) {
   const health = syncHealthFor(state, token);
   health.version += 1;
   health.lastSyncedAt = new Date().toISOString();
   health.stale = false;
+  for (const turnId of Array.from(new Set((confirmedControlTurnIds || []).map(item => String(item || '').trim()).filter(Boolean)))) {
+    health.confirmedControlTurns.delete(turnId);
+    health.confirmedControlTurns.set(turnId, health.version);
+  }
+  while (health.confirmedControlTurns.size > 20) {
+    health.confirmedControlTurns.delete(health.confirmedControlTurns.keys().next().value);
+  }
   if (health.timer) clearTimeout(health.timer);
   const version = health.version;
   health.timer = setTimeout(() => {
@@ -195,14 +209,19 @@ function attachAgent(state, ws, token, syncStaleMs) {
     }
     if (message.type === 'session-sync') {
       const result = state.cache.applySync(token, message.payload || {});
-      const syncState = markSessionSynced(state, token, syncStaleMs);
-      if (Array.isArray(message.payload?.sessions) && message.payload.sessions.length) {
-        ws.send(JSON.stringify({
-          type: 'session-sync-ack',
-          sessionCount: result.sessionCount,
-          updatedAt: result.updatedAt,
-        }));
-      }
+      const syncState = markSessionSynced(
+        state,
+        token,
+        syncStaleMs,
+        message.payload && message.payload.confirmedControlTurnIds,
+      );
+      ws.send(JSON.stringify({
+        type: 'session-sync-ack',
+        sessionCount: result.sessionCount,
+        appliedSessionCount: result.appliedSessionCount,
+        removedSessionCount: result.removedSessionCount,
+        updatedAt: result.updatedAt,
+      }));
       broadcastToMobileClients(state, token, Object.assign({
         type: 'session-updated',
         updatedAt: result.updatedAt,
@@ -280,6 +299,31 @@ function isPublicAssetRequest(req) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
   const ext = path.extname(url.pathname).toLowerCase();
   return PUBLIC_ASSET_EXTENSIONS.has(ext);
+}
+
+/**
+ * AI:校验控制请求只能作用于电脑当前打开的线程。
+ *
+ * @param {object} state Relay 运行状态。
+ * @param {string} token 设备 token。
+ * @param {string} threadId 线程 ID。
+ * @returns {string} 规范化线程 ID。
+ */
+function requireOpenThread(state, token, threadId) {
+  const id = String(threadId || '').trim();
+  if (!id) {
+    throw Object.assign(new Error('缺少对话标识。'), {
+      status: 400,
+      code: 'THREAD_ID_REQUIRED',
+    });
+  }
+  if (!state.cache.hasOpenThread(token, id)) {
+    throw Object.assign(new Error('目标对话已归档、删除或不在电脑当前线程列表中。'), {
+      status: 409,
+      code: 'THREAD_NOT_OPEN',
+    });
+  }
+  return id;
 }
 
 function isAdminRequest(url) {
@@ -388,7 +432,7 @@ function createCloudRelayServer(options = {}) {
       if (req.method === 'GET' && req.url.startsWith('/codex/history')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const threadId = url.searchParams.get('thread') || '';
-        if (isAgentOnline(state, token)) {
+        if (state.cache.hasOpenThread(token, threadId) && isAgentOnline(state, token)) {
           const direct = await forwardToAgent(state, token, 'history', {
             threadId,
             limit: url.searchParams.get('limit') || 120,
@@ -401,7 +445,7 @@ function createCloudRelayServer(options = {}) {
       if (req.method === 'GET' && req.url.startsWith('/codex/status')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const threadId = url.searchParams.get('thread') || '';
-        if (isAgentOnline(state, token)) {
+        if (state.cache.hasOpenThread(token, threadId) && isAgentOnline(state, token)) {
           const direct = await forwardToAgent(state, token, 'status', {
             threadId,
             since: url.searchParams.get('since') || '',
@@ -412,16 +456,18 @@ function createCloudRelayServer(options = {}) {
       }
       if (req.method === 'POST' && req.url.startsWith('/send')) {
         const payload = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');
+        const threadId = requireOpenThread(state, token, payload.threadId);
         const result = await forwardToAgent(state, token, 'send', {
           text: typeof payload.text === 'string' ? payload.text : '',
-          threadId: typeof payload.threadId === 'string' ? payload.threadId : '',
+          threadId,
         }, requestTimeoutMs);
         return sendJson(res, 200, Object.assign({}, result, { acceptedSyncVersion: syncHealthFor(state, token).version }));
       }
       if (req.method === 'POST' && req.url.startsWith('/codex/stop')) {
         const payload = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');
+        const threadId = requireOpenThread(state, token, payload.threadId);
         const result = await forwardToAgent(state, token, 'stop', {
-          threadId: typeof payload.threadId === 'string' ? payload.threadId : '',
+          threadId,
         }, requestTimeoutMs);
         return sendJson(res, 200, Object.assign({}, result, { acceptedSyncVersion: syncHealthFor(state, token).version }));
       }

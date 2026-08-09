@@ -3,7 +3,8 @@ const EventEmitter = require('node:events');
 const test = require('node:test');
 const { agentUrlFromServerUrl, createDesktopAgentClient, handleAgentRequest, isRecoverableSocketError, withTimeout } = require('../../desktop/src/desktop-agent-client');
 const { DesktopAgentApi } = require('../../desktop/src/desktop-agent-api');
-const { hasControlSyncEvidence, selectSyncBatch } = require('../../desktop/src/desktop-sync-batch');
+const { reconcileDesktopCatalog } = require('../../desktop/src/desktop-catalog-reconcile');
+const { advanceControlSyncState, inspectControlSyncEvidence, selectSyncBatch } = require('../../desktop/src/desktop-sync-batch');
 
 test('desktop-agent 将 HTTPS 云端地址转换为 WSS Agent 地址', () => {
   assert.equal(
@@ -14,6 +15,78 @@ test('desktop-agent 将 HTTPS 云端地址转换为 WSS Agent 地址', () => {
     agentUrlFromServerUrl('http://127.0.0.1:8791/base/', 'token 2'),
     'ws://127.0.0.1:8791/base/agent?token=token+2',
   );
+});
+
+test('Desktop 目录轻量检测在归档后立即移除目标且不扫描 JSONL', () => {
+  let discoveryCount = 0;
+  const result = reconcileDesktopCatalog({
+    previousCatalogThreadIds: ['thread-1', 'thread-2'],
+    previousTargets: [{ threadId: 'thread-1' }, { threadId: 'thread-2' }],
+    threads: [{ id: 'thread-2' }],
+    discoverTargets: () => {
+      discoveryCount += 1;
+      return [];
+    },
+  });
+
+  assert.deepEqual(result.catalogThreadIds, ['thread-2']);
+  assert.deepEqual(result.targets.map(item => item.threadId), ['thread-2']);
+  assert.equal(result.removedCount, 1);
+  assert.deepEqual(result.removedThreadIds, ['thread-1']);
+  assert.equal(result.addedCount, 0);
+  assert.equal(result.discovered, false);
+  assert.equal(discoveryCount, 0);
+});
+
+test('Desktop 目录检测在新增线程或定期刷新时执行完整映射', () => {
+  const discoveredInputs = [];
+  const discoverTargets = threads => {
+    discoveredInputs.push(threads.map(item => item.id));
+    return threads.map(item => ({ threadId: item.id }));
+  };
+  const added = reconcileDesktopCatalog({
+    previousCatalogThreadIds: ['thread-1'],
+    previousTargets: [{ threadId: 'thread-1' }],
+    threads: [{ id: 'thread-1' }, { id: 'thread-2' }],
+    discoverTargets,
+  });
+  const forced = reconcileDesktopCatalog({
+    previousCatalogThreadIds: added.catalogThreadIds,
+    previousTargets: [{ threadId: 'thread-1' }],
+    threads: [{ id: 'thread-1' }, { id: 'thread-2' }],
+    discoverTargets,
+    forceDiscovery: true,
+  });
+
+  assert.equal(added.addedCount, 1);
+  assert.equal(added.discovered, true);
+  assert.equal(forced.membershipChanged, false);
+  assert.equal(forced.discovered, true);
+  assert.deepEqual(forced.unresolvedThreadIds, ['thread-2']);
+  assert.deepEqual(discoveredInputs, [
+    ['thread-1', 'thread-2'],
+    ['thread-1', 'thread-2'],
+  ]);
+});
+
+test('Desktop 目录稳定时只按侧栏顺序重排且不重复扫描 JSONL', () => {
+  let discoveryCount = 0;
+  const result = reconcileDesktopCatalog({
+    previousCatalogThreadIds: ['thread-1', 'thread-2'],
+    previousTargets: [{ threadId: 'thread-1' }, { threadId: 'thread-2' }],
+    threads: [{ id: 'thread-2' }, { id: 'thread-1' }],
+    discoverTargets: () => {
+      discoveryCount += 1;
+      return [];
+    },
+    forceDiscovery: true,
+  });
+
+  assert.equal(result.membershipChanged, false);
+  assert.equal(result.orderChanged, true);
+  assert.equal(result.discovered, false);
+  assert.equal(discoveryCount, 0);
+  assert.deepEqual(result.targets.map(item => item.threadId), ['thread-2', 'thread-1']);
 });
 
 test('手机控制后的目标线程优先同步且不打乱常规轮转游标', () => {
@@ -33,13 +106,102 @@ test('手机控制后的目标线程优先同步且不打乱常规轮转游标',
   assert.equal(regular.nextCursor, 0);
 });
 
-test('手机控制目标只有同步到新 JSONL 或快照后才解除优先同步', () => {
-  assert.equal(hasControlSyncEvidence([], 'thread-1'), false);
-  assert.equal(hasControlSyncEvidence([{ threadId: 'thread-1', metadataOnly: true }], 'thread-1'), false);
-  assert.equal(hasControlSyncEvidence([{ threadId: 'thread-1', lines: [] }], 'thread-1'), false);
-  assert.equal(hasControlSyncEvidence([{ threadId: 'thread-1', lines: ['{"type":"event_msg"}'] }], 'thread-1'), true);
-  assert.equal(hasControlSyncEvidence([{ threadId: 'thread-1', snapshot: { messages: [] } }], 'thread-1'), true);
-  assert.equal(hasControlSyncEvidence([{ threadId: 'thread-2', snapshot: { messages: [] } }], 'thread-1'), false);
+test('手机发送目标分别确认用户消息落盘和同一回合完成', () => {
+  const turnId = 'turn-1';
+  assert.deepEqual(inspectControlSyncEvidence([], 'thread-1', turnId), { accepted: false, completed: false });
+  assert.deepEqual(
+    inspectControlSyncEvidence([{ threadId: 'thread-1', metadataOnly: true }], 'thread-1', turnId),
+    { accepted: false, completed: false },
+  );
+  assert.deepEqual(
+    inspectControlSyncEvidence([{
+      threadId: 'thread-1',
+      snapshot: {
+        messages: [{ role: 'user', turnId, text: '手机消息' }],
+        status: { turns: [{ turnId, status: 'running', final: '' }] },
+      },
+    }], 'thread-1', turnId),
+    { accepted: true, completed: false },
+  );
+  assert.deepEqual(
+    inspectControlSyncEvidence([{
+      threadId: 'thread-1',
+      snapshot: {
+        messages: [
+          { role: 'user', turnId, text: '手机消息' },
+          { role: 'assistant', turnId, text: '电脑回复' },
+        ],
+        status: { turns: [{ turnId, status: 'complete', final: '电脑回复' }] },
+      },
+    }], 'thread-1', turnId),
+    { accepted: true, completed: true },
+  );
+});
+
+test('手机发送增量同步只接受同一回合证据', () => {
+  const userLine = JSON.stringify({
+    type: 'response_item',
+    payload: {
+      type: 'message',
+      role: 'user',
+      internal_chat_message_metadata_passthrough: { turn_id: 'turn-1' },
+    },
+  });
+  const completeLine = JSON.stringify({
+    type: 'event_msg',
+    payload: { type: 'task_complete', turn_id: 'turn-1', last_agent_message: '电脑回复' },
+  });
+
+  assert.deepEqual(
+    inspectControlSyncEvidence([{ threadId: 'thread-1', lines: [userLine] }], 'thread-1', 'turn-1'),
+    { accepted: true, completed: false },
+  );
+  assert.deepEqual(
+    inspectControlSyncEvidence([{ threadId: 'thread-1', lines: [userLine, completeLine] }], 'thread-1', 'turn-1'),
+    { accepted: true, completed: true },
+  );
+  assert.deepEqual(
+    inspectControlSyncEvidence([{ threadId: 'thread-1', lines: [completeLine] }], 'thread-1', 'turn-2'),
+    { accepted: false, completed: false },
+  );
+});
+
+test('手机停止命令仍以目标线程出现新同步内容作为完成证据', () => {
+  assert.deepEqual(inspectControlSyncEvidence([], 'thread-1'), { accepted: false, completed: false });
+  assert.deepEqual(
+    inspectControlSyncEvidence([{ threadId: 'thread-1', lines: ['{"type":"event_msg"}'] }], 'thread-1'),
+    { accepted: true, completed: true },
+  );
+});
+
+test('手机发送在落盘确认后继续优先同步直到同一回合完成', () => {
+  const initial = { threadId: 'thread-1', turnId: 'turn-1', accepted: false, deadline: 2000 };
+  const accepted = advanceControlSyncState(initial, { accepted: true, completed: false }, 1000);
+  const completed = advanceControlSyncState(accepted.state, { accepted: true, completed: true }, 1500);
+
+  assert.deepEqual(accepted.state, { threadId: 'thread-1', turnId: 'turn-1', accepted: true, deadline: 2000 });
+  assert.deepEqual(accepted.confirmedTurnIds, ['turn-1']);
+  assert.equal(accepted.acceptedNow, true);
+  assert.equal(accepted.completedNow, false);
+  assert.equal(accepted.timedOut, false);
+  assert.equal(completed.state, null);
+  assert.deepEqual(completed.confirmedTurnIds, []);
+  assert.equal(completed.completedNow, true);
+});
+
+test('手机发送只有在尚未落盘时应用确认超时', () => {
+  const pending = { threadId: 'thread-1', turnId: 'turn-1', accepted: false, deadline: 2000 };
+  const timedOut = advanceControlSyncState(pending, { accepted: false, completed: false }, 2000);
+  const acceptedLongTurn = advanceControlSyncState(
+    { threadId: 'thread-1', turnId: 'turn-1', accepted: true, deadline: 2000 },
+    { accepted: true, completed: false },
+    5000,
+  );
+
+  assert.equal(timedOut.state, null);
+  assert.equal(timedOut.timedOut, true);
+  assert.deepEqual(acceptedLongTurn.state, { threadId: 'thread-1', turnId: 'turn-1', accepted: true, deadline: 2000 });
+  assert.equal(acceptedLongTurn.timedOut, false);
 });
 
 test('desktop-agent 只处理带 id 和 action 的请求', async () => {
@@ -329,6 +491,7 @@ test('desktop-agent 为手机控制命令发出接收、完成和失败事件', 
 
   assert.deepEqual(received.map(event => event.action), ['send', 'stop']);
   assert.deepEqual(completed.map(event => event.action), ['send']);
+  assert.deepEqual(completed[0].result, { ok: true });
   assert.equal(failed.length, 1);
   assert.equal(failed[0].action, 'stop');
   assert.equal(failed[0].error.code, 'THREAD_NOT_RUNNING');

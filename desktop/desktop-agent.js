@@ -2,9 +2,10 @@ const { createDesktopAgentApi } = require('./src/desktop-agent-api');
 const { createDesktopAgentClient } = require('./src/desktop-agent-client');
 const { createCodexAppServerClient } = require('./src/codex-app-server-client');
 const { createCodexDesktopThreadCatalog } = require('./src/codex-desktop-thread-catalog');
+const { reconcileDesktopCatalog } = require('./src/desktop-catalog-reconcile');
 const { CodexSessionReader } = require('./src/codex-session-reader');
 const { AGENT_STATUS_HEARTBEAT_MS, writeAgentStatus } = require('./src/desktop-agent-status');
-const { hasControlSyncEvidence, selectSyncBatch } = require('./src/desktop-sync-batch');
+const { advanceControlSyncState, inspectControlSyncEvidence, selectSyncBatch } = require('./src/desktop-sync-batch');
 
 const serverUrl = process.env.CODEX_CLOUD_URL || '';
 const token = process.env.CODEX_DEVICE_TOKEN || '';
@@ -20,20 +21,23 @@ const appServer = createCodexAppServerClient();
 const reader = new CodexSessionReader();
 const desktopCatalog = createCodexDesktopThreadCatalog();
 const syncOffsets = new Map();
+const catalogCheckIntervalMs = Math.max(1000, Number(process.env.CODEX_AGENT_CATALOG_CHECK_INTERVAL_MS || 1000));
 const discoveryIntervalMs = Math.max(5000, Number(process.env.CODEX_AGENT_DISCOVERY_INTERVAL_MS || 10000));
 const syncBatchSize = Math.max(1, Number(process.env.CODEX_AGENT_SYNC_BATCH_SIZE || 1));
 const controlSyncTimeoutMs = Math.max(5000, Number(process.env.CODEX_AGENT_CONTROL_SYNC_TIMEOUT_MS || 30000));
 let knownThreadTargets = [];
+let knownCatalogThreadIds = [];
+let lastCatalogCheckAt = 0;
 let lastDiscoveryAt = 0;
 let syncBatchCursor = 0;
 let pendingCatalogMetadata = true;
-let pendingControlSyncThreadId = '';
-let pendingControlSyncDeadline = 0;
+let pendingControlSync = null;
 let lastAppServerError = '';
 let appServerState = 'starting';
 let appServerStatusMessage = '正在初始化本机 stdio 会话服务';
 let appServerCodexVersion = '';
 let lastAppServerStatusAt = 0;
+let lastConfirmedSessionCount = null;
 
 /**
  * AI:将 app-server 生命周期写入管理器可跨进程读取的本机状态文件。
@@ -63,8 +67,7 @@ function reportAppServerStatus(state, message, force = false) {
   }
 }
 
-function discoverDesktopThreadTargets() {
-  const threads = desktopCatalog.listThreads();
+function discoverDesktopThreadTargets(threads = desktopCatalog.listThreads()) {
   const targets = reader.discoverDesktopThreadSessions(threads);
   applyAppServerRuntime(targets);
   return { threads, targets };
@@ -84,7 +87,7 @@ function createCatalogMetadata(targets) {
 }
 
 function nextSyncBatch(targets) {
-  const selection = selectSyncBatch(targets, syncBatchCursor, syncBatchSize, pendingControlSyncThreadId);
+  const selection = selectSyncBatch(targets, syncBatchCursor, syncBatchSize, pendingControlSync && pendingControlSync.threadId);
   if (!selection.prioritized) syncBatchCursor = selection.nextCursor;
   return selection.targets;
 }
@@ -102,6 +105,8 @@ const api = createDesktopAgentApi({
   listThreads: async () => {
     const listed = discoverDesktopThreadTargets();
     knownThreadTargets = listed.targets;
+    knownCatalogThreadIds = listed.threads.map(thread => thread.id);
+    lastCatalogCheckAt = Date.now();
     lastDiscoveryAt = Date.now();
     return {
       threads: listed.targets.map(target => ({
@@ -198,40 +203,66 @@ async function syncProvider() {
   reportAppServerStatus(appServerState, appServerStatusMessage);
   const busy = api.isBusy();
   const now = Date.now();
-  let hasPendingControlTarget = Boolean(pendingControlSyncThreadId && knownThreadTargets.some(target => target.threadId === pendingControlSyncThreadId));
-  if (!busy && !hasPendingControlTarget && now - lastDiscoveryAt >= discoveryIntervalMs) {
-    lastDiscoveryAt = now;
-    console.log('列表同步中：读取 Codex Desktop 侧栏对话');
+  let hasPendingControlTarget = Boolean(pendingControlSync && knownThreadTargets.some(target => target.threadId === pendingControlSync.threadId));
+  if (!busy && now - lastCatalogCheckAt >= catalogCheckIntervalMs) {
+    lastCatalogCheckAt = now;
     try {
-      const listed = discoverDesktopThreadTargets();
-      knownThreadTargets = listed.targets;
-      syncBatchCursor = 0;
-      pendingCatalogMetadata = true;
-      console.log(`列表同步完成：Desktop 未归档 ${listed.threads.length} 个对话，匹配 ${knownThreadTargets.length} 个本地记录`);
+      const threads = desktopCatalog.listThreads();
+      const forceDiscovery = now - lastDiscoveryAt >= discoveryIntervalMs;
+      const reconciled = reconcileDesktopCatalog({
+        previousCatalogThreadIds: knownCatalogThreadIds,
+        previousTargets: knownThreadTargets,
+        threads,
+        discoverTargets: rows => reader.discoverDesktopThreadSessions(rows),
+        forceDiscovery,
+      });
+      if (forceDiscovery) lastDiscoveryAt = now;
+      if (reconciled.discovered) {
+        console.log('列表同步中：读取 Codex Desktop 侧栏对话并映射本地记录');
+      } else if (reconciled.removedCount) {
+        console.log(`列表变更检测：归档或删除 ${reconciled.removedCount} 个对话，准备清理服务器缓存`);
+      }
+      for (const threadId of reconciled.removedThreadIds) syncOffsets.delete(threadId);
+      if (reconciled.membershipChanged || reconciled.orderChanged || reconciled.discovered) {
+        knownThreadTargets = reconciled.targets;
+      }
+      if (reconciled.membershipChanged || reconciled.discovered) {
+        syncBatchCursor = 0;
+        pendingCatalogMetadata = true;
+      }
+      knownCatalogThreadIds = reconciled.catalogThreadIds;
+      if (reconciled.discovered) console.log(`列表同步完成：Desktop 未归档 ${threads.length} 个对话，匹配 ${knownThreadTargets.length} 个本地记录`);
     } catch (error) {
       console.error(`Desktop 线程目录不可用：${error.message}`);
       throw error;
     }
   }
   applyAppServerRuntime(knownThreadTargets);
-  hasPendingControlTarget = Boolean(pendingControlSyncThreadId && knownThreadTargets.some(target => target.threadId === pendingControlSyncThreadId));
-  if (hasPendingControlTarget) console.log(`手机控制状态同步：${describeControlThread(pendingControlSyncThreadId)}`);
+  hasPendingControlTarget = Boolean(pendingControlSync && knownThreadTargets.some(target => target.threadId === pendingControlSync.threadId));
+  if (hasPendingControlTarget) console.log(`手机控制状态同步：${describeControlThread(pendingControlSync.threadId)}`);
   const catalogMetadata = pendingCatalogMetadata && !hasPendingControlTarget ? createCatalogMetadata(knownThreadTargets) : [];
   const batch = catalogMetadata.length ? [] : nextSyncBatch(knownThreadTargets);
-  const synchronizedControlThreadId = pendingControlSyncThreadId;
+  const synchronizedControl = pendingControlSync;
   const snapshot = reader.readKnownThreadSync(batch, syncOffsets, {
     initialLineLimit: Number(process.env.CODEX_AGENT_INITIAL_SYNC_LINES || 1000),
     snapshotMessageLimit: Number(process.env.CODEX_AGENT_SNAPSHOT_MESSAGES || 50),
     syncByteLimit: Number(process.env.CODEX_AGENT_SYNC_BYTE_LIMIT || 512 * 1024),
   });
-  if (synchronizedControlThreadId && hasControlSyncEvidence(snapshot.sessions, synchronizedControlThreadId)) {
-    pendingControlSyncThreadId = '';
-    pendingControlSyncDeadline = 0;
-    console.log(`手机控制同步完成：${describeControlThread(synchronizedControlThreadId)}`);
-  } else if (synchronizedControlThreadId && now >= pendingControlSyncDeadline) {
-    console.error(`手机控制同步未确认：${describeControlThread(synchronizedControlThreadId)}，等待 Desktop 写入超时`);
-    pendingControlSyncThreadId = '';
-    pendingControlSyncDeadline = 0;
+  let confirmedControlTurnIds = [];
+  if (synchronizedControl) {
+    const evidence = inspectControlSyncEvidence(snapshot.sessions, synchronizedControl.threadId, synchronizedControl.turnId);
+    const transition = advanceControlSyncState(synchronizedControl, evidence, now);
+    pendingControlSync = transition.state;
+    confirmedControlTurnIds = transition.confirmedTurnIds;
+    if (transition.acceptedNow && synchronizedControl.turnId) {
+      console.log(`手机发送已落盘：${describeControlThread(synchronizedControl.threadId)}，继续同步同一回合的回复`);
+    }
+    if (transition.completedNow) {
+      const message = synchronizedControl.turnId ? '手机回合完整同步' : '手机控制同步完成';
+      console.log(`${message}：${describeControlThread(synchronizedControl.threadId)}`);
+    } else if (transition.timedOut) {
+      console.error(`手机控制同步未确认：${describeControlThread(synchronizedControl.threadId)}，等待 Desktop 写入超时`);
+    }
   }
   if (catalogMetadata.length) pendingCatalogMetadata = false;
   const sessions = catalogMetadata.length ? catalogMetadata : snapshot.sessions;
@@ -250,6 +281,7 @@ async function syncProvider() {
     syncedAt: new Date().toISOString(),
     openThreadIds: knownThreadTargets.map(target => target.threadId),
     sessions,
+    confirmedControlTurnIds,
   };
 }
 
@@ -294,19 +326,25 @@ const ws = createDesktopAgentClient({
 
 ws.on('open', () => {
   syncOffsets.clear();
+  knownCatalogThreadIds = [];
+  lastCatalogCheckAt = 0;
   lastDiscoveryAt = 0;
   knownThreadTargets = [];
   syncBatchCursor = 0;
   pendingCatalogMetadata = true;
-  pendingControlSyncThreadId = '';
-  pendingControlSyncDeadline = 0;
+  pendingControlSync = null;
+  lastConfirmedSessionCount = null;
   console.log(`Desktop agent connected: ${deviceName}`);
   console.log('同步游标已重置：将重新上传本地对话列表和历史快照');
 });
 
-ws.on('control-complete', ({ action, payload }) => {
-  pendingControlSyncThreadId = String(payload && payload.threadId || '').trim();
-  pendingControlSyncDeadline = Date.now() + controlSyncTimeoutMs;
+ws.on('control-complete', ({ action, payload, result }) => {
+  pendingControlSync = {
+    threadId: String(payload && payload.threadId || '').trim(),
+    turnId: action === 'send' ? String(result && result.watch && result.watch.turnId || '').trim() : '',
+    accepted: false,
+    deadline: Date.now() + controlSyncTimeoutMs,
+  };
   console.log(`控制命令已确认：${action}，持续优先同步目标对话直到读取到新记录`);
 });
 ws.on('control-failed', ({ action, payload, error }) => {
@@ -327,7 +365,14 @@ ws.on('sync-sent', payload => {
   console.log(`同步请求已发送：${sessions.length} 个对话，${snapshotCount} 个携带历史快照，${describeSyncedThreads(sessions)}`);
 });
 ws.on('sync-ack', ack => {
-  console.log(`服务器已确认同步：缓存 ${Number(ack.sessionCount) || 0} 个对话，${ack.updatedAt || ''}`);
+  const sessionCount = Number(ack.sessionCount) || 0;
+  const appliedSessionCount = Number(ack.appliedSessionCount) || 0;
+  const removedSessionCount = Number(ack.removedSessionCount) || 0;
+  if (lastConfirmedSessionCount === null || sessionCount !== lastConfirmedSessionCount || appliedSessionCount || removedSessionCount) {
+    const removed = removedSessionCount ? `，物理清理 ${removedSessionCount} 个对话缓存` : '';
+    console.log(`服务器已确认同步：缓存 ${sessionCount} 个对话${removed}，${ack.updatedAt || ''}`);
+  }
+  lastConfirmedSessionCount = sessionCount;
 });
 
 function shutdown() {
