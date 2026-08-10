@@ -123,6 +123,7 @@ advanceControlSyncState(state, evidence, now);
 - `server/test/desktop-agent.test.js`：断言目录轻量重排、归档移除游标、精确回合落盘/完成证据及两阶段状态推进。
 - `server/test/mobile-app.test.js`：断言手机只接受 `confirmedControlTurnIds` 中的精确 `turn.id`，并兼容 Android 调试基座。
 - 端到端：Web 发送唯一标识，核对同一 JSONL 的用户消息、`task_complete`、最终回复、Relay 精确回合确认和无需手动刷新的页面回显。
+- 端到端验收优先复用 Desktop 侧栏中已存在的测试线程；确需通过 App Server 新建隔离线程时，必须在 `finally` 中调用 `thread/archive`，并确认 SQLite 已归档、Relay 目录已清理、Web/手机列表已消失。禁止把未归档验收线程遗留在真实目录中。
 
 ### 7. 错误与正确做法
 
