@@ -369,3 +369,31 @@ manager-config
   都不得开始实现。
 - 回归验证至少覆盖：构建产物不含 CDP 控制代码、网页发送能写入目标本地 JSONL 并收到回复、管理器状态
   显示 App Server 就绪和内置 Codex 版本。详细契约见 [Codex 控制平面](../backend/codex-control-plane.md)。
+
+## Realtime Thread State and History Convergence
+
+The mobile app and web relay receive two related but independently timed
+projections of a Codex turn:
+
+```text
+App Server event stream -> realtime state overlay -> status indicator
+Desktop JSONL sync      -> relay history/status  -> rendered messages
+```
+
+These projections are not ordered. A `turn.completed` event can arrive before
+the final assistant row is visible in `/codex/history`, and a history/status
+snapshot can omit the turn that produced the live event because the endpoint
+returns a bounded page. Consumers must therefore apply both rules:
+
+- A newer authoritative terminal snapshot (`completedAt >= observedAt`) clears
+  a stale running overlay even when its `turnId` is absent from the bounded
+  `turns` list.
+- A terminal event queues a bounded follow-up refresh until the matching
+  assistant row is present. Coalescing must preserve the newest terminal
+  request with its `turnId`; ordinary `session-updated` events must not replace
+  it.
+
+Do not use a single status response as proof that history is complete. Any
+change to the event payload, history pagination, or status reducer must test
+the out-of-order sequence (`turn.started -> terminal status -> final history`)
+and the missing-terminal-event sequence (`turn.started -> final history`).

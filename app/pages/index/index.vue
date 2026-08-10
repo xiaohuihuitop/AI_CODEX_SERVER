@@ -136,11 +136,14 @@ const switchingThread = ref(false);
 const threadPopupOpen = ref(false);
 const scrollTarget = ref('');
 const AUTO_REFRESH_INTERVAL_MS = 4000;
+const REALTIME_REFRESH_RETRY_LIMIT = 6;
+const REALTIME_REFRESH_RETRY_DELAY_MS = 500;
 let threadListRequest = null;
 let switchRequestSeq = 0;
 let realtimeSocket = null;
 let realtimeReconnectTimer = null;
 let realtimeRefreshTimer = null;
+let pendingRealtimeRefreshOptions = null;
 let automaticRefreshTimer = null;
 let commandConfirmTimer = null;
 let mountedOnce = false;
@@ -932,7 +935,7 @@ function applyThreadStatus(status) {
 }
 
 /**
- * AI:只有权威状态包含同一回合且状态一致时才移除实时覆盖，避免旧快照造成闪烁。
+ * AI:同一回合状态已确认，或权威终态晚于实时事件时移除覆盖，避免旧状态长期卡住。
  *
  * @param {object} status HTTP 返回的线程状态。
  * @returns {void}
@@ -944,7 +947,18 @@ function reconcileRealtimeThreadState(status) {
   const authoritativeStatus = status.active || status.status === 'running' ? 'running' : status.status;
   const turns = Array.isArray(status.turns) ? status.turns : [];
   const turnConfirmed = !realtime.turnId || turns.some(turn => turn && turn.turnId === realtime.turnId);
-  if (!turnConfirmed || authoritativeStatus !== realtime.status) return;
+  const historyHasFinalReply = Boolean(realtime.turnId && messages.value.some(row => row
+    && row.role === 'assistant'
+    && row.turnId === realtime.turnId
+    && row.text));
+  const completedAt = Date.parse(status.completedAt || '');
+  const observedAt = Date.parse(realtime.observedAt || '');
+  const terminalSnapshotIsNewer = authoritativeStatus !== 'running'
+    && Number.isFinite(completedAt)
+    && Number.isFinite(observedAt)
+    && completedAt >= observedAt;
+  const realtimeStateConfirmed = turnConfirmed && authoritativeStatus === realtime.status;
+  if (!historyHasFinalReply && !realtimeStateConfirmed && !terminalSnapshotIsNewer) return;
   const next = Object.assign({}, realtimeThreadStates.value);
   delete next[threadId];
   realtimeThreadStates.value = next;
@@ -1238,16 +1252,48 @@ async function stop() {
 }
 
 /**
- * AI:处理实时通道事件后的缓存刷新，合并短时间内连续到达的同步事件。
+ * AI:检查当前历史是否已包含目标回合的最终回复。
  *
+ * @param {string} turnId App Server 回合标识。
+ * @returns {boolean} 已包含非空最终回复时返回 true。
+ */
+function historyHasAssistantTurn(turnId) {
+  const id = String(turnId || '').trim();
+  return Boolean(id && messages.value.some(row => row && row.role === 'assistant' && row.turnId === id && row.text));
+}
+
+/**
+ * AI:合并刷新意图，优先保留带回合标识的终态，避免连续事件吞掉最终历史刷新。
+ *
+ * @param {object|null} current 已排队的刷新参数。
+ * @param {object} incoming 新到达的刷新参数。
+ * @returns {object} 合并后的刷新参数。
+ */
+function mergeRealtimeRefreshOptions(current, incoming = {}) {
+  const previous = current ? Object.assign({ attempt: 0 }, current) : null;
+  const next = Object.assign({ attempt: 0 }, incoming);
+  if (!previous) return next;
+  if (next.terminal && next.turnId) return next;
+  if (previous.terminal && previous.turnId) return previous;
+  return next;
+}
+
+/**
+ * AI:处理实时通道事件后的缓存刷新，并在最终回复尚未落盘时继续核对。
+ *
+ * @param {object} options 刷新目标、回合和重试次数。
  * @returns {void}
  */
-function scheduleRealtimeRefresh() {
-  if (realtimeRefreshTimer || !canUpdatePage()) return;
+function scheduleRealtimeRefresh(options = {}) {
+  if (!canUpdatePage()) return;
+  pendingRealtimeRefreshOptions = mergeRealtimeRefreshOptions(pendingRealtimeRefreshOptions, options);
+  if (realtimeRefreshTimer) return;
+  const refreshOptions = pendingRealtimeRefreshOptions;
+  pendingRealtimeRefreshOptions = null;
   realtimeRefreshTimer = setTimeout(async () => {
     realtimeRefreshTimer = null;
     if (switchingThread.value || loading.value) {
-      scheduleRealtimeRefresh();
+      scheduleRealtimeRefresh(refreshOptions);
       return;
     }
     try {
@@ -1255,8 +1301,19 @@ function scheduleRealtimeRefresh() {
       if (selectedThreadId.value) await loadHistory(null, { scrollToBottom: followBottom.value, silent: true });
     } catch (error) {
       setNotice(error.message);
+    } finally {
+      if (refreshOptions.terminal && refreshOptions.turnId
+        && selectedThreadId.value === refreshOptions.threadId
+        && !historyHasAssistantTurn(refreshOptions.turnId)
+        && refreshOptions.attempt < REALTIME_REFRESH_RETRY_LIMIT) {
+        pendingRealtimeRefreshOptions = mergeRealtimeRefreshOptions(
+          pendingRealtimeRefreshOptions,
+          Object.assign({}, refreshOptions, { attempt: refreshOptions.attempt + 1 }),
+        );
+      }
+      if (pendingRealtimeRefreshOptions) scheduleRealtimeRefresh();
     }
-  }, 180);
+  }, refreshOptions.attempt ? REALTIME_REFRESH_RETRY_DELAY_MS : 180);
 }
 
 /**
@@ -1381,7 +1438,13 @@ function handleRealtimeEvent(event) {
   if (!applyRelayState(event)) return;
   if (event.type === 'thread-event') {
     applyRealtimeThreadEvent(event);
-    scheduleRealtimeRefresh();
+    const payload = event.event || {};
+    scheduleRealtimeRefresh({
+      threadId: String(payload.threadId || '').trim(),
+      turnId: String(payload.turnId || '').trim(),
+      terminal: (payload.type === 'turn.completed' || payload.type === 'thread.status.changed')
+        && String(payload.threadId || '').trim() === selectedThreadId.value,
+    });
     return;
   }
   if (event.type === 'event-resync-required') {
@@ -1447,6 +1510,7 @@ function stopTimers() {
   if (automaticRefreshTimer) clearTimeout(automaticRefreshTimer);
   realtimeReconnectTimer = null;
   realtimeRefreshTimer = null;
+  pendingRealtimeRefreshOptions = null;
   automaticRefreshTimer = null;
   const socket = realtimeSocket;
   realtimeSocket = null;
