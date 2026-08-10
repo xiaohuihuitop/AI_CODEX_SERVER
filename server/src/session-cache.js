@@ -75,6 +75,42 @@ function normalizeLineList(lines) {
     : [];
 }
 
+/**
+ * AI:按完整回合分页缓存消息，保持与 Desktop Agent 的 turnId 游标契约一致。
+ *
+ * @param {Array<object>} messages 时间正序消息。
+ * @param {number|string} limit 最大回合数量。
+ * @param {string} before 当前页首个回合游标。
+ * @returns {{messages: Array<object>, hasMore: boolean, nextBefore: string, invalidCursor?: boolean}} 分页结果。
+ */
+function paginateCachedMessagesByTurn(messages, limit = 60, before = '') {
+  const turns = [];
+  for (const [index, message] of (messages || []).entries()) {
+    const turnId = String(message && message.turnId || '').trim();
+    const groupKey = turnId || `unidentified:${index}`;
+    const previous = turns[turns.length - 1];
+    if (!previous || previous.groupKey !== groupKey) turns.push({ groupKey, turnId, messages: [] });
+    turns[turns.length - 1].messages.push(message);
+  }
+  const beforeText = String(before || '').trim();
+  let end = turns.length;
+  if (beforeText) {
+    if (!beforeText.startsWith('turn:')) return { messages: [], hasMore: false, nextBefore: '', invalidCursor: true };
+    end = turns.findIndex(turn => turn.turnId === beforeText.slice(5));
+    if (end < 0) return { messages: [], hasMore: false, nextBefore: '', invalidCursor: true };
+  }
+  const max = Math.max(1, Math.min(Number(limit) || 60, 100));
+  const start = Math.max(0, end - max);
+  const selected = turns.slice(start, end);
+  const firstTurnId = selected[0] && selected[0].turnId;
+  const hasMore = start > 0 && Boolean(firstTurnId);
+  return {
+    messages: selected.flatMap(turn => turn.messages),
+    hasMore,
+    nextBefore: hasMore ? `turn:${firstTurnId}` : '',
+  };
+}
+
 function normalizeSnapshot(snapshot) {
   const source = snapshot && typeof snapshot === 'object' ? snapshot : {};
   const messages = Array.isArray(source.messages)
@@ -358,7 +394,7 @@ class CloudSessionCache {
    *
    * @param {string} token 设备 token。
    * @param {string} threadId 线程 ID。
-   * @param {number|string} limit 最大消息数量。
+   * @param {number|string} limit 最大回合数量。
    * @returns {{ok: boolean, available: boolean, threadId: string, sessionFile: string, messages: Array<object>, cached: boolean}} 历史结果。
    */
   history(token, threadId, limit = 120, before = '') {
@@ -366,22 +402,17 @@ class CloudSessionCache {
       ? this.bucket(token).sessions.get(String(threadId || ''))
       : null;
     if (!session) return { ok: true, available: false, threadId, sessionFile: '', messages: [], cached: true };
-    const max = Math.max(1, Math.min(Number(limit) || 120, 200));
     const messages = session.parsed.messages || [];
-    const beforeText = String(before || '').trim();
-    const requestedBefore = Number(beforeText);
-    const end = beforeText && Number.isInteger(requestedBefore) && requestedBefore >= 0 && requestedBefore <= messages.length
-      ? requestedBefore
-      : messages.length;
-    const start = Math.max(0, end - max);
+    const page = paginateCachedMessagesByTurn(messages, limit, before);
     return {
       ok: true,
       available: true,
       threadId,
       sessionFile: session.sessionFile || '',
-      messages: messages.slice(start, end),
-      hasMore: start > 0,
-      nextBefore: start > 0 ? String(start) : '',
+      messages: page.messages,
+      hasMore: page.hasMore,
+      nextBefore: page.nextBefore,
+      invalidCursor: Boolean(page.invalidCursor),
       cached: true,
     };
   }

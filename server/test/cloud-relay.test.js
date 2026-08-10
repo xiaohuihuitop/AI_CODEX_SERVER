@@ -26,6 +26,12 @@ test('云端手机网页端通过实时通道接收状态更新，不使用固�
   assert.match(html, /new WebSocket\(url\)/);
   assert.match(html, /\/mobile\?token=/);
   assert.match(html, /data\.type === 'session-updated'/);
+  assert.match(html, /function applyRealtimeThreadEvent\(event\)/);
+  assert.match(html, /data\.type === 'thread-event'/);
+  assert.match(html, /data\.type === 'event-resync-required'/);
+  assert.match(html, /payload\.type === 'turn\.started'/);
+  assert.match(html, /payload\.type === 'turn\.completed'/);
+  assert.match(html, /function reconcileRealtimeThreadState\(status\)/);
   assert.match(html, /confirmedControlTurnIds/);
   assert.match(html, /confirmedTurnIds\.includes\(pendingWatch\.turnId\)/);
   assert.doesNotMatch(html, /setInterval\(/);
@@ -106,6 +112,69 @@ test('云端 relay 向同 token 手机推送 Agent 状态和会话更新事件',
 
   mobile.close();
   await closeRelayServer(server);
+});
+
+test('云端 relay 转发 App Server 事件并去重且检测序号空洞', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['event-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+  });
+  const port = await listen(server);
+  const mobile = new WebSocket(`ws://127.0.0.1:${port}/mobile?token=event-token`);
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=event-token`);
+  const received = [];
+  mobile.on('message', data => received.push(JSON.parse(data.toString())));
+  await Promise.all([
+    new Promise(resolve => mobile.once('open', resolve)),
+    new Promise(resolve => agent.once('open', resolve)),
+  ]);
+
+  const base = {
+    streamId: 'stream-1',
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    source: 'agent-app-server',
+    observedAt: '2026-08-10T00:00:00.000Z',
+    payload: { threadId: 'thread-1', turn: { id: 'turn-1' } },
+  };
+  agent.send(JSON.stringify({
+    type: 'session-sync',
+    payload: {
+      openThreadIds: ['thread-1'],
+      sessions: [{ threadId: 'thread-1', threadName: '事件线程', metadataOnly: true }],
+    },
+  }));
+  agent.send(JSON.stringify({
+    type: 'event-stream-state',
+    payload: { streamId: 'stream-1', lastSeq: 0, deviceId: 'device-1', appServerState: 'ready' },
+  }));
+  agent.send(JSON.stringify({
+    type: 'app-server-event',
+    event: { ...base, seq: 1, eventId: 'stream-1:1', type: 'turn.started' },
+  }));
+  agent.send(JSON.stringify({
+    type: 'app-server-event',
+    event: { ...base, seq: 1, eventId: 'stream-1:1', type: 'turn.started' },
+  }));
+  agent.send(JSON.stringify({
+    type: 'app-server-event',
+    event: { ...base, seq: 3, eventId: 'stream-1:3', type: 'turn.completed' },
+  }));
+  await new Promise(resolve => setTimeout(resolve, 50));
+
+  mobile.terminate();
+  agent.terminate();
+  await new Promise(resolve => setTimeout(resolve, 20));
+  await closeRelayServer(server);
+
+  const events = received.filter(item => item.type === 'thread-event');
+  const resync = received.filter(item => item.type === 'event-resync-required');
+  const streamStates = received.filter(item => item.type === 'event-stream-state');
+  assert.deepEqual(events.map(item => item.event.seq), [1, 3]);
+  assert.equal(streamStates.some(item => item.appServerState === 'ready' && item.eventStreamId === 'stream-1'), true);
+  assert.equal(resync.some(item => item.threadId === 'thread-1' && item.reason === 'sequence-gap'), true);
+  assert.equal(events.at(-1).appServerState, 'ready');
 });
 
 test('云端 relay 对空权威目录清理也返回同步确认', async () => {
@@ -242,11 +311,12 @@ test('云端 relay 将手机发送请求转发给 Agent', async () => {
   const port = await listen(server);
   const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=send-token`);
   const opened = new Promise(resolve => agent.once('open', resolve));
+  let forwardedPayload = null;
   agent.on('message', data => {
     const message = JSON.parse(data.toString());
     if (!message.action) return;
     assert.equal(message.action, 'send');
-    assert.deepEqual(message.payload, { text: '你好', threadId: 'thread-1' });
+    forwardedPayload = message.payload;
     agent.send(JSON.stringify({
       id: message.id,
       ok: true,
@@ -266,16 +336,55 @@ test('云端 relay 将手机发送请求转发给 Agent', async () => {
   const res = await fetch(`http://127.0.0.1:${port}/send?token=send-token`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text: '你好', threadId: 'thread-1' }),
+    body: JSON.stringify({ text: '你好', threadId: 'thread-1', clientUserMessageId: 'message-send-1' }),
   });
   const body = await readJson(res);
+
+  agent.close();
+  await closeRelayServer(server);
 
   assert.equal(res.status, 200);
   assert.equal(body.ok, true);
   assert.equal(body.watch.threadId, 'thread-1');
+  assert.deepEqual(forwardedPayload, {
+    text: '你好',
+    threadId: 'thread-1',
+    clientUserMessageId: 'message-send-1',
+  });
+
+});
+
+test('云端 relay 拒绝缺少客户端消息标识的发送请求', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['send-id-required-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+  });
+  const port = await listen(server);
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=send-id-required-token`);
+  await new Promise(resolve => agent.once('open', resolve));
+  agent.send(JSON.stringify({
+    type: 'session-sync',
+    payload: {
+      openThreadIds: ['thread-1'],
+      sessions: [{ threadId: 'thread-1', threadName: '发送线程', metadataOnly: true }],
+    },
+  }));
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  const res = await fetch(`http://127.0.0.1:${port}/send?token=send-id-required-token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: '你好', threadId: 'thread-1' }),
+  });
+  const body = await readJson(res);
 
   agent.close();
   await closeRelayServer(server);
+
+  assert.equal(res.status, 400);
+  assert.equal(body.code, 'CLIENT_USER_MESSAGE_ID_REQUIRED');
+
 });
 
 test('云端 relay 在 Agent 断开时立即结束待转发请求', async () => {
@@ -305,7 +414,7 @@ test('云端 relay 在 Agent 断开时立即结束待转发请求', async () => 
   const res = await fetch(`http://127.0.0.1:${port}/send?token=disconnect-token`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text: '你好', threadId: 'thread-1' }),
+    body: JSON.stringify({ text: '你好', threadId: 'thread-1', clientUserMessageId: 'message-disconnect-1' }),
   });
   const body = await readJson(res);
 
@@ -579,7 +688,7 @@ test('云端 relay 只用目标回合证据确认手机发送而不接受无关�
     const send = await readJson(await fetch(`http://127.0.0.1:${port}/send?token=control-confirm-token`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ threadId: 'thread-1', text: '开始测试' }),
+      body: JSON.stringify({ threadId: 'thread-1', text: '开始测试', clientUserMessageId: 'message-control-1' }),
     }));
 
     agent.send(JSON.stringify({
@@ -767,10 +876,10 @@ test('云端缓存保存紧凑快照并按页面返回历史', () => {
 
   const newest = cache.history('snapshot-token', 'thread-snapshot', 4);
   const older = cache.history('snapshot-token', 'thread-snapshot', 4, newest.nextBefore);
-  assert.deepEqual(newest.messages.map(row => row.text), ['消息 9', '消息 10', '消息 11', '消息 12']);
+  assert.deepEqual(newest.messages.map(row => row.text), ['消息 5', '消息 6', '消息 7', '消息 8', '消息 9', '消息 10', '消息 11', '消息 12']);
   assert.equal(newest.hasMore, true);
-  assert.equal(newest.nextBefore, '8');
-  assert.deepEqual(older.messages.map(row => row.text), ['消息 5', '消息 6', '消息 7', '消息 8']);
+  assert.equal(newest.nextBefore, 'turn:turn-3');
+  assert.deepEqual(older.messages.map(row => row.text), ['消息 1', '消息 2', '消息 3', '消息 4']);
   assert.equal(cache.status('snapshot-token', 'thread-snapshot').status, 'complete');
   assert.equal(cache.status('snapshot-token', 'thread-snapshot', '2026-07-29T12:00:00.000Z').status, 'complete');
 });

@@ -59,6 +59,6 @@ test('正式入口只允许 App Server 控制线程，禁止重新引入 CDP 标
   const api = fs.readFileSync(path.join(desktopDir, 'src', 'desktop-agent-api.js'), 'utf8');
   assert.match(agent, /createCodexAppServerClient/);
   assert.match(api, /await this\.appServer\.resumeThread\(threadId\)/);
-  assert.match(api, /await this\.appServer\.startTurn\(threadId, text\)/);
+  assert.match(api, /await this\.appServer\.startTurn\(threadId, text, clientUserMessageId\)/);
   assert.match(api, /await this\.appServer\.interruptTurn\(threadId\)/);
 });

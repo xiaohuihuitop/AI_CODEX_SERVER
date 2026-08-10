@@ -106,6 +106,16 @@ test('手机控制后的目标线程优先同步且不打乱常规轮转游标',
   assert.equal(regular.nextCursor, 0);
 });
 
+test('大量线程中 JSONL 已变化的线程优先于常规轮转同步', () => {
+  const targets = Array.from({ length: 160 }, (_, index) => ({ threadId: `thread-${index + 1}` }));
+  const result = selectSyncBatch(targets, 0, 1, '', ['thread-157']);
+
+  assert.equal(result.prioritized, true);
+  assert.equal(result.priorityReason, 'changed');
+  assert.deepEqual(result.targets.map(item => item.threadId), ['thread-157']);
+  assert.equal(result.nextCursor, 0);
+});
+
 test('手机发送目标分别确认用户消息落盘和同一回合完成', () => {
   const turnId = 'turn-1';
   assert.deepEqual(inspectControlSyncEvidence([], 'thread-1', turnId), { accepted: false, completed: false });
@@ -367,6 +377,101 @@ test('desktop-agent 连接后主动上传会话同步快照', async () => {
   assert.deepEqual(messages[0].payload.openThreadIds, ['thread-1']);
 });
 
+test('desktop-agent 连接后上报事件流状态并实时发送 App Server 事件', async () => {
+  const messages = [];
+  class FakeSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.OPEN = 1;
+      this.CLOSED = 3;
+      this.readyState = this.OPEN;
+      setImmediate(() => this.emit('open'));
+    }
+
+    send(message) {
+      messages.push(JSON.parse(message));
+    }
+
+    close() {
+      this.readyState = this.CLOSED;
+      this.emit('close', 1000, Buffer.from(''));
+    }
+  }
+
+  const client = createDesktopAgentClient({
+    serverUrl: 'http://example.test',
+    token: 'token',
+    api: { handle: async () => ({ ok: true }) },
+    WebSocket: FakeSocket,
+    eventStateProvider: () => ({ streamId: 'stream-1', lastSeq: 3, deviceId: 'device-1' }),
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const sent = client.sendAppServerEvent({
+    streamId: 'stream-1',
+    seq: 4,
+    eventId: 'stream-1:4',
+    threadId: 'thread-1',
+    type: 'turn.started',
+  });
+  client.close();
+
+  assert.equal(sent, true);
+  assert.deepEqual(messages, [
+    {
+      type: 'event-stream-state',
+      payload: { streamId: 'stream-1', lastSeq: 3, deviceId: 'device-1' },
+    },
+    {
+      type: 'app-server-event',
+      event: {
+        streamId: 'stream-1',
+        seq: 4,
+        eventId: 'stream-1:4',
+        threadId: 'thread-1',
+        type: 'turn.started',
+      },
+    },
+  ]);
+});
+
+test('desktop-agent 断线时明确拒绝发送 App Server 事件', async () => {
+  class FakeSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.OPEN = 1;
+      this.CLOSED = 3;
+      this.readyState = this.OPEN;
+      setImmediate(() => this.emit('open'));
+    }
+
+    send() {}
+
+    close() {
+      this.readyState = this.CLOSED;
+      this.emit('close', 1000, Buffer.from(''));
+    }
+  }
+
+  const client = createDesktopAgentClient({
+    serverUrl: 'http://example.test',
+    token: 'token',
+    api: { handle: async () => ({ ok: true }) },
+    WebSocket: FakeSocket,
+  });
+  const dropped = [];
+  client.on('event-dropped', event => dropped.push(event));
+
+  await new Promise(resolve => setTimeout(resolve, 20));
+  client.socket.readyState = client.socket.CLOSED;
+  const event = { streamId: 'stream-1', seq: 1, eventId: 'stream-1:1', threadId: 'thread-1' };
+  const sent = client.sendAppServerEvent(event);
+  client.close();
+
+  assert.equal(sent, false);
+  assert.deepEqual(dropped, [event]);
+});
+
 test('desktop-agent 同步快照为空时不上传会话同步消息', async () => {
   const messages = [];
   class FakeSocket extends EventEmitter {
@@ -564,7 +669,11 @@ test('desktop-agent API 控制 Codex 时暴露 busy 状态', async () => {
     now: () => Date.parse('2026-06-08T00:00:00.000Z'),
   });
 
-  const sending = api.handle('send', { threadId: 'thread-1', text: '你好' });
+  const sending = api.handle('send', {
+    threadId: 'thread-1',
+    text: '你好',
+    clientUserMessageId: 'message-busy-1',
+  });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(api.isBusy(), true);
   releaseControl({ turn: { id: 'turn-1' } });

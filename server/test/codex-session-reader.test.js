@@ -4,6 +4,7 @@ const path = require('node:path');
 const {
   CodexSessionReader,
   applyDesktopRuntimeStatus,
+  paginateMessagesByTurn,
   projectNameFromCwd,
   reasoningText,
   stripCodexUiDirectives,
@@ -431,6 +432,25 @@ test('未知 app-server 运行态不会覆盖 Desktop JSONL 的运行状态', ()
   assert.equal(status.status, 'running');
 });
 
+test('App Server 失败终态覆盖 JSONL 中尚未结束的运行状态', () => {
+  const status = applyDesktopRuntimeStatus({
+    ok: true,
+    available: true,
+    active: true,
+    status: 'running',
+    final: '',
+    turns: [{ turnId: 'turn-failed', status: 'running', steps: [] }],
+  }, {
+    state: 'error',
+    turnId: 'turn-failed',
+    observedAt: '2026-08-10T10:00:00.000Z',
+  });
+
+  assert.equal(status.active, false);
+  assert.equal(status.status, 'error');
+  assert.equal(status.turns[0].status, 'error');
+});
+
 test('桌面仍在运行时覆盖 JSONL 中上一轮的完成状态', () => {
   const status = applyDesktopRuntimeStatus({
     ok: true,
@@ -485,17 +505,25 @@ test('解析线程历史', () => {
   assert.equal(history.messages[1].turnId, 'turn-1');
 });
 
-test('解析线程历史支持按稳定游标读取更早消息页', () => {
-  const reader = new CodexSessionReader({
-    sessionsDir: path.join(fixtureRoot, 'sessions'),
-    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
-  });
-  const newest = reader.parseHistory('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', 1);
-  const older = reader.parseHistory('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', 1, newest.nextBefore);
+test('解析线程历史使用 turnId 稳定游标且新增回合不改变更早页', () => {
+  const messages = [
+    { role: 'user', text: '问题 1', turnId: 'turn-1' },
+    { role: 'assistant', text: '回答 1', turnId: 'turn-1' },
+    { role: 'user', text: '问题 2', turnId: 'turn-2' },
+    { role: 'assistant', text: '回答 2', turnId: 'turn-2' },
+    { role: 'user', text: '问题 3', turnId: 'turn-3' },
+    { role: 'assistant', text: '回答 3', turnId: 'turn-3' },
+  ];
+  const newest = paginateMessagesByTurn(messages, 2);
+  const afterAppend = messages.concat([
+    { role: 'user', text: '问题 4', turnId: 'turn-4' },
+    { role: 'assistant', text: '回答 4', turnId: 'turn-4' },
+  ]);
+  const older = paginateMessagesByTurn(afterAppend, 2, newest.nextBefore);
 
-  assert.deepEqual(newest.messages.map(item => item.text), ['你好，我在 Windows 上。']);
-  assert.equal(newest.hasMore, true);
-  assert.deepEqual(older.messages.map(item => item.text), ['你好 Codex']);
+  assert.deepEqual(newest.messages.map(item => item.text), ['问题 2', '回答 2', '问题 3', '回答 3']);
+  assert.equal(newest.nextBefore, 'turn:turn-2');
+  assert.deepEqual(older.messages.map(item => item.text), ['问题 1', '回答 1']);
   assert.equal(older.hasMore, false);
 });
 

@@ -24,10 +24,24 @@ function createRelayState() {
     agents: new Map(),
     mobileClients: new Map(),
     syncHealth: new Map(),
+    eventStreams: new Map(),
     cache: createCloudSessionCache(),
     pending: new Map(),
     nextId: 0,
   };
+}
+
+function eventStreamFor(state, token) {
+  if (!state.eventStreams.has(token)) {
+    state.eventStreams.set(token, {
+      streamId: '',
+      lastSeq: 0,
+      eventIds: new Map(),
+      appServerState: 'unknown',
+      updatedAt: '',
+    });
+  }
+  return state.eventStreams.get(token);
 }
 
 function cookieValue(req, name) {
@@ -65,13 +79,104 @@ function syncHealthFor(state, token) {
 
 function relayStateForToken(state, token) {
   const health = syncHealthFor(state, token);
+  const events = eventStreamFor(state, token);
   return {
     agentOnline: isAgentOnline(state, token),
     syncVersion: health.version,
     lastSyncedAt: health.lastSyncedAt,
     syncFresh: Boolean(isAgentOnline(state, token) && !health.stale && health.lastSyncedAt),
     confirmedControlTurnIds: Array.from(health.confirmedControlTurns.keys()),
+    appServerState: events.appServerState,
+    appServerUpdatedAt: events.updatedAt,
+    eventStreamId: events.streamId,
+    eventSeq: events.lastSeq,
   };
+}
+
+/**
+ * AI:应用 Agent 声明的事件流状态，并在 relay 缺少历史事件时要求客户端对账。
+ *
+ * @param {object} state Relay 状态。
+ * @param {string} token 设备 token。
+ * @param {object} payload Agent 事件流状态。
+ * @returns {void}
+ */
+function applyEventStreamState(state, token, payload = {}) {
+  const streamId = String(payload.streamId || '').trim();
+  const declaredSeq = Math.max(0, Number(payload.lastSeq) || 0);
+  if (!streamId) return;
+  const current = eventStreamFor(state, token);
+  const streamChanged = Boolean(current.streamId && current.streamId !== streamId);
+  const relayMissedEvents = current.streamId === streamId && declaredSeq > current.lastSeq;
+  if (current.streamId !== streamId) current.eventIds.clear();
+  current.streamId = streamId;
+  current.lastSeq = declaredSeq;
+  current.appServerState = String(payload.appServerState || current.appServerState || 'unknown');
+  current.updatedAt = new Date().toISOString();
+  if (streamChanged || relayMissedEvents) {
+    broadcastToMobileClients(state, token, Object.assign({
+      type: 'event-resync-required',
+      threadId: '',
+      reason: streamChanged ? 'stream-changed' : 'relay-gap',
+    }, relayStateForToken(state, token)));
+  }
+  broadcastToMobileClients(state, token, Object.assign({ type: 'event-stream-state' }, relayStateForToken(state, token)));
+}
+
+/**
+ * AI:校验、去重并广播单条 App Server 线程事件。
+ *
+ * @param {object} state Relay 状态。
+ * @param {string} token 设备 token。
+ * @param {object} event Agent 线程事件。
+ * @returns {boolean} 事件被接受时返回 true。
+ */
+function applyAppServerEvent(state, token, event = {}) {
+  const streamId = String(event.streamId || '').trim();
+  const eventId = String(event.eventId || '').trim();
+  const threadId = String(event.threadId || '').trim();
+  const seq = Number(event.seq);
+  if (!streamId || !eventId || !threadId || !Number.isInteger(seq) || seq < 1) return false;
+
+  const current = eventStreamFor(state, token);
+  if (current.eventIds.has(eventId)) return false;
+  if (current.streamId && current.streamId !== streamId) {
+    current.eventIds.clear();
+    current.lastSeq = 0;
+    broadcastToMobileClients(state, token, Object.assign({
+      type: 'event-resync-required',
+      threadId,
+      reason: 'stream-changed',
+    }, relayStateForToken(state, token)));
+  }
+  current.streamId = streamId;
+  if (seq > current.lastSeq + 1) {
+    broadcastToMobileClients(state, token, Object.assign({
+      type: 'event-resync-required',
+      threadId,
+      reason: 'sequence-gap',
+      expectedSeq: current.lastSeq + 1,
+      receivedSeq: seq,
+    }, relayStateForToken(state, token)));
+  } else if (seq <= current.lastSeq) {
+    broadcastToMobileClients(state, token, Object.assign({
+      type: 'event-resync-required',
+      threadId,
+      reason: 'out-of-order',
+      expectedSeq: current.lastSeq + 1,
+      receivedSeq: seq,
+    }, relayStateForToken(state, token)));
+    return false;
+  }
+  current.lastSeq = seq;
+  current.updatedAt = String(event.observedAt || new Date().toISOString());
+  current.eventIds.set(eventId, seq);
+  while (current.eventIds.size > 500) current.eventIds.delete(current.eventIds.keys().next().value);
+  broadcastToMobileClients(state, token, Object.assign({
+    type: 'thread-event',
+    event,
+  }, relayStateForToken(state, token)));
+  return true;
 }
 
 function markSessionSynced(state, token, staleMs, confirmedControlTurnIds = []) {
@@ -228,6 +333,14 @@ function attachAgent(state, ws, token, syncStaleMs) {
       }, syncState));
       return;
     }
+    if (message.type === 'event-stream-state') {
+      applyEventStreamState(state, token, message.payload || {});
+      return;
+    }
+    if (message.type === 'app-server-event') {
+      applyAppServerEvent(state, token, message.event || {});
+      return;
+    }
     const pending = state.pending.get(message.id);
     if (!pending) return;
     clearTimeout(pending.timer);
@@ -321,6 +434,29 @@ function requireOpenThread(state, token, threadId) {
     throw Object.assign(new Error('目标对话已归档、删除或不在电脑当前线程列表中。'), {
       status: 409,
       code: 'THREAD_NOT_OPEN',
+    });
+  }
+  return id;
+}
+
+/**
+ * AI:校验客户端生成的用户消息标识，确保重试可复用同一幂等键。
+ *
+ * @param {string} clientUserMessageId 客户端用户消息标识。
+ * @returns {string} 规范化消息标识。
+ */
+function requireClientUserMessageId(clientUserMessageId) {
+  const id = String(clientUserMessageId || '').trim();
+  if (!id) {
+    throw Object.assign(new Error('缺少客户端用户消息标识。'), {
+      status: 400,
+      code: 'CLIENT_USER_MESSAGE_ID_REQUIRED',
+    });
+  }
+  if (id.length > 128) {
+    throw Object.assign(new Error('客户端用户消息标识过长。'), {
+      status: 400,
+      code: 'CLIENT_USER_MESSAGE_ID_INVALID',
     });
   }
   return id;
@@ -457,9 +593,11 @@ function createCloudRelayServer(options = {}) {
       if (req.method === 'POST' && req.url.startsWith('/send')) {
         const payload = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');
         const threadId = requireOpenThread(state, token, payload.threadId);
+        const clientUserMessageId = requireClientUserMessageId(payload.clientUserMessageId);
         const result = await forwardToAgent(state, token, 'send', {
           text: typeof payload.text === 'string' ? payload.text : '',
           threadId,
+          clientUserMessageId,
         }, requestTimeoutMs);
         return sendJson(res, 200, Object.assign({}, result, { acceptedSyncVersion: syncHealthFor(state, token).version }));
       }
@@ -501,12 +639,15 @@ function createCloudRelayServer(options = {}) {
 
 module.exports = {
   attachMobileClient,
+  applyAppServerEvent,
+  applyEventStreamState,
   broadcastToMobileClients,
   createCloudRelayServer,
   disconnectKey,
   disconnectToken,
   forwardToAgent,
   markSessionSynced,
+  requireClientUserMessageId,
   rejectPendingForToken,
   relayStateForToken,
 };

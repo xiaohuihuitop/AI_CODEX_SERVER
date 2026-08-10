@@ -76,6 +76,7 @@ function createDesktopAgentClient(options) {
   const reconnectDelayMs = Number.isFinite(Number(options.reconnectDelayMs)) ? Math.max(0, Number(options.reconnectDelayMs)) : 2000;
   const client = new EventEmitter();
   const syncProvider = typeof options.syncProvider === 'function' ? options.syncProvider : null;
+  const eventStateProvider = typeof options.eventStateProvider === 'function' ? options.eventStateProvider : null;
   const syncIntervalMs = Number.isFinite(Number(options.syncIntervalMs)) ? Math.max(1000, Number(options.syncIntervalMs)) : 1000;
   const syncTimeoutMs = Number.isFinite(Number(options.syncTimeoutMs)) ? Math.max(1000, Number(options.syncTimeoutMs)) : 15000;
   let socket = null;
@@ -84,6 +85,30 @@ function createDesktopAgentClient(options) {
   let syncing = false;
   let stopped = false;
   let connectedOnce = false;
+
+  /**
+   * AI:仅在 Agent WebSocket 已连接时发送结构化消息。
+   *
+   * @param {object} message 待发送消息。
+   * @returns {boolean} 已写入 WebSocket 返回 true，否则返回 false。
+   */
+  function sendSocketMessage(message) {
+    if (!socket || socket.readyState !== socket.OPEN) return false;
+    socket.send(JSON.stringify(message));
+    return true;
+  }
+
+  function sendEventState() {
+    if (!eventStateProvider) return false;
+    try {
+      const payload = eventStateProvider();
+      if (!payload) return false;
+      return sendSocketMessage({ type: 'event-stream-state', payload });
+    } catch (error) {
+      client.emit('event-state-error', error);
+      return false;
+    }
+  }
 
   async function syncSessions() {
     if (!syncProvider || syncing || stopped || !socket || socket.readyState !== socket.OPEN) return;
@@ -127,6 +152,7 @@ function createDesktopAgentClient(options) {
     socket.on('open', () => {
       connectedOnce = true;
       client.emit('open');
+      sendEventState();
       startSyncTimer();
     });
     socket.on('message', async data => {
@@ -176,6 +202,13 @@ function createDesktopAgentClient(options) {
     stopSyncTimer();
     const closedState = typeof socket?.CLOSED === 'number' ? socket.CLOSED : 3;
     if (socket && socket.readyState !== closedState) socket.close();
+  };
+
+  client.sendEventState = sendEventState;
+  client.sendAppServerEvent = event => {
+    const sent = sendSocketMessage({ type: 'app-server-event', event });
+    if (!sent) client.emit('event-dropped', event);
+    return sent;
   };
 
   connect();

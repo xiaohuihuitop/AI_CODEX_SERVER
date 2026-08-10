@@ -218,10 +218,8 @@ test('uni-app Android 手机端仅在 Agent 已受理后追加本地消息', () 
   assert.match(index, /const canSend = computed\(\(\) => \{/);
   assert.match(index, /:disabled="!canSend"/);
   assert.match(sendFunction, /if \(!canSend\.value\) \{[\s\S]*当前对话尚未完成或发送结果未确认/);
-  assert.match(sendFunction, /const data = await sendMessage\([\s\S]*?const sentAt = Date\.now\(\);[\s\S]*?const pending = registerPendingLocalSend\(/);
-  assert.match(sendFunction, /messages\.value = messages\.value\.concat\(\[/);
-  assert.match(sendFunction, /\{ role: 'user', text, id: pending\.userId \}/);
-  assert.match(sendFunction, /\{ role: 'assistant', text: '已发送，等待 Codex 回复\.\.\.', pending: true, id: pending\.assistantId \}/);
+  assert.match(sendFunction, /const baseMessageCount = messages\.value\.length;[\s\S]*?const data = await sendMessage\([\s\S]*?const sentAt = Date\.now\(\);[\s\S]*?const pending = registerPendingLocalSend\(selectedThreadId\.value, text, sentAt, baseMessageCount\)/);
+  assert.match(sendFunction, /messages\.value = mergePendingLocalMessages\(selectedThreadId\.value, messages\.value\);/);
   assert.match(sendFunction, /pendingWatch\.value = Object\.assign\(\{\}, data\.watch \|\| \{ threadId: selectedThreadId\.value \}, \{/);
   assert.match(sendFunction, /acceptedSyncVersion: Number\(data\.acceptedSyncVersion\) \|\| syncState\.value\.version/);
   assert.match(sendFunction, /if \(canUpdateTask\(token\) && !messageText\.value\) messageText\.value = text;/);
@@ -241,11 +239,12 @@ test('uni-app Android 手机端历史刷新保留未确认本地用户消息', (
   assert.match(index, /function hasAssistantAfterPendingBase\(rows, pending\)/);
   assert.match(index, /function mergePendingLocalMessages\(threadId, historyRows\)/);
   assert.match(mergeFunction, /if \(hasHistoryMessage\(rows, 'user', pending\.text, pending\.baseMessageCount\)\) continue;/);
-  assert.match(mergeFunction, /localRows\.push\(\{ role: 'user', text: pending\.text, id: pending\.userId \}\);/);
+  assert.match(mergeFunction, /localRows\.push\(\{ role: 'user', text: pending\.text, pending: true, id: pending\.userId \}\);/);
   assert.match(mergeFunction, /const insertAt = Math\.min\(rows\.length, Math\.max\(0, \(Number\(pending\.baseMessageCount\) \|\| 0\) \+ insertedCount\)\);/);
   assert.match(mergeFunction, /for \(let localIndex = 0; localIndex < localRows\.length; localIndex \+= 1\)/);
   assert.match(mergeFunction, /rows\.splice\(insertAt \+ localIndex, 0, localRows\[localIndex\]\);/);
   assert.match(index, /function mergeLoadedHistory\(existingRows, latestRows\)/);
+  assert.match(index, /const currentRows = \(existingRows \|\| \[\]\)\.filter\(item => !\(item && item\.pending\)\);/);
   assert.match(index, /messages\.value = mergePendingLocalMessages\(requestedThreadId, mergeLoadedHistory\(messages\.value, data\.messages \|\| \[\]\)\);/);
   assert.match(index, /catch \(error\) \{[\s\S]*if \(canUpdateTask\(token\) && !messageText\.value\) messageText\.value = text;[\s\S]*setNotice\(error\.message\);/);
   assert.doesNotMatch(sendFunction, /removePendingLocalSend\(pending\)/);
@@ -336,6 +335,13 @@ test('uni-app Android 手机端运行状态同时要求 Agent 在线和同步新
   assert.match(index, /function scheduleRealtimeReconnect\(\)/);
   assert.match(index, /function openRealtimeSocket\(\)/);
   assert.match(index, /event\.type === 'session-updated'/);
+  assert.match(index, /function applyRealtimeThreadEvent\(event\)/);
+  assert.match(index, /event\.type === 'thread-event'/);
+  assert.match(index, /event\.type === 'event-resync-required'/);
+  assert.match(index, /payload\.type === 'turn\.started'/);
+  assert.match(index, /payload\.type === 'turn\.completed'/);
+  assert.match(index, /function reconcileRealtimeThreadState\(status\)/);
+  assert.match(index, /const appServerState = ref\(/);
   assert.match(index, /const AUTO_REFRESH_INTERVAL_MS = 4000;/);
   assert.match(index, /let automaticRefreshTimer = null;/);
   assert.match(index, /async function refreshCurrentThreadAutomatically\(\)/);
@@ -381,7 +387,7 @@ test('uni-app Android 手机端首次只读取最近五轮并支持向上分页'
   assert.match(index, /const hasOlderHistory = ref\(false\)/);
   assert.match(index, /@scrolltoupper="loadOlderHistory"/);
   assert.match(index, /async function loadOlderHistory\(\)/);
-  assert.match(index, /await getHistory\(config\.value, requestedThreadId, \{ limit: 10, before: historyNextBefore\.value/);
+  assert.match(index, /await getHistory\(config\.value, requestedThreadId, \{ limit: 5, before: historyNextBefore\.value/);
   assert.match(index, /messages\.value = mergePendingLocalMessages\(requestedThreadId, mergeLoadedHistory\(messages\.value, data\.messages \|\| \[\]\)\);/);
 });
 

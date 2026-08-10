@@ -180,20 +180,65 @@ function applyDesktopRuntimeStatus(status, desktopRuntime) {
       final: '',
     });
   }
-  if (desktopRuntime.state !== 'idle' || status.status !== 'running') return status;
-  const completedAt = String(desktopRuntime.observedAt || new Date().toISOString());
+  const terminalState = desktopRuntime.state === 'error' ? 'error' : 'complete';
+  const isTerminal = desktopRuntime.state === 'idle' || desktopRuntime.state === 'complete' || desktopRuntime.state === 'error';
+  if (!isTerminal) return status;
+  const runtimeTurnId = String(desktopRuntime.turnId || '').trim();
+  const currentTurns = Array.isArray(status.turns) ? status.turns : [];
+  const runtimeTurnKnown = !runtimeTurnId || currentTurns.some(turn => turn && turn.turnId === runtimeTurnId);
+  if (status.status !== 'running' && runtimeTurnKnown && desktopRuntime.state !== 'error') return status;
+  const completedAt = String(desktopRuntime.completedAt || desktopRuntime.observedAt || new Date().toISOString());
   const turns = Array.isArray(status.turns) ? status.turns.map(turn => (
     turn.status === 'running'
-      ? Object.assign({}, turn, { status: 'complete', completedAt })
+      ? Object.assign({}, turn, { status: terminalState, completedAt })
       : turn
   )) : [];
   return Object.assign({}, status, {
     active: false,
-    status: 'complete',
+    status: terminalState,
     completedAt,
-    preview: status.final || 'Codex Desktop 已结束本轮回复。',
+    preview: runtimeTurnKnown && status.final ? status.final : terminalState === 'error' ? 'Codex 本轮回复失败。' : 'Codex Desktop 已结束本轮回复。',
+    final: runtimeTurnKnown ? status.final : '',
     turns,
   });
+}
+
+/**
+ * AI:按完整回合分页消息，游标绑定首个回合 ID，不受尾部新增消息影响。
+ *
+ * @param {Array<object>} messages 时间正序消息。
+ * @param {number|string} limit 最大回合数量。
+ * @param {string} before 当前页首个回合游标。
+ * @returns {{messages: Array<object>, hasMore: boolean, nextBefore: string, invalidCursor?: boolean}} 分页结果。
+ */
+function paginateMessagesByTurn(messages, limit = 60, before = '') {
+  const turns = [];
+  for (const [index, message] of (messages || []).entries()) {
+    const turnId = String(message && message.turnId || '').trim();
+    const groupKey = turnId || `unidentified:${index}`;
+    const previous = turns[turns.length - 1];
+    if (!previous || previous.groupKey !== groupKey) turns.push({ groupKey, turnId, messages: [] });
+    turns[turns.length - 1].messages.push(message);
+  }
+
+  const beforeText = String(before || '').trim();
+  let end = turns.length;
+  if (beforeText) {
+    if (!beforeText.startsWith('turn:')) return { messages: [], hasMore: false, nextBefore: '', invalidCursor: true };
+    const turnId = beforeText.slice(5);
+    end = turns.findIndex(turn => turn.turnId === turnId);
+    if (end < 0) return { messages: [], hasMore: false, nextBefore: '', invalidCursor: true };
+  }
+  const max = Math.max(1, Math.min(Number(limit) || 60, 100));
+  const start = Math.max(0, end - max);
+  const selected = turns.slice(start, end);
+  const firstTurnId = selected[0] && selected[0].turnId;
+  const hasMore = start > 0 && Boolean(firstTurnId);
+  return {
+    messages: selected.flatMap(turn => turn.messages),
+    hasMore,
+    nextBefore: hasMore ? `turn:${firstTurnId}` : '',
+  };
 }
 
 /**
@@ -800,8 +845,8 @@ class CodexSessionReader {
    * 解析线程历史消息。
    *
    * @param {string} threadId Codex 线程 ID。
-   * @param {number|string} limit 最大消息数量。
-   * @param {number|string} before 从消息总数倒序分页时的结束游标。
+   * @param {number|string} limit 最大回合数量。
+   * @param {string} before 当前页首个回合的稳定游标。
    * @returns {{ok: boolean, available: boolean, threadId: string, sessionFile: string, messages: Array<object>, hasMore: boolean, nextBefore: string}} 历史结果。
    */
   parseHistory(threadId, limit = 120, before = '') {
@@ -843,21 +888,16 @@ class CodexSessionReader {
         }
       }
     }
-    const max = Math.max(1, Math.min(Number(limit) || 120, 200));
-    const beforeText = String(before || '').trim();
-    const requestedBefore = Number(beforeText);
-    const end = beforeText && Number.isInteger(requestedBefore) && requestedBefore >= 0 && requestedBefore <= messages.length
-      ? requestedBefore
-      : messages.length;
-    const start = Math.max(0, end - max);
+    const page = paginateMessagesByTurn(messages, limit, before);
     return {
       ok: true,
       available: true,
       threadId,
       sessionFile: path.basename(file),
-      messages: messages.slice(start, end),
-      hasMore: start > 0,
-      nextBefore: start > 0 ? String(start) : '',
+      messages: page.messages,
+      hasMore: page.hasMore,
+      nextBefore: page.nextBefore,
+      invalidCursor: Boolean(page.invalidCursor),
     };
   }
 
@@ -1096,6 +1136,7 @@ class CodexSessionReader {
 module.exports = {
   CodexSessionReader,
   applyDesktopRuntimeStatus,
+  paginateMessagesByTurn,
   isThreadId,
   reasoningText,
   stripCodexUiDirectives,

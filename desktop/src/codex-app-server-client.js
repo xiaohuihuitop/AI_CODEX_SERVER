@@ -12,7 +12,39 @@ function createAppServerError(message, code = 'APP_SERVER_FAILED') {
 
 function statusFromProtocol(status) {
   const type = typeof status === 'string' ? status : String(status && status.type || '');
-  return type === 'active' ? 'running' : 'idle';
+  if (type === 'active') return 'running';
+  if (type === 'idle') return 'idle';
+  if (type === 'systemError') return 'error';
+  if (type === 'notLoaded') return 'notLoaded';
+  return 'unknown';
+}
+
+/**
+ * AI:从 thread/read 响应恢复同一线程的权威运行态。
+ *
+ * @param {object} thread App Server 返回的线程。
+ * @returns {{state: string, turnId: string, turnStatus: string, completedAt: string}} 线程运行态。
+ */
+function runtimeFromThread(thread) {
+  const turns = Array.isArray(thread && thread.turns) ? thread.turns : [];
+  const latestTurn = turns[turns.length - 1] || null;
+  const activeTurn = [...turns].reverse().find(turn => turn && turn.status === 'inProgress') || null;
+  const protocolState = statusFromProtocol(thread && thread.status);
+  const selectedTurn = protocolState === 'running' ? activeTurn || latestTurn : latestTurn;
+  const turnStatus = String(selectedTurn && selectedTurn.status || '').trim();
+  let state = protocolState;
+  if (protocolState === 'error' || turnStatus === 'failed') state = 'error';
+  else if (turnStatus === 'completed' || turnStatus === 'interrupted') state = 'complete';
+  else if (protocolState === 'running') state = 'running';
+  const completedAtSeconds = Number(selectedTurn && selectedTurn.completedAt);
+  return {
+    state,
+    turnId: String(selectedTurn && selectedTurn.id || '').trim(),
+    turnStatus,
+    completedAt: Number.isFinite(completedAtSeconds) && completedAtSeconds > 0
+      ? new Date(completedAtSeconds * 1000).toISOString()
+      : '',
+  };
 }
 
 /**
@@ -127,7 +159,7 @@ function resolveAppServerLaunch(options = {}) {
  */
 class CodexAppServerClient extends EventEmitter {
   /**
-   * @param {{spawnProcess?: Function, requestTimeoutMs?: number, logger?: object, launchResolver?: Function, versionResolver?: Function}} options 子进程与协议配置。
+   * @param {{spawnProcess?: Function, requestTimeoutMs?: number, logger?: object, launchResolver?: Function, versionResolver?: Function, serverRequestHandler?: Function}} options 子进程与协议配置。
    */
   constructor(options = {}) {
     super();
@@ -136,6 +168,9 @@ class CodexAppServerClient extends EventEmitter {
     this.logger = options.logger || console;
     this.launchResolver = options.launchResolver || resolveAppServerLaunch;
     this.versionResolver = options.versionResolver || readCodexVersion;
+    this.serverRequestHandler = typeof options.serverRequestHandler === 'function'
+      ? options.serverRequestHandler
+      : null;
     this.child = null;
     this.starting = null;
     this.nextRequestId = 1;
@@ -195,6 +230,7 @@ class CodexAppServerClient extends EventEmitter {
         clientInfo: { name: 'codex-windows-agent', version: '0.2.0' },
         capabilities: { experimentalApi: true },
       });
+      this.notify('initialized', {});
       this.emit('ready', initialized);
       return initialized;
     } catch (error) {
@@ -253,9 +289,21 @@ class CodexAppServerClient extends EventEmitter {
       this.emit('protocol-error', createAppServerError('app-server 返回了无法解析的协议行。', 'APP_SERVER_PROTOCOL_ERROR'));
       return;
     }
-    if (Object.prototype.hasOwnProperty.call(message, 'id')) {
+    const hasId = Object.prototype.hasOwnProperty.call(message, 'id');
+    const hasMethod = typeof message.method === 'string';
+    const isResponse = hasId && (
+      Object.prototype.hasOwnProperty.call(message, 'result')
+      || Object.prototype.hasOwnProperty.call(message, 'error')
+    );
+    if (isResponse) {
       const pending = this.pending.get(String(message.id));
-      if (!pending) return;
+      if (!pending) {
+        this.emit('protocol-error', createAppServerError(
+          `app-server 返回了未知请求 ID：${String(message.id)}`,
+          'APP_SERVER_UNKNOWN_RESPONSE',
+        ));
+        return;
+      }
       this.pending.delete(String(message.id));
       clearTimeout(pending.timer);
       if (message.error) {
@@ -268,9 +316,40 @@ class CodexAppServerClient extends EventEmitter {
       }
       return;
     }
-    if (typeof message.method === 'string') {
+    if (hasId && hasMethod) {
+      void this.handleServerRequest(message);
+      return;
+    }
+    if (hasMethod) {
       this.applyNotification(message.method, message.params || {});
       this.emit('notification', { method: message.method, params: message.params || {} });
+      return;
+    }
+    this.emit('protocol-error', createAppServerError('app-server 返回了无法识别的协议消息。', 'APP_SERVER_PROTOCOL_ERROR'));
+  }
+
+  /**
+   * AI:处理 App Server 主动发起的 JSON-RPC 请求，禁止因误判响应而静默挂起。
+   *
+   * @param {{id: string|number, method: string, params?: object}} message 主动请求。
+   * @returns {Promise<void>} 响应写入完成。
+   */
+  async handleServerRequest(message) {
+    const request = {
+      id: String(message.id),
+      method: message.method,
+      params: message.params || {},
+    };
+    this.emit('server-request', request);
+    if (!this.serverRequestHandler) {
+      this.replyError(request.id, -32601, 'App Server 主动请求暂不支持远程处理。');
+      return;
+    }
+    try {
+      const result = await this.serverRequestHandler(request);
+      this.replyResult(request.id, result === undefined ? null : result);
+    } catch (error) {
+      this.replyError(request.id, -32000, error.message || 'App Server 主动请求处理失败。');
     }
   }
 
@@ -283,11 +362,22 @@ class CodexAppServerClient extends EventEmitter {
       return;
     }
     if (method === 'turn/completed') {
-      this.setRuntime(threadId, { state: 'idle', turnId: String(params.turn && params.turn.id || '').trim() });
+      const turnStatus = String(params.turn && params.turn.status || '').trim();
+      this.setRuntime(threadId, {
+        state: turnStatus.toLowerCase() === 'failed' ? 'error' : 'complete',
+        turnId: String(params.turn && params.turn.id || '').trim(),
+        turnStatus,
+        completedAt: new Date().toISOString(),
+      });
       return;
     }
     if (method === 'thread/status/changed') {
-      this.setRuntime(threadId, { state: statusFromProtocol(params.status) });
+      const nextState = statusFromProtocol(params.status);
+      const previous = this.runtimes.get(threadId);
+      const state = nextState === 'idle' && (previous && (previous.state === 'complete' || previous.state === 'error'))
+        ? previous.state
+        : nextState;
+      this.setRuntime(threadId, { state });
     }
   }
 
@@ -296,6 +386,8 @@ class CodexAppServerClient extends EventEmitter {
     const runtime = {
       state: next.state || previous.state || 'idle',
       turnId: next.turnId || previous.turnId || '',
+      turnStatus: Object.prototype.hasOwnProperty.call(next, 'turnStatus') ? next.turnStatus : previous.turnStatus || '',
+      completedAt: Object.prototype.hasOwnProperty.call(next, 'completedAt') ? next.completedAt : previous.completedAt || '',
       observedAt: new Date().toISOString(),
     };
     this.runtimes.set(threadId, runtime);
@@ -334,13 +426,60 @@ class CodexAppServerClient extends EventEmitter {
       }, this.requestTimeoutMs);
       this.pending.set(id, { method, resolve, reject, timer });
       try {
-        this.child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
+        this.writeProtocolMessage({ id, method, params });
       } catch (error) {
         this.pending.delete(id);
         clearTimeout(timer);
         reject(createAppServerError(`app-server 请求 ${method} 写入失败：${error.message}`, 'APP_SERVER_WRITE_FAILED'));
       }
     });
+  }
+
+  /**
+   * AI:发送不需要响应的 JSON-RPC 通知。
+   *
+   * @param {string} method 协议方法。
+   * @param {object} params 协议参数。
+   * @returns {void}
+   */
+  notify(method, params = {}) {
+    this.writeProtocolMessage({ method, params });
+  }
+
+  /**
+   * AI:向 App Server 返回主动请求的成功结果。
+   *
+   * @param {string|number} id 主动请求 ID。
+   * @param {*} result 请求结果。
+   * @returns {void}
+   */
+  replyResult(id, result) {
+    this.writeProtocolMessage({ id: String(id), result });
+  }
+
+  /**
+   * AI:向 App Server 返回主动请求的明确错误。
+   *
+   * @param {string|number} id 主动请求 ID。
+   * @param {number} code JSON-RPC 错误码。
+   * @param {string} message 错误文本。
+   * @returns {void}
+   */
+  replyError(id, code, message) {
+    this.writeProtocolMessage({ id: String(id), error: { code, message } });
+  }
+
+  /**
+   * AI:在已建立的 stdio 通道上写入单条协议消息。
+   *
+   * @param {object} message JSON-RPC 消息。
+   * @returns {void}
+   */
+  writeProtocolMessage(message) {
+    if (!this.isRunning()) {
+      throw createAppServerError('app-server 未运行。', 'APP_SERVER_NOT_RUNNING');
+    }
+    this.child.stdin.write(`${JSON.stringify(message)}\n`);
   }
 
   async listThreads(options = {}) {
@@ -363,16 +502,39 @@ class CodexAppServerClient extends EventEmitter {
     };
   }
 
+  /**
+   * AI:读取线程及完整回合状态，用于 Agent 重连或事件缺失后的权威校验。
+   *
+   * @param {string} threadId 线程标识。
+   * @returns {Promise<object>} 已写入本地缓存的运行态。
+   */
+  async refreshThreadRuntime(threadId) {
+    await this.start();
+    const result = await this.request('thread/read', { threadId, includeTurns: true });
+    const thread = result && result.thread;
+    if (!thread || String(thread.id || '').trim() !== String(threadId || '').trim()) {
+      throw createAppServerError('thread/read 未返回目标线程。', 'APP_SERVER_PROTOCOL_ERROR');
+    }
+    const runtime = runtimeFromThread(thread);
+    this.setRuntime(threadId, runtime);
+    return this.getThreadRuntime(threadId);
+  }
+
   async resumeThread(threadId) {
     await this.start();
     return this.request('thread/resume', { threadId, excludeTurns: true });
   }
 
-  async startTurn(threadId, text) {
+  async startTurn(threadId, text, clientUserMessageId) {
     await this.start();
+    const messageId = String(clientUserMessageId || '').trim();
+    if (!messageId) {
+      throw createAppServerError('缺少客户端用户消息标识。', 'CLIENT_USER_MESSAGE_ID_REQUIRED');
+    }
     const result = await this.request('turn/start', {
       threadId,
       input: [{ type: 'text', text }],
+      clientUserMessageId: messageId,
     });
     const turnId = String(result && result.turn && result.turn.id || '').trim();
     this.setRuntime(threadId, { state: 'running', turnId });
@@ -399,6 +561,12 @@ class CodexAppServerClient extends EventEmitter {
     if (!this.child) return;
     const child = this.child;
     this.child = null;
+    const failure = createAppServerError('app-server 客户端已停止。', 'APP_SERVER_STOPPED');
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(failure);
+    }
+    this.pending.clear();
     child.kill();
   }
 }
@@ -415,5 +583,6 @@ module.exports = {
   parseCodexVersion,
   readCodexVersion,
   resolveAppServerLaunch,
+  runtimeFromThread,
   statusFromProtocol,
 };

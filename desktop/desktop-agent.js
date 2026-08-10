@@ -1,5 +1,7 @@
 const { createDesktopAgentApi } = require('./src/desktop-agent-api');
+const fs = require('node:fs');
 const { createDesktopAgentClient } = require('./src/desktop-agent-client');
+const { createAppServerEventStream } = require('./src/app-server-event-stream');
 const { createCodexAppServerClient } = require('./src/codex-app-server-client');
 const { createCodexDesktopThreadCatalog } = require('./src/codex-desktop-thread-catalog');
 const { reconcileDesktopCatalog } = require('./src/desktop-catalog-reconcile');
@@ -18,6 +20,7 @@ if (!serverUrl || !token) {
 const deviceName = process.env.CODEX_DEVICE_NAME || require('node:os').hostname();
 const appServerStatusPath = String(process.env.CODEX_AGENT_STATUS_PATH || '').trim();
 const appServer = createCodexAppServerClient();
+const appServerEvents = createAppServerEventStream({ deviceId: deviceName });
 const reader = new CodexSessionReader();
 const desktopCatalog = createCodexDesktopThreadCatalog();
 const syncOffsets = new Map();
@@ -86,9 +89,40 @@ function createCatalogMetadata(targets) {
   }));
 }
 
+/**
+ * AI:用轻量文件大小校验找出尚未同步的 JSONL，避免大量线程按轮转长时间等待。
+ *
+ * @param {Array<object>} targets 当前 Desktop 可见线程目标。
+ * @returns {Array<string>} JSONL 与已同步游标不一致的线程标识。
+ */
+function changedSyncTargetIds(targets) {
+  const changed = [];
+  for (const target of targets) {
+    if (!target || !target.threadId || !target.file) continue;
+    try {
+      const size = fs.statSync(target.file).size;
+      const offset = syncOffsets.get(target.threadId);
+      if (!offset || Number(offset.size) !== size) changed.push(target.threadId);
+    } catch (error) {
+      console.error(`对话文件状态读取失败：${describeControlThread(target.threadId)}，${error.message}`);
+    }
+  }
+  return changed;
+}
+
 function nextSyncBatch(targets) {
-  const selection = selectSyncBatch(targets, syncBatchCursor, syncBatchSize, pendingControlSync && pendingControlSync.threadId);
+  const changedThreadIds = changedSyncTargetIds(targets);
+  const selection = selectSyncBatch(
+    targets,
+    syncBatchCursor,
+    syncBatchSize,
+    pendingControlSync && pendingControlSync.threadId,
+    changedThreadIds,
+  );
   if (!selection.prioritized) syncBatchCursor = selection.nextCursor;
+  if (selection.priorityReason === 'changed' && selection.targets[0]) {
+    console.log(`变化对话优先同步：${describeControlThread(selection.targets[0].threadId)}`);
+  }
   return selection.targets;
 }
 
@@ -153,12 +187,17 @@ function describeControlThread(threadId) {
  */
 function logControlProgress(event) {
   const thread = describeControlThread(event.threadId);
+  const request = event.clientUserMessageId ? `，请求 ${event.clientUserMessageId}` : '';
   if (event.phase === 'send.received') {
-    console.log(`收到手机发送请求：${thread}，文本 ${Number(event.textLength) || 0} 字符`);
+    console.log(`收到手机发送请求：${thread}${request}，文本 ${Number(event.textLength) || 0} 字符`);
+    return;
+  }
+  if (event.phase === 'send.deduplicated') {
+    console.log(`重复发送已去重：${thread}${request}`);
     return;
   }
   if (event.phase === 'send.resume.started') {
-    console.log(`正在恢复目标对话：${thread}`);
+    console.log(`正在恢复目标对话：${thread}${request}`);
     return;
   }
   if (event.phase === 'send.resume.completed') {
@@ -170,7 +209,7 @@ function logControlProgress(event) {
     return;
   }
   if (event.phase === 'send.turn.completed') {
-    console.log(`手机回合已确认：${thread}，回合 ${String(event.turnId || '').slice(0, 8)}…`);
+    console.log(`手机回合已确认：${thread}${request}，回合 ${String(event.turnId || '').slice(0, 8)}…`);
     return;
   }
   if (event.phase === 'send.resume.failed' || event.phase === 'send.turn.failed') {
@@ -302,6 +341,7 @@ appServer.on('version-error', ({ error }) => {
 appServer.on('ready', () => {
   lastAppServerError = '';
   reportAppServerStatus('ready', '本机 stdio 会话服务已就绪', true);
+  ws.sendEventState();
   console.log('App Server 已初始化：JSON-RPC stdio 连接就绪');
 });
 appServer.on('stderr', message => console.error(`App Server 输出：${String(message).slice(0, 300)}`));
@@ -311,15 +351,23 @@ appServer.on('runtime', ({ threadId, runtime }) => {
 appServer.on('exit', ({ message }) => {
   lastDiscoveryAt = 0;
   recordAppServerError(new Error(message));
+  ws.sendEventState();
 });
-appServer.on('protocol-error', error => recordAppServerError(error));
-appServer.start().catch(recordAppServerError);
+appServer.on('protocol-error', error => {
+  recordAppServerError(error);
+  ws.sendEventState();
+});
 
 const ws = createDesktopAgentClient({
   serverUrl,
   token,
   api,
   syncProvider,
+  eventStateProvider: () => ({
+    ...appServerEvents.state(),
+    appServerState,
+    appServerMessage: appServerStatusMessage,
+  }),
   syncIntervalMs: Number(process.env.CODEX_AGENT_SYNC_INTERVAL_MS || 1000),
   syncTimeoutMs: Number(process.env.CODEX_AGENT_SYNC_TIMEOUT_MS || 45000),
 });
@@ -373,6 +421,28 @@ ws.on('sync-ack', ack => {
     console.log(`服务器已确认同步：缓存 ${sessionCount} 个对话${removed}，${ack.updatedAt || ''}`);
   }
   lastConfirmedSessionCount = sessionCount;
+});
+ws.on('event-dropped', event => {
+  console.error(`实时事件未发送：Agent WebSocket 未连接，事件 ${event.eventId || '未知'}，线程 ${String(event.threadId || '').slice(0, 8)}…`);
+});
+ws.on('event-state-error', error => {
+  console.error(`事件流状态生成失败：${error.message}`);
+});
+
+appServer.on('notification', ({ method, params }) => {
+  const event = appServerEvents.fromNotification(method, params);
+  if (!event) return;
+  const sent = ws.sendAppServerEvent(event);
+  if (sent && (event.type === 'turn.started' || event.type === 'turn.completed' || event.type === 'thread.status.changed')) {
+    console.log(`实时事件已发送：${event.type}，线程 ${event.threadId.slice(0, 8)}…，回合 ${String(event.turnId || '').slice(0, 8)}…，序号 ${event.seq}`);
+  }
+});
+appServer.on('server-request', request => {
+  console.error(`App Server 主动请求未获授权：${request.method}，请求 ${request.id}`);
+});
+appServer.start().catch(error => {
+  recordAppServerError(error);
+  ws.sendEventState();
 });
 
 function shutdown() {

@@ -78,7 +78,7 @@ function verifyManagerArtifact() {
   const api = readArtifactText(path.join('src', 'desktop-agent-api.js'));
   if (!/createCodexAppServerClient/.test(agent)) fail('desktop-agent.js 未使用 App Server 客户端');
   if (!/resumeThread\(threadId\)/.test(api)) fail('桌面 API 未恢复目标线程');
-  if (!/startTurn\(threadId, text\)/.test(api)) fail('桌面 API 未通过 App Server 发起回合');
+  if (!/startTurn\(threadId, text, clientUserMessageId\)/.test(api)) fail('桌面 API 未携带幂等标识通过 App Server 发起回合');
   if (!/interruptTurn\(threadId\)/.test(api)) fail('桌面 API 未通过 App Server 停止回合');
 
   console.log(`控制平面产物校验通过：${artifactPath}`);

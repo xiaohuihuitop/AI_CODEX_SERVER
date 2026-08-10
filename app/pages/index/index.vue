@@ -119,6 +119,8 @@ const messageText = ref('');
 const serverState = ref({ online: false, offline: false, message: '服务器检测中' });
 const agentState = ref({ online: false, offline: false, message: 'Agent 检测中' });
 const syncState = ref({ fresh: false, version: 0, lastSyncedAt: '' });
+const appServerState = ref({ state: 'unknown', updatedAt: '' });
+const realtimeThreadStates = ref({});
 const currentThreadStatus = ref(null);
 const historyNextBefore = ref('');
 const hasOlderHistory = ref(false);
@@ -149,6 +151,17 @@ let requestTasks = [];
 let runningHistoryRequest = null;
 let runningHistorySyncAt = 0;
 let runningHistoryThreadId = '';
+let clientMessageSequence = 0;
+
+/**
+ * AI:为一次用户提交生成跨层复用的幂等标识。
+ *
+ * @returns {string} 客户端用户消息标识。
+ */
+function createClientUserMessageId() {
+  clientMessageSequence += 1;
+  return `mobile-${Date.now().toString(36)}-${clientMessageSequence.toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 /**
  * AI:按项目分组当前打开的 Codex 对话。
@@ -180,20 +193,23 @@ const projectGroups = computed(() => projectNames.value.map(name => ({
   threads: groupedThreads.value.groups[name] || [],
 })));
 const processTurns = computed(() => normalizeProcessTurns(currentThreadStatus.value));
+const selectedRealtimeState = computed(() => realtimeThreadStates.value[selectedThreadId.value] || null);
 const running = computed(() => {
+  if (selectedRealtimeState.value) return agentState.value.online && selectedRealtimeState.value.status === 'running';
   const status = (currentThreadStatus.value && currentThreadStatus.value.status) || (selectedThread.value && selectedThread.value.status);
   const activeStatus = Boolean(currentThreadStatus.value && currentThreadStatus.value.active) || Boolean(selectedThread.value && selectedThread.value.active);
   return agentState.value.online && syncState.value.fresh && (activeStatus || status === 'running');
 });
 const complete = computed(() => {
+  if (selectedRealtimeState.value) return selectedRealtimeState.value.status === 'complete';
   const currentStatus = currentThreadStatus.value && currentThreadStatus.value.status;
   const selectedStatus = selectedThread.value && selectedThread.value.status;
   return !running.value && (currentStatus === 'complete' || selectedStatus === 'complete');
 });
 const canStop = computed(() => running.value && !sending.value && !switchingThread.value && !(pendingWatch.value && pendingWatch.value.threadId === selectedThreadId.value));
 const canSend = computed(() => {
-  const status = (currentThreadStatus.value && currentThreadStatus.value.status) || (selectedThread.value && selectedThread.value.status) || '';
-  const active = Boolean(currentThreadStatus.value && currentThreadStatus.value.active) || Boolean(selectedThread.value && selectedThread.value.active);
+  const status = (selectedRealtimeState.value && selectedRealtimeState.value.status) || (currentThreadStatus.value && currentThreadStatus.value.status) || (selectedThread.value && selectedThread.value.status) || '';
+  const active = selectedRealtimeState.value ? selectedRealtimeState.value.active : Boolean(currentThreadStatus.value && currentThreadStatus.value.active) || Boolean(selectedThread.value && selectedThread.value.active);
   const waitingForDesktop = Boolean(pendingWatch.value && pendingWatch.value.threadId === selectedThreadId.value);
   return Boolean(selectedThreadId.value && !sending.value && !switchingThread.value && !waitingForDesktop && !active && status !== 'running');
 });
@@ -201,12 +217,18 @@ const serverDotClass = computed(() => serverState.value.online ? 'dot-green' : s
 const agentDotClass = computed(() => agentState.value.online ? 'dot-green' : 'dot-gray');
 const threadDotClass = computed(() => running.value ? 'dot-blue' : complete.value ? 'dot-green' : 'dot-gray');
 const serverText = computed(() => serverState.value.online ? '服务器已连' : serverState.value.message || '服务器未知');
-const agentText = computed(() => agentState.value.online ? 'Agent 在线' : agentState.value.message || 'Agent 未知');
+const agentText = computed(() => {
+  if (!agentState.value.online) return agentState.value.message || 'Agent 未知';
+  if (appServerState.value.state === 'unavailable' || appServerState.value.state === 'stopped') return '会话服务异常';
+  if (appServerState.value.state === 'starting') return '会话服务启动中';
+  return 'Agent 在线';
+});
 const threadText = computed(() => {
-  if (!syncState.value.fresh && agentState.value.online) return '状态未确认';
   if (pendingWatch.value && pendingWatch.value.threadId === selectedThreadId.value) {
     return pendingWatch.value.unconfirmed ? '发送未确认' : '等待电脑确认';
   }
+  if (selectedRealtimeState.value) return running.value ? '对话进行中' : complete.value ? '对话已完成' : '对话空闲';
+  if (!syncState.value.fresh && agentState.value.online) return '状态未确认';
   return running.value ? '对话进行中' : complete.value ? '对话已完成' : '对话空闲';
 });
 const timelineItems = computed(() => {
@@ -681,7 +703,7 @@ function mergePendingLocalMessages(threadId, historyRows) {
     if (hasHistoryMessage(rows, 'user', pending.text, pending.baseMessageCount)) continue;
     nextPending.push(pending);
     const localRows = [];
-    localRows.push({ role: 'user', text: pending.text, id: pending.userId });
+    localRows.push({ role: 'user', text: pending.text, pending: true, id: pending.userId });
     if (!hasAssistantAfterPendingBase(rows, pending)) {
       const assistant = { role: 'assistant', text: '已发送，等待 Codex 回复...', pending: true, id: pending.assistantId };
       if (pending.turnId) assistant.turnId = pending.turnId;
@@ -814,6 +836,10 @@ function applyRelayState(data) {
     version: nextVersion,
     lastSyncedAt: typeof data.lastSyncedAt === 'string' ? data.lastSyncedAt : syncState.value.lastSyncedAt,
   };
+  if (typeof data.appServerState === 'string') appServerState.value = {
+    state: data.appServerState,
+    updatedAt: typeof data.appServerUpdatedAt === 'string' ? data.appServerUpdatedAt : appServerState.value.updatedAt,
+  };
   applyAgentOnline(data);
   if (!syncState.value.fresh && pendingWatch.value && (data.type === 'sync-status' || data.agentOnline === false)) {
     pendingWatch.value = Object.assign({}, pendingWatch.value, { unconfirmed: true });
@@ -892,6 +918,7 @@ async function loadThreads() {
  */
 function applyThreadStatus(status) {
   if (!applyRelayState(status)) return false;
+  reconcileRealtimeThreadState(status);
   currentThreadStatus.value = status;
   bindPendingAssistantTurn(status);
   syncManualProcessOpenState(status);
@@ -902,6 +929,25 @@ function applyThreadStatus(status) {
     commandConfirmTimer = null;
   }
   return true;
+}
+
+/**
+ * AI:只有权威状态包含同一回合且状态一致时才移除实时覆盖，避免旧快照造成闪烁。
+ *
+ * @param {object} status HTTP 返回的线程状态。
+ * @returns {void}
+ */
+function reconcileRealtimeThreadState(status) {
+  const threadId = String(status && status.threadId || '').trim();
+  const realtime = realtimeThreadStates.value[threadId];
+  if (!realtime) return;
+  const authoritativeStatus = status.active || status.status === 'running' ? 'running' : status.status;
+  const turns = Array.isArray(status.turns) ? status.turns : [];
+  const turnConfirmed = !realtime.turnId || turns.some(turn => turn && turn.turnId === realtime.turnId);
+  if (!turnConfirmed || authoritativeStatus !== realtime.status) return;
+  const next = Object.assign({}, realtimeThreadStates.value);
+  delete next[threadId];
+  realtimeThreadStates.value = next;
 }
 
 /**
@@ -946,7 +992,7 @@ async function loadHistory(statusData = null, options = {}) {
     setNotice('没有可用 Codex 对话');
     return;
   }
-  const data = await getHistory(config.value, requestedThreadId, { limit: 10, registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+  const data = await getHistory(config.value, requestedThreadId, { limit: 5, registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
   if (!canUpdateTask(token) || selectedThreadId.value !== requestedThreadId) return;
   if (!applyRelayState(data)) return;
   messages.value = mergePendingLocalMessages(requestedThreadId, mergeLoadedHistory(messages.value, data.messages || []));
@@ -1068,6 +1114,8 @@ async function syncRunningHistory(statusData) {
  * @returns {string} 状态样式类名。
  */
 function threadDotClassFor(thread) {
+  const realtime = thread && realtimeThreadStates.value[thread.id];
+  if (realtime) return realtime.status === 'running' ? 'dot-blue' : realtime.status === 'error' ? 'dot-red' : 'dot-green';
   const isSelected = thread && thread.id === selectedThreadId.value;
   const status = isSelected && currentThreadStatus.value
     ? currentThreadStatus.value.status
@@ -1138,18 +1186,21 @@ async function send() {
   followBottom.value = true;
   historyReloadedForCompletion.value = false;
   try {
-    const data = await sendMessage(config.value, { threadId: selectedThreadId.value, text }, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+    const clientUserMessageId = createClientUserMessageId();
+    const baseMessageCount = messages.value.length;
+    const data = await sendMessage(config.value, {
+      threadId: selectedThreadId.value,
+      text,
+      clientUserMessageId,
+    }, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token)) return;
     const sentAt = Date.now();
-    const pending = registerPendingLocalSend(selectedThreadId.value, text, sentAt, messages.value.length);
+    const pending = registerPendingLocalSend(selectedThreadId.value, text, sentAt, baseMessageCount);
     pendingWatch.value = Object.assign({}, data.watch || { threadId: selectedThreadId.value }, {
       kind: 'send',
       acceptedSyncVersion: Number(data.acceptedSyncVersion) || syncState.value.version,
     });
-    messages.value = messages.value.concat([
-      { role: 'user', text, id: pending.userId },
-      { role: 'assistant', text: '已发送，等待 Codex 回复...', pending: true, id: pending.assistantId },
-    ]);
+    messages.value = mergePendingLocalMessages(selectedThreadId.value, messages.value);
     await scrollToBottom();
     waitForCommandConfirmation(pendingWatch.value);
     await pollStatus(pendingWatch.value);
@@ -1251,7 +1302,7 @@ async function loadOlderHistory() {
   if (!requestedThreadId || !hasOlderHistory.value || loadingOlderHistory.value) return;
   loadingOlderHistory.value = true;
   try {
-    const data = await getHistory(config.value, requestedThreadId, { limit: 10, before: historyNextBefore.value, registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+    const data = await getHistory(config.value, requestedThreadId, { limit: 5, before: historyNextBefore.value, registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
     if (!canUpdateTask(token) || requestedThreadId !== selectedThreadId.value) return;
     if (!applyRelayState(data)) return;
     messages.value = mergePendingLocalMessages(requestedThreadId, mergeLoadedHistory(data.messages || [], messages.value));
@@ -1278,6 +1329,48 @@ function scheduleRealtimeReconnect() {
 }
 
 /**
+ * AI:把 App Server 线程事件转换为短生命周期状态覆盖，随后由 HTTP 权威数据对账。
+ *
+ * @param {object} event Relay 的 thread-event 消息。
+ * @returns {void}
+ */
+function applyRealtimeThreadEvent(event) {
+  const payload = event && event.event;
+  const threadId = String(payload && payload.threadId || '').trim();
+  if (!threadId) return;
+  const previous = realtimeThreadStates.value[threadId];
+  const seq = Number(payload.seq) || 0;
+  if (previous && seq <= previous.seq) return;
+  let status = '';
+  let active = false;
+  if (payload.type === 'turn.started') {
+    status = 'running';
+    active = true;
+  } else if (payload.type === 'turn.completed') {
+    const turnStatus = String(payload.payload && payload.payload.turn && payload.payload.turn.status || '').toLowerCase();
+    status = turnStatus === 'failed' ? 'error' : 'complete';
+  } else if (payload.type === 'thread.status.changed') {
+    const protocolStatus = String(payload.payload && payload.payload.status && payload.payload.status.type || '').toLowerCase();
+    if (protocolStatus === 'active') {
+      status = 'running';
+      active = true;
+    } else if (protocolStatus === 'idle') status = 'complete';
+    else if (protocolStatus === 'systemerror') status = 'error';
+  }
+  if (!status) return;
+  const realtime = {
+    threadId,
+    turnId: String(payload.turnId || '').trim(),
+    status,
+    active,
+    seq,
+    observedAt: String(payload.observedAt || ''),
+  };
+  realtimeThreadStates.value = Object.assign({}, realtimeThreadStates.value, { [threadId]: realtime });
+  threadRows.value = threadRows.value.map(row => row.id === threadId ? Object.assign({}, row, { status, active }) : row);
+}
+
+/**
  * AI:处理服务端实时状态事件。
  *
  * @param {object} event Relay 推送的事件。
@@ -1286,6 +1379,16 @@ function scheduleRealtimeReconnect() {
 function handleRealtimeEvent(event) {
   if (!event || typeof event !== 'object') return;
   if (!applyRelayState(event)) return;
+  if (event.type === 'thread-event') {
+    applyRealtimeThreadEvent(event);
+    scheduleRealtimeRefresh();
+    return;
+  }
+  if (event.type === 'event-resync-required') {
+    realtimeThreadStates.value = {};
+    scheduleRealtimeRefresh();
+    return;
+  }
   if (event.type === 'session-updated') scheduleRealtimeRefresh();
 }
 

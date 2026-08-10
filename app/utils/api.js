@@ -162,6 +162,7 @@ export function sendMessage(config, payload, options = {}) {
     data: {
       threadId: payload.threadId,
       text: payload.text,
+      clientUserMessageId: payload.clientUserMessageId,
     },
     registerTask: options.registerTask,
     unregisterTask: options.unregisterTask,

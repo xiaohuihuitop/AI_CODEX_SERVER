@@ -37,6 +37,10 @@ function createTestClient(child, options = {}) {
   });
 }
 
+function nextTick() {
+  return new Promise(resolve => setImmediate(resolve));
+}
+
 test('Windows 优先选择最新 Codex Desktop 内置程序', () => {
   const localAppData = 'C:\\Users\\tester\\AppData\\Local';
   const root = 'C:\\Users\\tester\\AppData\\Local\\OpenAI\\Codex\\bin';
@@ -112,6 +116,64 @@ test('app-server 客户端初始化时上报当前运行时版本', async () => 
   client.stop();
 });
 
+test('app-server 客户端完成 initialize 后发送 initialized 通知', async () => {
+  const child = createChild();
+  const writes = [];
+  child.stdin.on('data', data => {
+    const message = JSON.parse(String(data));
+    writes.push(message);
+    if (message.method === 'initialize') respond(child, message.id, { userAgent: 'test' });
+  });
+  const client = createTestClient(child);
+
+  await client.start();
+
+  assert.deepEqual(writes.slice(0, 2), [
+    {
+      id: '1',
+      method: 'initialize',
+      params: {
+        clientInfo: { name: 'codex-windows-agent', version: '0.2.0' },
+        capabilities: { experimentalApi: true },
+      },
+    },
+    { method: 'initialized', params: {} },
+  ]);
+  client.stop();
+});
+
+test('app-server 主动请求不会被误判为本地响应并静默丢弃', async () => {
+  const child = createChild();
+  const writes = [];
+  child.stdin.on('data', data => {
+    const message = JSON.parse(String(data));
+    writes.push(message);
+    if (message.method === 'initialize') respond(child, message.id, {});
+  });
+  const client = createTestClient(child);
+  const requests = [];
+  client.on('server-request', request => requests.push(request));
+  await client.start();
+
+  child.stdout.write(`${JSON.stringify({
+    id: 'server-1',
+    method: 'item/commandExecution/requestApproval',
+    params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' },
+  })}\n`);
+  await nextTick();
+
+  assert.deepEqual(requests, [{
+    id: 'server-1',
+    method: 'item/commandExecution/requestApproval',
+    params: { threadId: 'thread-1', turnId: 'turn-1', itemId: 'item-1' },
+  }]);
+  assert.deepEqual(writes.at(-1), {
+    id: 'server-1',
+    error: { code: -32601, message: 'App Server 主动请求暂不支持远程处理。' },
+  });
+  client.stop();
+});
+
 test('Codex 版本读取失败不阻断 app-server 会话初始化', async () => {
   const child = createChild();
   child.stdin.on('data', data => {
@@ -150,7 +212,7 @@ test('app-server 客户端初始化后按未归档更新时间读取线程', asy
   const result = await client.listThreads();
 
   assert.equal(writes[0].method, 'initialize');
-  assert.deepEqual(writes[1], {
+  assert.deepEqual(writes.find(message => message.method === 'thread/list'), {
     id: '2',
     method: 'thread/list',
     params: { archived: false, limit: 100, sortKey: 'updated_at', sortDirection: 'desc', cursor: null },
@@ -161,7 +223,40 @@ test('app-server 客户端初始化后按未归档更新时间读取线程', asy
   client.stop();
 });
 
-test('app-server 客户端按同一 threadId 恢复、发起和中断回合', async () => {
+test('app-server 客户端通过 thread/read 恢复线程权威运行态', async () => {
+  const child = createChild();
+  const writes = [];
+  child.stdin.on('data', data => {
+    const message = JSON.parse(String(data));
+    writes.push(message);
+    if (message.method === 'initialize') respond(child, message.id, {});
+    if (message.method === 'thread/read') respond(child, message.id, {
+      thread: {
+        id: 'thread-1',
+        status: { type: 'idle' },
+        turns: [
+          { id: 'turn-1', status: 'completed', items: [], completedAt: 1786348800 },
+        ],
+      },
+    });
+  });
+  const client = createTestClient(child);
+
+  const runtime = await client.refreshThreadRuntime('thread-1');
+
+  assert.deepEqual(writes.find(message => message.method === 'thread/read'), {
+    id: '2',
+    method: 'thread/read',
+    params: { threadId: 'thread-1', includeTurns: true },
+  });
+  assert.equal(runtime.state, 'complete');
+  assert.equal(runtime.turnId, 'turn-1');
+  assert.equal(runtime.turnStatus, 'completed');
+  assert.equal(client.getThreadRuntime('thread-1').state, 'complete');
+  client.stop();
+});
+
+test('app-server 客户端按同一 threadId 和消息标识恢复、发起和中断回合', async () => {
   const child = createChild();
   const writes = [];
   child.stdin.on('data', data => {
@@ -175,12 +270,20 @@ test('app-server 客户端按同一 threadId 恢复、发起和中断回合', as
   const client = createTestClient(child);
 
   await client.resumeThread('thread-1');
-  await client.startTurn('thread-1', '来自手机的消息');
+  await client.startTurn('thread-1', '来自手机的消息', 'message-1');
   await client.interruptTurn('thread-1');
 
-  assert.deepEqual(writes.slice(1), [
+  assert.deepEqual(writes.filter(message => message.method !== 'initialized').slice(1), [
     { id: '2', method: 'thread/resume', params: { threadId: 'thread-1', excludeTurns: true } },
-    { id: '3', method: 'turn/start', params: { threadId: 'thread-1', input: [{ type: 'text', text: '来自手机的消息' }] } },
+    {
+      id: '3',
+      method: 'turn/start',
+      params: {
+        threadId: 'thread-1',
+        input: [{ type: 'text', text: '来自手机的消息' }],
+        clientUserMessageId: 'message-1',
+      },
+    },
     { id: '4', method: 'turn/interrupt', params: { threadId: 'thread-1', turnId: 'turn-1' } },
   ]);
   client.stop();
@@ -193,11 +296,12 @@ test('app-server 通知统一更新线程运行状态', async () => {
 
   client.applyNotification('turn/started', { threadId: 'thread-1', turn: { id: 'turn-1' } });
   client.applyNotification('thread/status/changed', { threadId: 'thread-1', status: { type: 'active' } });
-  client.applyNotification('turn/completed', { threadId: 'thread-1', turn: { id: 'turn-1' } });
+  client.applyNotification('turn/completed', { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed' } });
 
   assert.equal(updates.length, 3);
-  assert.deepEqual(client.getThreadRuntime('thread-1').state, 'idle');
+  assert.deepEqual(client.getThreadRuntime('thread-1').state, 'complete');
   assert.equal(client.getThreadRuntime('thread-1').turnId, 'turn-1');
+  assert.equal(client.getThreadRuntime('thread-1').turnStatus, 'completed');
   assert.equal(client.getThreadRuntime('unseen-thread').state, 'unknown');
 });
 
