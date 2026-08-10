@@ -13,12 +13,12 @@
 
 ```js
 await appServer.resumeThread(threadId);
-const started = await appServer.startTurn(threadId, text);
+const started = await appServer.startTurn(threadId, text, clientUserMessageId);
 await appServer.interruptTurn(threadId);
 ```
 
 - `resumeThread(threadId: string)`：恢复目标线程。
-- `startTurn(threadId: string, text: string)`：创建回合，必须返回非空 `turn.id`。
+- `startTurn(threadId: string, text: string, clientUserMessageId: string)`：幂等创建回合，必须返回非空 `turn.id`。
 - `interruptTurn(threadId: string)`：停止目标线程当前回合。
 
 ### 3. 契约
@@ -37,6 +37,7 @@ await appServer.interruptTurn(threadId);
 | 条件 | 必须行为 |
 | --- | --- |
 | `threadId` 缺失 | 返回 `THREAD_ID_REQUIRED`，不调用 App Server |
+| `clientUserMessageId` 缺失或复用于不同内容 | 返回 `CLIENT_USER_MESSAGE_ID_REQUIRED` 或 `CLIENT_USER_MESSAGE_ID_CONFLICT`，不创建新回合 |
 | `resumeThread` 失败 | 返回 `THREAD_RESUME_FAILED`，不执行 `startTurn` |
 | `startTurn` 失败或无 `turn.id` | 返回 `TURN_START_FAILED`，不伪造发送成功 |
 | App Server 未就绪 | 管理器显示未就绪；不得尝试 CDP 或重启 Codex |
@@ -132,3 +133,74 @@ advanceControlSyncState(state, evidence, now);
 #### 正确
 
 用户消息落盘只完成发送确认，Agent 仍保留同一线程为优先目标；只有读取到相同 `turn.id` 的完成证据后才解除优先同步。线程是否存在只由显式权威目录决定。
+
+## 场景：有序事件、状态重连校验与客户端消息去重
+
+### 1. 范围 / 触发条件
+
+- 触发条件：修改 App Server 通知、Relay WebSocket、手机/Web 自动刷新、运行状态合并、历史分页或发送后的本地消息展示。
+- Agent 自己发起的回合使用 App Server 事件实时更新；JSONL 负责最终历史对账。官方 Desktop 发起的回合继续使用 JSONL 变化观察，二者不能互相替换。
+
+### 2. 签名
+
+```js
+const runtime = await appServer.refreshThreadRuntime(threadId);
+client.sendAppServerEvent(event);
+paginateMessagesByTurn(messages, 5, `turn:${oldestTurnId}`);
+```
+
+- `refreshThreadRuntime(threadId: string)`：调用 `thread/read({ threadId, includeTurns: true })`，以返回的线程状态和最后回合状态恢复运行态。
+- `sendAppServerEvent(event)`：事件必须包含 `streamId`、单调 `seq`、唯一 `eventId`、`threadId`、`turnId`、`source`、`observedAt` 和 `payload`。
+- `paginateMessagesByTurn(messages, limit, before)`：`before` 只能使用 `turn:<turnId>`；游标无效时返回 `invalidCursor: true`，禁止退回数组索引。
+
+### 3. 契约
+
+| 数据 | 主来源 | 对账行为 |
+| --- | --- | --- |
+| Agent 发起回合实时状态 | App Server 通知事件 | 事件空洞、重连或 JSONL 仍为运行中时执行 `thread/read` |
+| Agent 发起回合最终历史 | JSONL | 以相同 `turnId` 合并，不复制用户消息或过程块 |
+| Desktop 发起回合 | JSONL 文件变化 | 变化线程优先于普通轮转同步 |
+| 可见线程目录 | Desktop SQLite | 显式 `openThreadIds` 物理清理 Relay 缓存 |
+
+- `thread/read` 的 `completed`、`interrupted`、`failed` 必须立即结束页面等待；校验失败返回 `APP_SERVER_STATUS_FAILED`，不得继续显示猜测状态。
+- `notLoaded` 只表示当前 Agent App Server 未加载线程，不能单独推断官方 Desktop 回合已完成。
+- Relay 按 `eventId` 去重；`seq` 空洞或 `streamId` 改变必须广播 `resyncRequired`，客户端清除临时事件覆盖并读取权威快照。
+- 手机初始加载和向上分页每次 5 轮；Web 可加载更大窗口，但必须使用相同稳定回合游标。
+- 发送请求发出前保存 `baseMessageCount`。Agent 受理后才登记本地待确认消息；权威历史已包含相同用户文本时不再插入，本地用户气泡必须标记 `pending`，供历史到达后替换。
+
+### 4. 校验与错误矩阵
+
+| 条件 | 必须行为 |
+| --- | --- |
+| App Server 事件重复或倒序 | 忽略重复；倒序不得覆盖较新状态 |
+| 事件序号空洞或连接纪元变化 | 标记需对账并读取目标线程历史/状态 |
+| JSONL 显示运行中且运行时未知/运行中 | 调用 `thread/read`，按同一 `turnId` 收敛 |
+| `thread/read` 请求失败或返回其他线程 | 返回 `APP_SERVER_STATUS_FAILED`，记录线程 ID 与错误 |
+| `before` 不是 `turn:<turnId>` 或目标不存在 | 返回空页和 `invalidCursor: true` |
+| POST 等待期间历史先同步用户消息 | 使用发送前边界识别已有消息，只显示一次 |
+
+### 5. 正常 / 基准 / 异常案例
+
+- 正常：Web 发送唯一消息，页面只显示一个用户气泡，实时收到完成事件和最终回复，不需要手动刷新。
+- 基准：Agent 重连后 JSONL 残留运行态，`thread/read` 返回最后回合 `interrupted`，页面立即停止计时并显示已结束。
+- 异常：Relay 收到 `seq=8` 后直接收到 `seq=10`；不得猜测缺失事件，必须要求目标线程快照对账。
+
+### 6. 必需测试
+
+- `server/test/app-server-event-stream.test.js`：断言事件字段、序号单调和缺失线程事件拒绝。
+- `server/test/cloud-relay.test.js`：断言事件去重、序号空洞、连接纪元和对账广播。
+- `server/test/codex-app-server-client.test.js`：断言 `thread/read(includeTurns=true)` 与终态恢复。
+- `server/test/desktop-agent-api.test.js`：断言 JSONL 运行态触发权威校验，失败显式传播。
+- `server/test/codex-session-reader.test.js`：断言稳定 `turnId` 分页、新回合不会改变更早页。
+- `server/test/mobile-app.test.js`：断言发送前边界、本地待确认消息替换和五轮分页。
+- 真实 Web：连续发送、自动完成、Agent 重连状态恢复、停止和单消息去重均必须通过。
+
+### 7. 错误与正确做法
+
+#### 错误
+
+App Server 事件缺失后继续依赖旧 JSONL 无限显示“进行中”，或用超时时间强制改成完成；POST 返回后无条件追加本地用户气泡。
+
+#### 正确
+
+事件缺失或重连时调用同一 App Server 的 `thread/read` 校验具体回合；协议失败明确报错。发送前保存历史边界，只有权威历史尚未出现消息时才插入待确认气泡。

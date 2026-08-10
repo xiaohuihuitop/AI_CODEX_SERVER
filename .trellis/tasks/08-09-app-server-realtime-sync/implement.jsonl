@@ -1,0 +1,2 @@
+{"file":".trellis/spec/backend/codex-control-plane.md","reason":"约束 App Server 唯一控制面、SQLite 可见线程目录和现有 JSONL 投影职责。"}
+{"file":".trellis/tasks/08-09-app-server-realtime-sync/research.md","reason":"记录官方协议以及 codexUI、codex-web 可借鉴和不可采用的设计。"}
