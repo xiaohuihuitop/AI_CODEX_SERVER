@@ -385,6 +385,12 @@ the final assistant row is visible in `/codex/history`, and a history/status
 snapshot can omit the turn that produced the live event because the endpoint
 returns a bounded page. Consumers must therefore apply both rules:
 
+- A direct Agent status response marked `cached: false` is authoritative for
+  terminal state. It clears any realtime running overlay even if the overlay
+  was observed later on the client or has a different/missing `turnId`.
+- A cached status response marked `cached: true` is only a projection. It may
+  clear a running overlay only when the same turn is confirmed, final history
+  is present, or its terminal timestamp is no earlier than the live event.
 - A newer authoritative terminal snapshot (`completedAt >= observedAt`) clears
   a stale running overlay even when its `turnId` is absent from the bounded
   `turns` list.
@@ -395,5 +401,8 @@ returns a bounded page. Consumers must therefore apply both rules:
 
 Do not use a single status response as proof that history is complete. Any
 change to the event payload, history pagination, or status reducer must test
-the out-of-order sequence (`turn.started -> terminal status -> final history`)
-and the missing-terminal-event sequence (`turn.started -> final history`).
+the out-of-order sequence (`terminal direct status -> delayed turn.started`),
+the normal sequence (`turn.started -> terminal status -> final history`), and
+the missing-terminal-event sequence (`turn.started -> final history`). Client
+receipt timestamps describe delivery order, not source authority, and must
+never override an explicit direct terminal result.

@@ -935,7 +935,7 @@ function applyThreadStatus(status) {
 }
 
 /**
- * AI:同一回合状态已确认，或权威终态晚于实时事件时移除覆盖，避免旧状态长期卡住。
+ * AI:Agent 直接终态、同一回合状态已确认或较新的终态快照均可移除实时覆盖。
  *
  * @param {object} status HTTP 返回的线程状态。
  * @returns {void}
@@ -957,8 +957,12 @@ function reconcileRealtimeThreadState(status) {
     && Number.isFinite(completedAt)
     && Number.isFinite(observedAt)
     && completedAt >= observedAt;
+  const directTerminalStatusIsAuthoritative = status.cached === false && authoritativeStatus !== 'running';
   const realtimeStateConfirmed = turnConfirmed && authoritativeStatus === realtime.status;
-  if (!historyHasFinalReply && !realtimeStateConfirmed && !terminalSnapshotIsNewer) return;
+  if (!directTerminalStatusIsAuthoritative
+    && !historyHasFinalReply
+    && !realtimeStateConfirmed
+    && !terminalSnapshotIsNewer) return;
   const next = Object.assign({}, realtimeThreadStates.value);
   delete next[threadId];
   realtimeThreadStates.value = next;

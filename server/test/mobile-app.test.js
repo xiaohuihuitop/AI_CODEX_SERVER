@@ -384,6 +384,33 @@ test('uni-app Android 手机端以较新的终态快照清除陈旧实时进行�
   assert.equal(realtimeThreadStates.value.threadA, undefined);
 });
 
+test('uni-app Android 手机端以 Agent 直接终态清除迟到的实时运行覆盖', () => {
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+  const source = index.match(/function reconcileRealtimeThreadState\(status\) \{([\s\S]*?)\n\}/)?.[0] || '';
+  const realtimeThreadStates = { value: {
+    threadA: {
+      threadId: 'threadA',
+      turnId: 'turn-running',
+      status: 'running',
+      active: true,
+      seq: 9,
+      observedAt: '2026-08-11T04:15:50.000Z',
+    },
+  } };
+  const messages = { value: [] };
+  const reconcile = new Function('realtimeThreadStates', 'messages', `${source}\nreturn reconcileRealtimeThreadState;`)(realtimeThreadStates, messages);
+
+  reconcile({
+    threadId: 'threadA',
+    active: false,
+    status: 'complete',
+    cached: false,
+    completedAt: '2026-08-11T04:14:33.181Z',
+    turns: [{ turnId: 'turn-terminal', status: 'complete' }],
+  });
+  assert.equal(realtimeThreadStates.value.threadA, undefined);
+});
+
 test('uni-app Android 手机端历史已含最终回复时清除运行中覆盖', () => {
   const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
   const source = index.match(/function reconcileRealtimeThreadState\(status\) \{([\s\S]*?)\n\}/)?.[0] || '';
@@ -525,6 +552,42 @@ test('uni-app Android 请求支持页面销毁时取消', () => {
   assert.match(api, /timeout: timeoutMs,/);
   assert.match(api, /请求超时，请检查电脑 Agent 或服务器连接。/);
   assert.match(api, /if \(task && typeof task\.abort === 'function'\) task\.abort\(\);/);
+});
+
+test('uni-app Android 实时连接强制使用 SocketTask 回调模式', () => {
+  const api = fs.readFileSync(path.join(appDir, 'utils', 'api.js'), 'utf8');
+  const buildRealtimeUrlSource = api.match(/function buildRealtimeUrl\(serverUrl\) \{[\s\S]*?\n\}/)?.[0] || '';
+  const createRealtimeSocketSource = (api.match(/export function createRealtimeSocket\(config, handlers = \{\}\) \{[\s\S]*?\n\}/)?.[0] || '')
+    .replace('export function', 'function');
+  const listeners = {};
+  const socketTask = {
+    onOpen(handler) { listeners.open = handler; },
+    onMessage(handler) { listeners.message = handler; },
+    onClose(handler) { listeners.close = handler; },
+    onError(handler) { listeners.error = handler; },
+  };
+  let connectOptions = null;
+  const uni = {
+    connectSocket(options) {
+      connectOptions = options;
+      const callbackMode = ['success', 'fail', 'complete'].some(name => typeof options[name] === 'function');
+      return callbackMode ? socketTask : Promise.resolve(socketTask);
+    },
+  };
+  const createRealtimeSocket = new Function(
+    'uni',
+    `${buildRealtimeUrlSource}\n${createRealtimeSocketSource}\nreturn createRealtimeSocket;`,
+  )(uni);
+
+  const result = createRealtimeSocket(
+    { serverUrl: 'http://relay.example', token: 'token-1' },
+    { open() {}, message() {}, close() {}, error() {} },
+  );
+
+  assert.equal(result, socketTask);
+  assert.equal(connectOptions.url, 'ws://relay.example/mobile');
+  assert.equal(typeof connectOptions.complete, 'function');
+  assert.deepEqual(Object.keys(listeners).sort(), ['close', 'error', 'message', 'open']);
 });
 
 test('uni-app Android 设置页测试连接离开页面时取消请求', () => {

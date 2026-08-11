@@ -35,6 +35,8 @@ export function createRealtimeSocket(config, handlers = {}) {
   const task = uni.connectSocket({
     url: buildRealtimeUrl(config.serverUrl),
     header: { 'x-mobile-typer-token': config.token },
+    // AI:HBuilderX 会将无回调调用 Promise 化；显式使用回调模式才能取得 SocketTask。
+    complete() {},
   });
   task.onOpen(event => {
     if (typeof handlers.open === 'function') handlers.open(event);

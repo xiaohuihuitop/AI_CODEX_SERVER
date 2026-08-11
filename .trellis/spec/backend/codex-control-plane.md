@@ -166,6 +166,8 @@ paginateMessagesByTurn(messages, 5, `turn:${oldestTurnId}`);
 - `thread/read` 的 `completed`、`interrupted`、`failed` 必须立即结束页面等待；校验失败返回 `APP_SERVER_STATUS_FAILED`，不得继续显示猜测状态。
 - `notLoaded` 只表示当前 Agent App Server 未加载线程，不能单独推断官方 Desktop 回合已完成。
 - Relay 按 `eventId` 去重；`seq` 空洞或 `streamId` 改变必须广播 `resyncRequired`，客户端清除临时事件覆盖并读取权威快照。
+- Relay 在线直读 Agent 后返回的 `cached: false` 终态是当前线程的权威裁决，必须立即清除客户端实时运行覆盖；不得用 WebSocket 事件的客户端接收时间否决该终态。
+- `cached: true` 的终态只表示 Relay 缓存投影，清除实时运行覆盖前仍需满足同一 `turnId`、最终回复已出现或 `completedAt >= observedAt` 中至少一项。
 - 手机初始加载和向上分页每次 5 轮；Web 可加载更大窗口，但必须使用相同稳定回合游标。
 - 发送请求发出前保存 `baseMessageCount`。Agent 受理后才登记本地待确认消息；权威历史已包含相同用户文本时不再插入，本地用户气泡必须标记 `pending`，供历史到达后替换。
 
@@ -175,6 +177,8 @@ paginateMessagesByTurn(messages, 5, `turn:${oldestTurnId}`);
 | --- | --- |
 | App Server 事件重复或倒序 | 忽略重复；倒序不得覆盖较新状态 |
 | 事件序号空洞或连接纪元变化 | 标记需对账并读取目标线程历史/状态 |
+| `cached: false` 直接状态为终态，但迟到事件仍为运行中 | 立即删除实时覆盖并结束等待，不比较客户端接收时间 |
+| `cached: true` 缓存状态与实时状态冲突 | 保留实时覆盖，直到获得回合、最终回复或时间顺序证据 |
 | JSONL 显示运行中且运行时未知/运行中 | 调用 `thread/read`，按同一 `turnId` 收敛 |
 | `thread/read` 请求失败或返回其他线程 | 返回 `APP_SERVER_STATUS_FAILED`，记录线程 ID 与错误 |
 | `before` 不是 `turn:<turnId>` 或目标不存在 | 返回空页和 `invalidCursor: true` |
@@ -194,6 +198,7 @@ paginateMessagesByTurn(messages, 5, `turn:${oldestTurnId}`);
 - `server/test/desktop-agent-api.test.js`：断言 JSONL 运行态触发权威校验，失败显式传播。
 - `server/test/codex-session-reader.test.js`：断言稳定 `turnId` 分页、新回合不会改变更早页。
 - `server/test/mobile-app.test.js`：断言发送前边界、本地待确认消息替换和五轮分页。
+- `server/test/mobile-app.test.js` 与 `server/test/cloud-relay.test.js`：必须构造 `completedAt < realtime.observedAt` 的迟到运行事件，并断言 `cached: false` 直接终态仍能清除覆盖。
 - 真实 Web：连续发送、自动完成、Agent 重连状态恢复、停止和单消息去重均必须通过。
 
 ### 7. 错误与正确做法

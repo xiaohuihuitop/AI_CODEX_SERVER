@@ -37,6 +37,34 @@ test('云端手机网页端通过实时通道接收状态更新，不使用固�
   assert.doesNotMatch(html, /setInterval\(/);
 });
 
+test('云端手机网页端以 Agent 直接终态清除迟到的实时运行覆盖', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+  const source = html.match(/function reconcileRealtimeThreadState\(status\) \{([\s\S]*?)\n    \}/)?.[0] || '';
+  const realtimeThreadStates = new Map([['threadA', {
+    threadId: 'threadA',
+    turnId: 'turn-running',
+    status: 'running',
+    active: true,
+    observedAt: '2026-08-11T04:15:50.000Z',
+  }]]);
+  const renderedHistoryRows = [];
+  const reconcile = new Function(
+    'realtimeThreadStates',
+    'renderedHistoryRows',
+    `${source}\nreturn reconcileRealtimeThreadState;`,
+  )(realtimeThreadStates, renderedHistoryRows);
+
+  reconcile({
+    threadId: 'threadA',
+    active: false,
+    status: 'complete',
+    cached: false,
+    completedAt: '2026-08-11T04:14:33.181Z',
+    turns: [{ turnId: 'turn-terminal', status: 'complete' }],
+  });
+  assert.equal(realtimeThreadStates.has('threadA'), false);
+});
+
 test('云端 relay 手机线程请求读取服务器缓存', async () => {
   const server = createCloudRelayServer({
     tokens: ['test-token'],
