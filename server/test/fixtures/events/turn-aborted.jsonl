@@ -1,0 +1,4 @@
+{"timestamp":"2026-08-11T08:00:00.000Z","type":"session_meta","payload":{"id":"55555555-6666-7777-8888-999999999999","cwd":"C:\\Users\\admin\\Desktop\\demo"}}
+{"timestamp":"2026-08-11T08:00:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-aborted"}}
+{"timestamp":"2026-08-11T08:00:01.000Z","type":"event_msg","payload":{"type":"agent_reasoning","turn_id":"turn-aborted","text":"正在处理"}}
+{"timestamp":"2026-08-11T08:00:02.000Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"turn-aborted","reason":"interrupted"}}

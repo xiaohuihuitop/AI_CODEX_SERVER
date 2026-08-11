@@ -955,6 +955,41 @@ test('云端缓存接收较短的新快照时保留已缓存的更早历史', ()
   assert.equal(cache.status('merge-snapshot-token', 'thread-snapshot').status, 'running');
 });
 
+test('云端缓存增量收到 turn_aborted 后刷新普通状态和 since 状态', () => {
+  const cache = createCloudSessionCache();
+  const threadId = 'thread-aborted';
+  const since = '2026-08-11T08:00:00.000Z';
+  const startedLines = [
+    JSON.stringify({ timestamp: '2026-08-11T08:00:00.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-aborted' } }),
+    JSON.stringify({ timestamp: '2026-08-11T08:00:01.000Z', type: 'event_msg', payload: { type: 'agent_reasoning', text: '正在处理' } }),
+  ];
+  cache.applySync('abort-token', {
+    openThreadIds: [threadId],
+    sessions: [{ threadId, reset: true, lines: startedLines }],
+  });
+  assert.equal(cache.status('abort-token', threadId).status, 'running');
+  assert.equal(cache.status('abort-token', threadId, since).status, 'running');
+
+  cache.applySync('abort-token', {
+    openThreadIds: [threadId],
+    sessions: [{
+      threadId,
+      lines: [JSON.stringify({
+        timestamp: '2026-08-11T08:00:02.000Z',
+        type: 'event_msg',
+        payload: { type: 'turn_aborted', reason: 'interrupted' },
+      })],
+    }],
+  });
+
+  for (const status of [cache.status('abort-token', threadId), cache.status('abort-token', threadId, since)]) {
+    assert.equal(status.active, false);
+    assert.equal(status.status, 'complete');
+    assert.equal(status.turns[0].status, 'interrupted');
+    assert.equal(status.turns[0].interruptionReason, '用户停止');
+  }
+});
+
 test('云端缓存支持渲染为用户消息、处理过程、最终回复顺序', () => {
   const cache = createCloudSessionCache();
   cache.applySync('order-token', {

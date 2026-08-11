@@ -184,6 +184,7 @@ paginateMessagesByTurn(messages, 5, `turn:${oldestTurnId}`);
 | `cached: true` 缓存状态与实时状态冲突 | 保留实时覆盖，直到获得回合、最终回复或时间顺序证据 |
 | JSONL 显示运行中且运行时未知/运行中 | 调用 `thread/read`，按同一 `turnId` 收敛 |
 | `thread/read` 请求失败或返回其他线程 | 返回 `APP_SERVER_STATUS_FAILED`，记录线程 ID 与错误 |
+| JSONL 收到 `turn_aborted` | 线程立即投影为 `active=false`、`status=complete`；对应回合投影为 `interrupted`，完成时间使用该事件时间 |
 | `before` 不是 `turn:<turnId>` 或目标不存在 | 返回空页和 `invalidCursor: true` |
 | POST 等待期间历史先同步用户消息 | 使用发送前边界识别已有消息，只显示一次 |
 
@@ -201,6 +202,7 @@ paginateMessagesByTurn(messages, 5, `turn:${oldestTurnId}`);
 - `server/test/codex-app-server-client.test.js`：断言已超时请求的迟到响应仅产生诊断事件、真正未知 ID 仍报协议错误、旧进程事件不污染新进程。
 - `server/test/desktop-agent-api.test.js`：断言 JSONL 运行态触发权威校验，失败显式传播。
 - `server/test/codex-session-reader.test.js`：断言稳定 `turnId` 分页、新回合不会改变更早页。
+- `server/test/codex-session-reader.test.js` 与 `server/test/cloud-relay.test.js`：使用真实 `turn_aborted` 载荷同时约束 Desktop 解析、Relay 普通状态和 `since` 状态缓存。
 - `server/test/mobile-app.test.js`：断言发送前边界、本地待确认消息替换和五轮分页。
 - `server/test/mobile-app.test.js` 与 `server/test/cloud-relay.test.js`：必须构造 `completedAt < realtime.observedAt` 的迟到运行事件，并断言 `cached: false` 直接终态仍能清除覆盖。
 - 真实 Web：连续发送、自动完成、Agent 重连状态恢复、停止和单消息去重均必须通过。

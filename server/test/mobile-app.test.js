@@ -134,12 +134,47 @@ test('uni-app Android 手机端 Agent 离线时不中断轮次不继续累计处
   const normalizeFunction = index.match(/function normalizeProcessTurns\(status\) \{([\s\S]*?)\n\}/)?.[1] || '';
   const titleFunction = index.match(/function processTitle\(turn, open\) \{([\s\S]*?)\n\}/)?.[1] || '';
 
-  assert.match(normalizeFunction, /const interrupted = Boolean\(turn && turn\.status === 'running' && \(!agentState\.value\.online \|\| !syncState\.value\.fresh\)\);/);
+  assert.match(normalizeFunction, /turn\.status === 'interrupted'/);
+  assert.match(normalizeFunction, /turn\.status === 'running' && \(!agentState\.value\.online \|\| !syncState\.value\.fresh\)/);
   assert.match(normalizeFunction, /status: interrupted \? 'interrupted'/);
   assert.match(normalizeFunction, /durationText: formatElapsedTime\(turn && turn\.startedAt, turn && turn\.completedAt, interrupted \? syncState\.value\.lastSyncedAt : ''\)/);
   assert.match(titleFunction, /turn && turn\.status === 'interrupted'/);
   assert.match(titleFunction, /interruptionReason/);
   assert.match(index, /return false;/);
+});
+
+test('uni-app Android 和 Web 保留手动停止回合的终态语义', () => {
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+  const web = fs.readFileSync(path.join(root, 'server', 'public', 'index.html'), 'utf8');
+  const source = index.match(/function normalizeProcessTurns\(status\) \{([\s\S]*?)\n\}/)?.[0] || '';
+  const normalize = new Function(
+    'visibleProcessSteps',
+    'processStateKey',
+    'formatElapsedTime',
+    'agentState',
+    'syncState',
+    `${source}\nreturn normalizeProcessTurns;`,
+  )(
+    turn => turn.steps || [],
+    turn => turn.turnId,
+    () => '已处理 2s',
+    { value: { online: true } },
+    { value: { fresh: true, lastSyncedAt: '' } },
+  );
+
+  const turns = normalize({
+    turns: [{
+      turnId: 'turn-aborted',
+      status: 'interrupted',
+      interruptionReason: '用户停止',
+      steps: [{ kind: 'interrupted', text: '本轮回复已停止' }],
+    }],
+  });
+
+  assert.equal(turns[0].status, 'interrupted');
+  assert.equal(turns[0].interruptionReason, '用户停止');
+  assert.match(web, /turn\?\.status === 'interrupted'/);
+  assert.match(web, /turn\?\.interruptionReason/);
 });
 
 test('uni-app Android 手机端展示前会清理 Codex UI 上下文', () => {

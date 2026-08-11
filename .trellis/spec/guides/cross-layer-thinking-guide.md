@@ -406,3 +406,17 @@ the normal sequence (`turn.started -> terminal status -> final history`), and
 the missing-terminal-event sequence (`turn.started -> final history`). Client
 receipt timestamps describe delivery order, not source authority, and must
 never override an explicit direct terminal result.
+
+JSONL terminal events are a closed cross-layer taxonomy, not a synonym for
+`task_complete`. At minimum, both the Desktop reader and Relay cache parser
+must handle:
+
+- `task_complete`: thread terminal, turn `complete`;
+- assistant `final_answer`: thread terminal even when `task_complete` is delayed;
+- `turn_aborted`: thread `active=false` and terminal, turn `interrupted`, with
+  `completedAt` taken from the abort event.
+
+Whenever a terminal event kind is added or discovered, replay the same payload
+through the Desktop reader, Relay parser including `since` cache, Web reducer,
+and uni-app reducer. A UI-only timeout or stale-state conversion is not an
+acceptable substitute for parsing the source event.

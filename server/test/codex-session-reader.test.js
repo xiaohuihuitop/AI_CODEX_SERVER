@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const {
   CodexSessionReader,
@@ -10,6 +11,7 @@ const {
   stripCodexUiDirectives,
   threadIdFromSessionFile,
 } = require('../../desktop/src/codex-session-reader');
+const { parseSession } = require('../src/session-cache');
 
 const fixtureRoot = path.join(__dirname, 'fixtures');
 
@@ -588,6 +590,30 @@ test('final_answer 后缺少 task_complete 时也视为完成', () => {
   assert.equal(status.active, false);
   assert.equal(status.status, 'complete');
   assert.equal(status.final, '最终回复');
+});
+
+test('手动停止 turn_aborted 后 Desktop 与 Relay 都结束运行状态', () => {
+  const file = path.join(fixtureRoot, 'events', 'turn-aborted.jsonl');
+  const lines = fs.readFileSync(file, 'utf8').trim().split(/\r?\n/);
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+
+  const desktopStatus = reader.parseStatus({
+    threadId: '55555555-6666-7777-8888-999999999999',
+    file,
+  });
+  const relayStatus = parseSession(lines, '55555555-6666-7777-8888-999999999999').status;
+
+  for (const status of [desktopStatus, relayStatus]) {
+    assert.equal(status.active, false);
+    assert.equal(status.status, 'complete');
+    assert.equal(status.completedAt, '2026-08-11T08:00:02.000Z');
+    assert.equal(status.turns[0].status, 'interrupted');
+    assert.equal(status.turns[0].completedAt, '2026-08-11T08:00:02.000Z');
+    assert.equal(status.turns[0].interruptionReason, '用户停止');
+  }
 });
 
 test('同一轮最终回复的双记录只保留一个最终步骤', () => {

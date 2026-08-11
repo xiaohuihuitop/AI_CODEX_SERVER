@@ -690,12 +690,12 @@
     function processTurns(status) {
       return (status?.turns || [])
         .map(turn => {
-          const interrupted = Boolean(turn?.status === 'running' && (!agentOnline || !syncState.fresh));
+          const interrupted = Boolean(turn?.status === 'interrupted' || (turn?.status === 'running' && (!agentOnline || !syncState.fresh)));
           return {
             turnId: turn?.turnId || '',
             status: interrupted ? 'interrupted' : turn?.status || '',
             steps: (turn?.steps || []).filter(step => step?.text && step.kind !== 'start' && step.kind !== 'final' && step.kind !== 'complete'),
-            interruptionReason: !agentOnline ? 'Agent 未在线' : '状态未确认',
+            interruptionReason: turn?.interruptionReason || (!agentOnline ? 'Agent 未在线' : '状态未确认'),
             durationText: formatElapsedTime(turn?.startedAt || '', turn?.completedAt || '', interrupted ? syncState.lastSyncedAt : ''),
           };
         })

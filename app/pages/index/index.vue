@@ -385,12 +385,14 @@ function normalizeProcessTurns(status) {
   return ((status && status.turns) || [])
     .map(turn => {
       const steps = visibleProcessSteps(turn);
-      const interrupted = Boolean(turn && turn.status === 'running' && (!agentState.value.online || !syncState.value.fresh));
+      const interrupted = Boolean(turn && (turn.status === 'interrupted' || (turn.status === 'running' && (!agentState.value.online || !syncState.value.fresh))));
       return {
         turnId: turn && turn.turnId ? turn.turnId : '',
         processKey: processStateKey(turn, steps),
         status: interrupted ? 'interrupted' : turn && turn.status ? turn.status : '',
-        interruptionReason: !agentState.value.online ? 'Agent 未在线' : '状态未确认',
+        interruptionReason: turn && turn.interruptionReason
+          ? turn.interruptionReason
+          : !agentState.value.online ? 'Agent 未在线' : '状态未确认',
         steps,
         final: turn && turn.final ? turn.final : '',
         durationText: formatElapsedTime(turn && turn.startedAt, turn && turn.completedAt, interrupted ? syncState.value.lastSyncedAt : ''),

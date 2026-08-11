@@ -528,6 +528,11 @@ function parseSession(lines, threadId, since = '') {
       turn.status = 'complete';
       turn.completedAt = enriched.time || turn.completedAt;
     }
+    if (enriched.kind === 'interrupted') {
+      turn.status = 'interrupted';
+      turn.completedAt = enriched.time || turn.completedAt;
+      turn.interruptionReason = enriched.reason || '用户停止';
+    }
   };
 
   for (const line of lines || []) {
@@ -641,12 +646,28 @@ function parseSession(lines, threadId, since = '') {
       }
       addStep({ kind: 'complete', label: '完成', text: '回复完成', time: item.timestamp || '' }, { visible });
     }
+    if (item.type === 'event_msg' && payload.type === 'turn_aborted') {
+      currentTurnId = String(payload.turn_id || payload.turnId || currentTurnId || '').trim();
+      const reason = String(payload.reason || '').trim();
+      if (visible) {
+        active = false;
+        completed = true;
+        completedAt = item.timestamp || completedAt;
+      }
+      addStep({
+        kind: 'interrupted',
+        label: '已停止',
+        text: '本轮回复已停止',
+        reason: !reason || reason === 'interrupted' ? '用户停止' : reason,
+        time: item.timestamp || '',
+      }, { visible });
+    }
   }
 
   const turns = Array.from(turnsById.values()).map(turn => {
     const hasComplete = turn.steps.some(step => step.kind === 'complete' || step.kind === 'final');
     return Object.assign({}, turn, {
-      status: hasComplete ? 'complete' : active && turn.turnId === latestTurnId ? 'running' : 'idle',
+      status: turn.status === 'interrupted' ? 'interrupted' : hasComplete ? 'complete' : active && turn.turnId === latestTurnId ? 'running' : 'idle',
       steps: turn.steps.slice(-30),
     });
   });
