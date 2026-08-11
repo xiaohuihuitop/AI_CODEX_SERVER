@@ -357,6 +357,10 @@ appServer.on('protocol-error', error => {
   recordAppServerError(error);
   ws.sendEventState();
 });
+appServer.on('late-response', ({ id, method, timedOutAt, receivedAt }) => {
+  const delayedMs = Math.max(0, Date.parse(receivedAt) - Date.parse(timedOutAt));
+  console.log(`App Server 迟到响应已隔离：请求 ${id}，方法 ${method}，超时后 ${delayedMs}ms 返回`);
+});
 
 const ws = createDesktopAgentClient({
   serverUrl,

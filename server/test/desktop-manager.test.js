@@ -107,6 +107,7 @@ test('桌面管理器提供日志清除操作', () => {
   assert.match(agent, /手机发送已落盘：/);
   assert.match(agent, /手机回合完整同步/);
   assert.match(agent, /手机控制同步完成/);
+  assert.match(agent, /App Server 迟到响应已隔离/);
   assert.match(main, /resolveAppServerStatus/);
   assert.match(main, /App Server 未就绪：/);
   assert.doesNotMatch(main, /restartCodexDesktopWithDebug/);
@@ -122,7 +123,7 @@ test('桌面管理器统一使用固定目录、固定名称并展示版本', ()
 
   assert.equal(pkg.build.directories.output, 'dist');
   assert.equal(pkg.productName, 'Codex Desktop 管理器');
-  assert.equal(pkg.version, '0.2.3');
+  assert.equal(pkg.version, '0.2.4');
   assert.match(main, /const MANAGER_VERSION = app\.getVersion\(\)/);
   assert.match(main, /Codex Desktop 管理器 v\$\{MANAGER_VERSION\} 已启动/);
   assert.match(html, /id="managerVersion"/);

@@ -319,3 +319,74 @@ test('app-server 请求超时和异常退出会清理待处理请求', async () 
   await assert.rejects(() => pending, error => error.code === 'APP_SERVER_EXITED');
   assert.equal(client.pending.size, 0);
 });
+
+test('app-server 本地超时后的迟到响应不会把已就绪服务标记为协议错误', async () => {
+  const child = createChild();
+  let timedOutRequestId = '';
+  child.stdin.on('data', data => {
+    const message = JSON.parse(String(data));
+    if (message.method === 'initialize') respond(child, message.id, {});
+    if (message.method === 'thread/list') timedOutRequestId = String(message.id);
+  });
+  const client = createTestClient(child);
+  const protocolErrors = [];
+  const lateResponses = [];
+  client.on('protocol-error', error => protocolErrors.push(error));
+  client.on('late-response', response => lateResponses.push(response));
+
+  await client.start();
+  client.requestTimeoutMs = 10;
+  await assert.rejects(() => client.request('thread/list', {}), error => error.code === 'APP_SERVER_TIMEOUT');
+  assert.ok(timedOutRequestId);
+
+  respond(child, timedOutRequestId, { data: [] });
+  await nextTick();
+
+  assert.equal(protocolErrors.length, 0);
+  assert.deepEqual(lateResponses.map(response => ({ id: response.id, method: response.method })), [
+    { id: timedOutRequestId, method: 'thread/list' },
+  ]);
+  assert.equal(client.isRunning(), true);
+  client.stop();
+});
+
+test('app-server 从未发送过的响应 ID 仍报告协议错误', () => {
+  const client = new CodexAppServerClient();
+  const protocolErrors = [];
+  client.on('protocol-error', error => protocolErrors.push(error));
+
+  client.handleMessage(JSON.stringify({ id: 'never-issued', result: {} }));
+
+  assert.equal(protocolErrors.length, 1);
+  assert.equal(protocolErrors[0].code, 'APP_SERVER_UNKNOWN_RESPONSE');
+});
+
+test('app-server 旧进程的迟到输出和退出不会污染新进程', async () => {
+  const firstChild = createChild();
+  const secondChild = createChild();
+  firstChild.kill = () => {
+    firstChild.killed = true;
+  };
+  for (const child of [firstChild, secondChild]) {
+    child.stdin.on('data', data => {
+      const message = JSON.parse(String(data));
+      if (message.method === 'initialize') respond(child, message.id, {});
+    });
+  }
+  const children = [firstChild, secondChild];
+  const client = createTestClient(firstChild, { spawnProcess: () => children.shift() });
+  const protocolErrors = [];
+  client.on('protocol-error', error => protocolErrors.push(error));
+
+  await client.start();
+  client.stop();
+  await client.start();
+  firstChild.stdout.write(`${JSON.stringify({ id: 'old-process', result: {} })}\n`);
+  firstChild.emit('close', 0, null);
+  await nextTick();
+
+  assert.equal(protocolErrors.length, 0);
+  assert.equal(client.child, secondChild);
+  assert.equal(client.isRunning(), true);
+  client.stop();
+});

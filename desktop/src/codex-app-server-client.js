@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15000;
 const VERSION_REQUEST_TIMEOUT_MS = 5000;
+const MAX_TIMED_OUT_REQUESTS = 256;
 
 function createAppServerError(message, code = 'APP_SERVER_FAILED') {
   return Object.assign(new Error(message), { code });
@@ -175,6 +176,7 @@ class CodexAppServerClient extends EventEmitter {
     this.starting = null;
     this.nextRequestId = 1;
     this.pending = new Map();
+    this.timedOutRequests = new Map();
     this.stdoutBuffer = '';
     this.runtimes = new Map();
   }
@@ -221,6 +223,8 @@ class CodexAppServerClient extends EventEmitter {
     if (!child || !child.stdin || !child.stdout || !child.stderr) {
       throw createAppServerError('codex app-server 未提供可用的 stdio 通道。', 'APP_SERVER_START_FAILED');
     }
+    this.stdoutBuffer = '';
+    this.timedOutRequests.clear();
     this.child = child;
     this.emit('launch', launch);
     this.resolveRuntimeVersion(launch);
@@ -240,13 +244,17 @@ class CodexAppServerClient extends EventEmitter {
   }
 
   attachChild(child) {
-    child.stdout.on('data', data => this.handleStdout(data));
+    child.stdout.on('data', data => {
+      if (this.child !== child) return;
+      this.handleStdout(data);
+    });
     child.stderr.on('data', data => {
+      if (this.child !== child) return;
       const message = String(data || '').trim();
       if (message) this.emit('stderr', message);
     });
-    child.on('error', error => this.handleExit(error, null, null));
-    child.on('close', (code, signal) => this.handleExit(null, code, signal));
+    child.on('error', error => this.handleExit(child, error, null, null));
+    child.on('close', (code, signal) => this.handleExit(child, null, code, signal));
   }
 
   /**
@@ -296,15 +304,28 @@ class CodexAppServerClient extends EventEmitter {
       || Object.prototype.hasOwnProperty.call(message, 'error')
     );
     if (isResponse) {
-      const pending = this.pending.get(String(message.id));
+      const responseId = String(message.id);
+      const pending = this.pending.get(responseId);
       if (!pending) {
+        const timedOut = this.timedOutRequests.get(responseId);
+        if (timedOut) {
+          this.timedOutRequests.delete(responseId);
+          this.emit('late-response', {
+            id: responseId,
+            method: timedOut.method,
+            timedOutAt: timedOut.timedOutAt,
+            receivedAt: new Date().toISOString(),
+            hasError: Boolean(message.error),
+          });
+          return;
+        }
         this.emit('protocol-error', createAppServerError(
-          `app-server 返回了未知请求 ID：${String(message.id)}`,
+          `app-server 返回了未知请求 ID：${responseId}`,
           'APP_SERVER_UNKNOWN_RESPONSE',
         ));
         return;
       }
-      this.pending.delete(String(message.id));
+      this.pending.delete(responseId);
       clearTimeout(pending.timer);
       if (message.error) {
         pending.reject(createAppServerError(
@@ -394,8 +415,8 @@ class CodexAppServerClient extends EventEmitter {
     this.emit('runtime', { threadId, runtime });
   }
 
-  handleExit(error, code, signal) {
-    if (!this.child) return;
+  handleExit(child, error, code, signal) {
+    if (this.child !== child) return;
     this.child = null;
     const message = error
       ? `app-server 子进程异常：${error.message}`
@@ -406,7 +427,23 @@ class CodexAppServerClient extends EventEmitter {
       pending.reject(failure);
     }
     this.pending.clear();
+    this.timedOutRequests.clear();
     this.emit('exit', { error, code, signal, message });
+  }
+
+  /**
+   * AI:记录本客户端已发出但在本地超时的请求，区分迟到响应与真正未知响应。
+   *
+   * @param {string} id 请求标识。
+   * @param {string} method JSON-RPC 方法。
+   * @returns {void}
+   */
+  rememberTimedOutRequest(id, method) {
+    this.timedOutRequests.set(id, { method, timedOutAt: new Date().toISOString() });
+    while (this.timedOutRequests.size > MAX_TIMED_OUT_REQUESTS) {
+      const oldestId = this.timedOutRequests.keys().next().value;
+      this.timedOutRequests.delete(oldestId);
+    }
   }
 
   /**
@@ -422,6 +459,7 @@ class CodexAppServerClient extends EventEmitter {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        this.rememberTimedOutRequest(id, method);
         reject(createAppServerError(`app-server 请求 ${method} 超时。`, 'APP_SERVER_TIMEOUT'));
       }, this.requestTimeoutMs);
       this.pending.set(id, { method, resolve, reject, timer });
@@ -567,6 +605,7 @@ class CodexAppServerClient extends EventEmitter {
       pending.reject(failure);
     }
     this.pending.clear();
+    this.timedOutRequests.clear();
     child.kill();
   }
 }

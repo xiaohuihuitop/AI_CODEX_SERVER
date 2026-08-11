@@ -41,6 +41,9 @@ await appServer.interruptTurn(threadId);
 | `resumeThread` 失败 | 返回 `THREAD_RESUME_FAILED`，不执行 `startTurn` |
 | `startTurn` 失败或无 `turn.id` | 返回 `TURN_START_FAILED`，不伪造发送成功 |
 | App Server 未就绪 | 管理器显示未就绪；不得尝试 CDP 或重启 Codex |
+| 已发出请求在本地超时后收到迟到响应 | 记录请求 ID、方法和延迟时间，不得降级 App Server 就绪状态 |
+| 收到从未发出过的响应 ID | 报告 `APP_SERVER_UNKNOWN_RESPONSE` 协议错误，不得静默忽略 |
+| App Server 进程已被替换 | 旧进程的 stdout、stderr、error 和 close 事件必须全部隔离，不得修改新进程状态 |
 | 手机/Web 展示滞后 | 排查同步投影；不得改变控制平面 |
 
 ### 5. 正常 / 基准 / 异常案例
@@ -195,6 +198,7 @@ paginateMessagesByTurn(messages, 5, `turn:${oldestTurnId}`);
 - `server/test/app-server-event-stream.test.js`：断言事件字段、序号单调和缺失线程事件拒绝。
 - `server/test/cloud-relay.test.js`：断言事件去重、序号空洞、连接纪元和对账广播。
 - `server/test/codex-app-server-client.test.js`：断言 `thread/read(includeTurns=true)` 与终态恢复。
+- `server/test/codex-app-server-client.test.js`：断言已超时请求的迟到响应仅产生诊断事件、真正未知 ID 仍报协议错误、旧进程事件不污染新进程。
 - `server/test/desktop-agent-api.test.js`：断言 JSONL 运行态触发权威校验，失败显式传播。
 - `server/test/codex-session-reader.test.js`：断言稳定 `turnId` 分页、新回合不会改变更早页。
 - `server/test/mobile-app.test.js`：断言发送前边界、本地待确认消息替换和五轮分页。
