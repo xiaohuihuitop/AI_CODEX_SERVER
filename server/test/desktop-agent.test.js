@@ -659,12 +659,11 @@ test('withTimeout 超时后返回明确错误码', async () => {
 test('desktop-agent API 控制 Codex 时暴露 busy 状态', async () => {
   let releaseControl;
   const api = new DesktopAgentApi({
-    appServer: {
-      resumeThread: async () => {},
-      startTurn: async () => new Promise(resolve => {
+    desktopController: {
+      sendMessage: async () => new Promise(resolve => {
         releaseControl = resolve;
       }),
-      interruptTurn: async () => {},
+      stop: async () => {},
     },
     now: () => Date.parse('2026-06-08T00:00:00.000Z'),
   });
@@ -676,7 +675,7 @@ test('desktop-agent API 控制 Codex 时暴露 busy 状态', async () => {
   });
   await new Promise(resolve => setImmediate(resolve));
   assert.equal(api.isBusy(), true);
-  releaseControl({ turn: { id: 'turn-1' } });
+  releaseControl({ turnId: 'turn-1' });
   await sending;
   assert.equal(api.isBusy(), false);
 });

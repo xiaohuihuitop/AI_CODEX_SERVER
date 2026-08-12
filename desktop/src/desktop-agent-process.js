@@ -42,7 +42,7 @@ function findExistingAgentSnapshot(processMatchText, processNamePattern = '^node
 }
 
 /**
- * AI:结束 Windows Agent 及其 app-server 子进程，避免重启后遗留后台会话服务。
+ * AI:结束 Windows Agent 进程树，避免管理器重启后遗留重复同步进程。
  *
  * @param {number} pid Agent 主进程 PID。
  * @returns {void}

@@ -1,218 +1,157 @@
 # Codex 控制平面契约
 
-## 场景：Windows Agent 跨端控制 Codex Desktop
+## 场景：手机/Web 控制官方 Windows Codex Desktop
 
 ### 1. 范围 / 触发条件
 
-- 触发条件：修改手机/Web 发送、停止、线程目录、运行状态、桌面管理器或 Windows Agent 打包逻辑。
-- 本契约只约束正式产品链路；不提供 CDP、DOM 自动化或自动重启 Codex 能力。
+- 触发条件：修改手机/Web 发送、停止、线程选择、运行状态、Windows Agent、桌面管理器或打包逻辑。
+- 产品不变量：官方 Codex Desktop 是唯一会话执行者。Agent 只控制该官方实例并同步其 JSONL，不得启动第二个 `codex.exe app-server` 执行回合。
+- 本次根因：独立 App Server 与官方 Desktop 同时读写会话，导致两套进程内状态和事件流分叉；此前缺少唯一控制面规范及真实双端验收，使实现反复切换。
 
 ### 2. 签名
 
-正式控制仅允许以下 App Server 调用顺序：
-
 ```js
-await appServer.resumeThread(threadId);
-const started = await appServer.startTurn(threadId, text, clientUserMessageId);
-await appServer.interruptTurn(threadId);
+const runtime = new ControlledCodexRuntime({ debugPort, reader });
+await runtime.start();
+await runtime.sendMessage(threadId, text);
+await runtime.stop(threadId);
+await runtime.getThreadRuntime(threadId);
 ```
 
-- `resumeThread(threadId: string)`：恢复目标线程。
-- `startTurn(threadId: string, text: string, clientUserMessageId: string)`：幂等创建回合，必须返回非空 `turn.id`。
-- `interruptTurn(threadId: string)`：停止目标线程当前回合。
+- `start()`：复用已正确携带 CDP 参数的官方实例，否则在草稿安全检查后受控重启。
+- `sendMessage(threadId, text)`：按 `threadId` 精确选择官方侧栏线程，点击前精确核对编辑器正文，点击后等待目标 JSONL 新 `task_started/turnId` 证据。
+- `stop(threadId)`：按 `threadId` 精确选择线程，点击官方停止按钮，并等待目标 JSONL `turn_aborted` 证据。
+- `getThreadRuntime(threadId)`：只读取当前已选线程的官方运行态；不得为了状态轮询切换电脑界面。
 
 ### 3. 契约
 
 | 层 | 唯一数据源 / 责任 | 禁止行为 |
 | --- | --- | --- |
-| 控制 | Desktop 内置 `codex.exe app-server` stdio | CDP、DOM 输入、重启 Codex |
-| 线程目录 | Desktop 本地会话目录与 JSONL 映射 | 用 App Server 列表或 UI 选择器替换目录 |
-| 历史与状态 | JSONL -> Agent -> relay | 由 UI 图标或进程存在推断 |
-| 管理器状态 | Agent App Server 心跳及运行时版本 | CDP 端口、GUI 进程存在 |
+| 会话执行 | 受控官方 Codex Desktop | 独立 App Server、CLI 或第二实例执行手机回合 |
+| 线程定位 | `[data-app-action-sidebar-thread-id="local:<threadId>"]` | 按标题、项目名或列表位置猜测 |
+| 发送/停止成功 | 发送使用目标线程新 `task_started/turnId`；停止使用目标线程中断记录 | 仅凭点击成功、按钮变化或超时猜测 |
+| 历史/最终状态 | JSONL -> Agent -> Relay | 用 UI 文本替代历史事实 |
+| 当前线程实时状态 | 官方编辑器发送/停止按钮 | 查询非当前线程时切换电脑界面 |
+| 线程存在性 | Desktop SQLite 侧栏目录 | 扫描所有 JSONL 后把归档线程重新上传 |
 
-环境变量只允许通过管理器配置注入 `CODEX_CLOUD_URL`、`CODEX_DEVICE_TOKEN`、`CODEX_DEVICE_NAME` 和显式的 Agent 同步参数；不得注入 `CODEX_DEBUG_PORT`。
+环境变量：
+
+- `CODEX_CLOUD_URL`：Relay 地址，必填。
+- `CODEX_DEVICE_TOKEN`：设备 Key，必填。
+- `CODEX_DEVICE_NAME`：设备名称。
+- `CODEX_DEBUG_PORT`：官方客户端本机 CDP 端口，默认 `9230`。
+
+严禁 fallback：CDP、线程定位或 JSONL 确认失败时必须返回明确错误，不得改用独立 App Server、自动换端口、按标题猜线程或伪造完成状态。
 
 ### 4. 校验与错误矩阵
 
 | 条件 | 必须行为 |
 | --- | --- |
-| `threadId` 缺失 | 返回 `THREAD_ID_REQUIRED`，不调用 App Server |
-| `clientUserMessageId` 缺失或复用于不同内容 | 返回 `CLIENT_USER_MESSAGE_ID_REQUIRED` 或 `CLIENT_USER_MESSAGE_ID_CONFLICT`，不创建新回合 |
-| `resumeThread` 失败 | 返回 `THREAD_RESUME_FAILED`，不执行 `startTurn` |
-| `startTurn` 失败或无 `turn.id` | 返回 `TURN_START_FAILED`，不伪造发送成功 |
-| App Server 未就绪 | 管理器显示未就绪；不得尝试 CDP 或重启 Codex |
-| 已发出请求在本地超时后收到迟到响应 | 记录请求 ID、方法和延迟时间，不得降级 App Server 就绪状态 |
-| 收到从未发出过的响应 ID | 报告 `APP_SERVER_UNKNOWN_RESPONSE` 协议错误，不得静默忽略 |
-| App Server 进程已被替换 | 旧进程的 stdout、stderr、error 和 close 事件必须全部隔离，不得修改新进程状态 |
-| 手机/Web 展示滞后 | 排查同步投影；不得改变控制平面 |
+| 非 Windows 平台 | `WINDOWS_ONLY` |
+| 未安装官方 Codex 包或 manifest 无入口 | `CODEX_PACKAGE_NOT_FOUND` |
+| 配置端口被非目标官方进程占用 | `CDP_PORT_OCCUPIED`；不得终止未知进程或自动换端口 |
+| 官方实例无正确 CDP 参数 | 检查草稿后受控重启 |
+| 存在草稿 | `CODEX_DRAFT_EXISTS`；不得关闭官方客户端 |
+| 无法确认草稿 | `CODEX_DRAFT_UNKNOWN`；不得关闭官方客户端 |
+| AUMID 启动后 CDP 未就绪 | `CDP_START_FAILED` |
+| 侧栏无精确 `threadId` | `THREAD_ROW_NOT_FOUND`；不得按标题选择 |
+| 切换后选中 ID 不一致 | `THREAD_SELECTION_FAILED` |
+| 编辑器有草稿或线程运行中 | `LOCAL_DRAFT_EXISTS` / `THREAD_ALREADY_RUNNING` |
+| 点击发送但目标 JSONL 未出现新回合 | `TURN_START_CONFIRM_TIMEOUT`；不得返回成功 |
+| 点击停止但目标 JSONL 未出现中断证据 | `STOP_CONFIRM_TIMEOUT`；不得返回成功 |
+| CDP 连接断开 | Agent 和管理器立即显示未连接；不得保持虚假在线 |
 
 ### 5. 正常 / 基准 / 异常案例
 
-- 正常：手机发送到已同步线程，Agent 按 `resumeThread -> startTurn` 调用，JSONL 出现用户消息与回复，relay 回写状态。
-- 基准：线程空闲且 App Server 就绪，管理器显示“已就绪”和实际使用的 Desktop 内置 Codex 版本。
-- 异常：本地目录未收录线程或 JSONL 尚未落盘，返回真实错误或等待同步证据；不能转向 CDP 进行 UI 注入。
+- 正常：Web 向 `threadId=A` 发送唯一文本，官方 Desktop 自动选中 A 并显示用户消息和回复，JSONL 出现同一回合，Web 自动刷新到完成。
+- 基准：官方实例已由管理器以配置端口启动，Agent 复用进程和持久 CDP，不重启、不创建第二控制服务。
+- 异常：两个项目存在同名线程。只能选择属性中精确匹配的 `threadId`；找不到时显式失败。
+- 异常：端口已被其他进程监听。管理器显示占用 PID，用户修改配置或处理占用后重试，不做隐式恢复。
 
 ### 6. 必需测试
 
-- `server/test/desktop-agent-api.test.js`：断言发送、停止的 App Server 调用次序及错误传播。
-- `server/test/control-plane-contract.test.js`：断言产品源码、默认启动入口和打包清单不含 CDP 控制路径。
-- `desktop/scripts/verify-manager-artifact.js`：构建后扫描 `app.asar`，发现旧控制模块、CDP 标识或缺少 App Server 调用即失败。
-- 端到端：同一 `threadId` 从 Web 发送，验证本地 JSONL 的用户消息和回复均出现。
+- `server/test/controlled-codex-process.test.js`：Appx 发现、端口所有权、草稿保护、AUMID 启动和 CDP 参数。
+- `server/test/codex-cdp-client.test.js`：持久连接、请求 ID、断线和协议错误。
+- `server/test/codex-desktop-ui-controller.test.js`：精确 threadId、草稿、发送、停止及不切换式状态读取。
+- `server/test/codex-session-evidence.test.js`：目标消息时间边界和停止证据。
+- `server/test/controlled-codex-runtime.test.js`：复用/重启决策和唯一控制器委托。
+- `server/test/control-plane-contract.test.js`：禁止独立 App Server 控制模块重新进入正式源码。
+- `desktop/scripts/verify-manager-artifact.js`：对实际 `app.asar` 执行相同控制面约束。
+- 真实 E2E：在 `codex_temp` 线程从 Web 连续发送至少 3 轮；逐轮核对官方 UI、JSONL、Web 回复和完成状态。另执行 1 轮 Web 停止及 1 轮官方 Desktop 手动停止。
 
 ### 7. 错误与正确做法
 
 #### 错误
 
-手机页面没有立即刷新，因此将发送实现改为 CDP 点击桌面输入框。
+```js
+// 手机回合由独立进程执行，官方 Desktop 仅共享 JSONL。
+await appServer.startTurn(threadId, text);
+// 或 CDP 失败后自动回退到上述路径。
+```
+
+这会制造两个进程内状态源：手机可能收到回复，但官方 Desktop 不显示；停止和完成状态也会分叉。
 
 #### 正确
 
-先记录 App Server 回合标识和 JSONL 同步证据；若显示不一致，仅修复目录、状态或渲染投影。变更控制通道必须先完成能力矩阵、同线程端到端测试并获得明确审批。
+```js
+const result = await controlledCodex.sendMessage(threadId, text);
+if (!result.turnId) throw new Error('目标 JSONL 未确认官方发送');
+```
 
-## 场景：权威目录清理与手机回合实时同步
+控制动作、官方 UI、JSONL 和 Relay 必须形成同一条可验证证据链。
+
+## 场景：权威目录与手机实时同步
 
 ### 1. 范围 / 触发条件
 
-- 触发条件：修改 `openThreadIds`、Relay 会话缓存、Agent 同步游标、手机发送确认或实时刷新。
-- 电脑端侧栏是线程存在性的唯一权威来源；本地 JSONL 是已发送消息和完成状态的事实来源，未发送草稿不进入同步链路。
+- 触发条件：修改 `openThreadIds`、Relay 缓存、同步游标、移动端分页或实时状态合并。
 
 ### 2. 签名
 
 ```js
-cache.applySync(token, {
-  openThreadIds: ['thread-id'],
-  sessions: [],
-  confirmedControlTurnIds: ['turn-id'],
-});
-
+cache.applySync(token, { openThreadIds, sessions, confirmedControlTurnIds });
 inspectControlSyncEvidence(sessions, threadId, turnId);
 advanceControlSyncState(state, evidence, now);
 ```
 
-- `openThreadIds: string[]`：本 Key 当前未归档线程的完整集合；显式空数组表示清空。
-- `sessions: object[]`：允许分批、增量或仅元数据，不能决定线程是否继续存在。
-- `confirmedControlTurnIds: string[]`：只包含已在目标线程 JSONL 中观察到的精确 App Server `turn.id`。
-
 ### 3. 契约
 
-- `applySync` 必须在同一次调用内删除不在显式 `openThreadIds` 中的 `bucket.sessions` 对象，并返回 `removedSessionCount`。
-- 缺少 `openThreadIds` 的局部增量不得删除其他线程，也不得让已退出上一份权威集合的线程复活。
-- Agent 每秒执行一次轻量 Desktop 目录成员检查；稳定目录不得周期性全量扫描全部 JSONL。
-- 归档线程从同步目标移除时必须删除其本地同步游标，使重新打开后从完整快照重建。
-- 手机发送分两阶段：目标 `turn.id` 的用户消息落盘后确认发送，但继续优先同步该线程；同一 `turn.id` 的 `task_complete` 出现后才解除优先同步。
-- Relay 和手机/Web 不能用无关线程的 `syncVersion` 增长确认本次发送。
+- `openThreadIds` 是当前侧栏未归档线程的完整集合；显式空数组表示清空。
+- `sessions` 可分批或仅含元数据，不能决定线程是否仍存在。
+- 手机发送分两阶段：编辑器正文精确核对且目标 JSONL 出现新回合后确认受理；同一回合最终回复/终态同步后才解除优先同步。
+- 手机首次读取最近 5 轮，向上分页继续读取 5 轮，使用稳定 `turn:<turnId>` 游标。
+- Relay 与客户端不得用无关线程的版本增长或固定等待时长推断完成。
 
 ### 4. 校验与错误矩阵
 
 | 条件 | 必须行为 |
 | --- | --- |
-| `openThreadIds: []` | 当前 Key 的 `sessions` 物理清空，返回同步确认 |
-| 未提供 `openThreadIds` | 仅应用合法增量，不执行目录清理 |
-| 增量线程不在当前权威集合 | 忽略该增量，不创建缓存对象 |
-| 历史/状态/控制请求指向归档线程 | 返回不可用或 `THREAD_NOT_OPEN`，不得穿透在线 Agent |
-| 同步包含其他回合或仅版本增长 | 不确认当前手机发送 |
-| 目标用户消息已落盘但回合未完成 | 确认该 `turn.id`，继续每秒优先同步目标线程 |
-| 目标回合完成 | 上传最终回复与完成状态，然后解除优先同步 |
+| `openThreadIds: []` | 物理清空当前 Key 会话缓存 |
+| 缺少 `openThreadIds` | 仅应用增量，不删除其他线程 |
+| 增量线程不在权威集合 | 忽略，不复活归档线程 |
+| 目标新回合已开始但未结束 | 确认受理并继续优先同步 |
+| 目标回合终止 | 上传最终状态并立即清除移动端运行覆盖 |
+| Agent 心跳过期 | 移动端显示离线，不继续累计等待时长 |
 
 ### 5. 正常 / 基准 / 异常案例
 
-- 正常：手机发送后约一个同步周期内看到用户消息，Codex 完成后下一个同步周期看到最终回复和完成状态。
-- 基准：目录成员未变化时，Agent 只做 SQLite 目录检查和当前批次增量读取，不全量解析所有会话。
-- 异常：线程归档后迟到的 JSONL 增量到达 Relay；Relay 忽略它，列表、历史、状态和控制接口仍不可访问该线程。
+- 正常：手机发送后自动出现用户消息、过程和最终回复，无需手动刷新。
+- 基准：目录稳定时只做轻量成员检查及当前批次增量读取。
+- 异常：归档线程的迟到增量到达 Relay；缓存不得重建该线程。
 
 ### 6. 必需测试
 
-- `server/test/cloud-relay.test.js`：断言物理删除、空权威集合、字段缺失、迟到增量、Key 隔离、重开和在线 Agent 穿透阻断。
-- `server/test/desktop-agent.test.js`：断言目录轻量重排、归档移除游标、精确回合落盘/完成证据及两阶段状态推进。
-- `server/test/mobile-app.test.js`：断言手机只接受 `confirmedControlTurnIds` 中的精确 `turn.id`，并兼容 Android 调试基座。
-- 端到端：Web 发送唯一标识，核对同一 JSONL 的用户消息、`task_complete`、最终回复、Relay 精确回合确认和无需手动刷新的页面回显。
-- 端到端验收优先复用 Desktop 侧栏中已存在的测试线程；确需通过 App Server 新建隔离线程时，必须在 `finally` 中调用 `thread/archive`，并确认 SQLite 已归档、Relay 目录已清理、Web/手机列表已消失。禁止把未归档验收线程遗留在真实目录中。
+- `server/test/cloud-relay.test.js`：权威清理、迟到增量、Key 隔离、在线穿透和实时终态。
+- `server/test/desktop-agent.test.js`：轻量目录、目标优先同步及两阶段确认。
+- `server/test/mobile-app.test.js`：五轮分页、消息去重、自动刷新和终态覆盖。
+- 真实 E2E：确认回复与停止都能在 Web 自动出现，状态不需要手动刷新。
 
 ### 7. 错误与正确做法
 
 #### 错误
 
-读到手机用户消息后立即清除 Agent 的优先同步目标，随后让最终回复等待普通轮转；或用任意 `syncVersion` 增长判定本次发送完成。
+新回合开始后立即取消目标线程优先同步，或定时强制将“运行中”改成“完成”。
 
 #### 正确
 
-用户消息落盘只完成发送确认，Agent 仍保留同一线程为优先目标；只有读取到相同 `turn.id` 的完成证据后才解除优先同步。线程是否存在只由显式权威目录决定。
-
-## 场景：有序事件、状态重连校验与客户端消息去重
-
-### 1. 范围 / 触发条件
-
-- 触发条件：修改 App Server 通知、Relay WebSocket、手机/Web 自动刷新、运行状态合并、历史分页或发送后的本地消息展示。
-- Agent 自己发起的回合使用 App Server 事件实时更新；JSONL 负责最终历史对账。官方 Desktop 发起的回合继续使用 JSONL 变化观察，二者不能互相替换。
-
-### 2. 签名
-
-```js
-const runtime = await appServer.refreshThreadRuntime(threadId);
-client.sendAppServerEvent(event);
-paginateMessagesByTurn(messages, 5, `turn:${oldestTurnId}`);
-```
-
-- `refreshThreadRuntime(threadId: string)`：调用 `thread/read({ threadId, includeTurns: true })`，以返回的线程状态和最后回合状态恢复运行态。
-- `sendAppServerEvent(event)`：事件必须包含 `streamId`、单调 `seq`、唯一 `eventId`、`threadId`、`turnId`、`source`、`observedAt` 和 `payload`。
-- `paginateMessagesByTurn(messages, limit, before)`：`before` 只能使用 `turn:<turnId>`；游标无效时返回 `invalidCursor: true`，禁止退回数组索引。
-
-### 3. 契约
-
-| 数据 | 主来源 | 对账行为 |
-| --- | --- | --- |
-| Agent 发起回合实时状态 | App Server 通知事件 | 事件空洞、重连或 JSONL 仍为运行中时执行 `thread/read` |
-| Agent 发起回合最终历史 | JSONL | 以相同 `turnId` 合并，不复制用户消息或过程块 |
-| Desktop 发起回合 | JSONL 文件变化 | 变化线程优先于普通轮转同步 |
-| 可见线程目录 | Desktop SQLite | 显式 `openThreadIds` 物理清理 Relay 缓存 |
-
-- `thread/read` 的 `completed`、`interrupted`、`failed` 必须立即结束页面等待；校验失败返回 `APP_SERVER_STATUS_FAILED`，不得继续显示猜测状态。
-- `notLoaded` 只表示当前 Agent App Server 未加载线程，不能单独推断官方 Desktop 回合已完成。
-- Relay 按 `eventId` 去重；`seq` 空洞或 `streamId` 改变必须广播 `resyncRequired`，客户端清除临时事件覆盖并读取权威快照。
-- Relay 在线直读 Agent 后返回的 `cached: false` 终态是当前线程的权威裁决，必须立即清除客户端实时运行覆盖；不得用 WebSocket 事件的客户端接收时间否决该终态。
-- `cached: true` 的终态只表示 Relay 缓存投影，清除实时运行覆盖前仍需满足同一 `turnId`、最终回复已出现或 `completedAt >= observedAt` 中至少一项。
-- 手机初始加载和向上分页每次 5 轮；Web 可加载更大窗口，但必须使用相同稳定回合游标。
-- 发送请求发出前保存 `baseMessageCount`。Agent 受理后才登记本地待确认消息；权威历史已包含相同用户文本时不再插入，本地用户气泡必须标记 `pending`，供历史到达后替换。
-
-### 4. 校验与错误矩阵
-
-| 条件 | 必须行为 |
-| --- | --- |
-| App Server 事件重复或倒序 | 忽略重复；倒序不得覆盖较新状态 |
-| 事件序号空洞或连接纪元变化 | 标记需对账并读取目标线程历史/状态 |
-| `cached: false` 直接状态为终态，但迟到事件仍为运行中 | 立即删除实时覆盖并结束等待，不比较客户端接收时间 |
-| `cached: true` 缓存状态与实时状态冲突 | 保留实时覆盖，直到获得回合、最终回复或时间顺序证据 |
-| JSONL 显示运行中且运行时未知/运行中 | 调用 `thread/read`，按同一 `turnId` 收敛 |
-| `thread/read` 请求失败或返回其他线程 | 返回 `APP_SERVER_STATUS_FAILED`，记录线程 ID 与错误 |
-| JSONL 收到 `turn_aborted` | 线程立即投影为 `active=false`、`status=complete`；对应回合投影为 `interrupted`，完成时间使用该事件时间 |
-| `before` 不是 `turn:<turnId>` 或目标不存在 | 返回空页和 `invalidCursor: true` |
-| POST 等待期间历史先同步用户消息 | 使用发送前边界识别已有消息，只显示一次 |
-
-### 5. 正常 / 基准 / 异常案例
-
-- 正常：Web 发送唯一消息，页面只显示一个用户气泡，实时收到完成事件和最终回复，不需要手动刷新。
-- 基准：Agent 重连后 JSONL 残留运行态，`thread/read` 返回最后回合 `interrupted`，页面立即停止计时并显示已结束。
-- 异常：Relay 收到 `seq=8` 后直接收到 `seq=10`；不得猜测缺失事件，必须要求目标线程快照对账。
-
-### 6. 必需测试
-
-- `server/test/app-server-event-stream.test.js`：断言事件字段、序号单调和缺失线程事件拒绝。
-- `server/test/cloud-relay.test.js`：断言事件去重、序号空洞、连接纪元和对账广播。
-- `server/test/codex-app-server-client.test.js`：断言 `thread/read(includeTurns=true)` 与终态恢复。
-- `server/test/codex-app-server-client.test.js`：断言已超时请求的迟到响应仅产生诊断事件、真正未知 ID 仍报协议错误、旧进程事件不污染新进程。
-- `server/test/desktop-agent-api.test.js`：断言 JSONL 运行态触发权威校验，失败显式传播。
-- `server/test/codex-session-reader.test.js`：断言稳定 `turnId` 分页、新回合不会改变更早页。
-- `server/test/codex-session-reader.test.js` 与 `server/test/cloud-relay.test.js`：使用真实 `turn_aborted` 载荷同时约束 Desktop 解析、Relay 普通状态和 `since` 状态缓存。
-- `server/test/mobile-app.test.js`：断言发送前边界、本地待确认消息替换和五轮分页。
-- `server/test/mobile-app.test.js` 与 `server/test/cloud-relay.test.js`：必须构造 `completedAt < realtime.observedAt` 的迟到运行事件，并断言 `cached: false` 直接终态仍能清除覆盖。
-- 真实 Web：连续发送、自动完成、Agent 重连状态恢复、停止和单消息去重均必须通过。
-
-### 7. 错误与正确做法
-
-#### 错误
-
-App Server 事件缺失后继续依赖旧 JSONL 无限显示“进行中”，或用超时时间强制改成完成；POST 返回后无条件追加本地用户气泡。
-
-#### 正确
-
-事件缺失或重连时调用同一 App Server 的 `thread/read` 校验具体回合；协议失败明确报错。发送前保存历史边界，只有权威历史尚未出现消息时才插入待确认气泡。
+持续优先读取同一线程，直到观察到同一回合的真实终态；超时只报告异常，不伪造业务状态。

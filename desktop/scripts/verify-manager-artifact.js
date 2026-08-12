@@ -10,14 +10,19 @@ const forbiddenProductPaths = [
   'server.js',
   'src/windows-codex-controller.js',
   'src/codex-desktop-process.js',
+  'src/codex-app-server-client.js',
+  'src/app-server-event-stream.js',
+  'src/app-server-status.js',
   'scripts/win-codex-control.ps1',
 ];
 
 const forbiddenSourcePatterns = [
   /WindowsCodexController/,
   /restartCodexDesktopWithDebug/,
-  /CODEX_DEBUG_PORT/,
-  /remote-debugging-port/,
+  /createCodexAppServerClient/,
+  /\.resumeThread\(/,
+  /\.startTurn\(/,
+  /\.interruptTurn\(/,
   /win-codex-control\.ps1/,
 ];
 
@@ -52,7 +57,7 @@ function readArtifactText(filePath) {
 }
 
 /**
- * AI:验证 Windows 管理器产物只携带 App Server 控制路径。
+ * AI:验证 Windows 管理器产物只携带受控官方 Codex Desktop 控制路径。
  *
  * @returns {void} 校验通过后输出构建产物路径，失败时抛出异常并终止构建。
  */
@@ -63,7 +68,7 @@ function verifyManagerArtifact() {
     .map(filePath => String(filePath).replace(/^[/\\]+/, '').replaceAll('\\', '/'));
   for (const filePath of forbiddenProductPaths) {
     if (files.includes(filePath)) {
-      fail(`包含旧 CDP 文件：${filePath}`);
+      fail(`包含旧控制文件：${filePath}`);
     }
   }
 
@@ -75,11 +80,17 @@ function verifyManagerArtifact() {
   }
 
   const agent = readArtifactText('desktop-agent.js');
-  const api = readArtifactText(path.join('src', 'desktop-agent-api.js'));
-  if (!/createCodexAppServerClient/.test(agent)) fail('desktop-agent.js 未使用 App Server 客户端');
-  if (!/resumeThread\(threadId\)/.test(api)) fail('桌面 API 未恢复目标线程');
-  if (!/startTurn\(threadId, text, clientUserMessageId\)/.test(api)) fail('桌面 API 未携带幂等标识通过 App Server 发起回合');
-  if (!/interruptTurn\(threadId\)/.test(api)) fail('桌面 API 未通过 App Server 停止回合');
+  const api = readArtifactText('src/desktop-agent-api.js');
+  const processSource = readArtifactText('src/controlled-codex-process.js');
+  const controllerSource = readArtifactText('src/codex-desktop-ui-controller.js');
+  if (!/new ControlledCodexRuntime\(\{ debugPort, reader \}\)/.test(agent)) fail('desktop-agent.js 未创建受控 Codex 运行时');
+  if (!/desktopController: controlledCodex/.test(agent)) fail('桌面 API 未绑定受控 Codex 运行时');
+  if (!/desktopController\.sendMessage\(threadId, text\)/.test(api)) fail('桌面 API 未通过官方界面发送消息');
+  if (!/desktopController\.stop\(threadId\)/.test(api)) fail('桌面 API 未通过官方界面停止回合');
+  if (!/ApplicationActivationManager/.test(processSource)) fail('未使用 Windows 应用激活接口启动官方 Codex');
+  if (!/remote-debugging-port/.test(processSource)) fail('受控 Codex 启动未配置 CDP 端口');
+  if (!/data-app-action-sidebar-thread-id/.test(controllerSource)) fail('官方界面控制未按 threadId 精确定位');
+  if (!/sessionConfirmer/.test(controllerSource)) fail('官方界面发送缺少 JSONL 证据确认');
 
   console.log(`控制平面产物校验通过：${artifactPath}`);
 }

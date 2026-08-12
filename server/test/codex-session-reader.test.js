@@ -307,24 +307,24 @@ test('发现本机全部会话时不依赖 Codex 当前打开的窗口', () => {
   assert.equal(targets.some(target => target.threadName === '测试线程'), true);
 });
 
-test('app-server 未归档列表仅映射同一 threadId 的本地 JSONL', () => {
+test('通用线程目录仅映射同一 threadId 的本地 JSONL', () => {
   const reader = new CodexSessionReader({
     sessionsDir: path.join(fixtureRoot, 'sessions'),
     sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
   });
 
-  const targets = reader.discoverAppServerThreadSessions([
-    { id: 'ffffffff-aaaa-bbbb-cccc-dddddddddddd', name: 'app-server 标题', cwd: 'C:\\repo\\running', updatedAt: 1780910000 },
+  const targets = reader.discoverCatalogThreadSessions([
+    { id: 'ffffffff-aaaa-bbbb-cccc-dddddddddddd', name: '目录标题', cwd: 'C:\\repo\\running', updatedAt: 1780910000 },
     { id: '00000000-0000-0000-0000-000000000000', name: '不存在的会话' },
   ]);
 
   assert.deepEqual(targets.map(target => target.threadId), ['ffffffff-aaaa-bbbb-cccc-dddddddddddd']);
-  assert.equal(targets[0].threadName, 'app-server 标题');
+  assert.equal(targets[0].threadName, '目录标题');
   assert.equal(targets[0].projectName, 'running');
   assert.equal(targets[0].updatedAt, '2026-06-08T09:13:20.000Z');
 });
 
-test('Desktop 线程目录能映射 app-server 不可见的本地 JSONL', () => {
+test('Desktop 线程目录能映射其他目录不可见的本地 JSONL', () => {
   const reader = new CodexSessionReader({
     sessionsDir: path.join(fixtureRoot, 'sessions'),
     sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),

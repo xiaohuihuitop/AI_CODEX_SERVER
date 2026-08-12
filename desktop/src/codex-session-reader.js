@@ -683,16 +683,6 @@ class CodexSessionReader {
   }
 
   /**
-   * AI:将 app-server 已过滤的未归档线程映射到本地 JSONL，同步时保留服务端 threadId 顺序。
-   *
-   * @param {Array<{id?: string, name?: string, cwd?: string, updatedAt?: number|string}>} threads app-server 线程列表。
-   * @returns {Array<object>} 可读取 JSONL 的线程目标。
-   */
-  discoverAppServerThreadSessions(threads) {
-    return this.discoverCatalogThreadSessions(threads);
-  }
-
-  /**
    * AI:将 Desktop 侧栏线程目录映射到本地 JSONL，优先保留侧栏已生成的线程标题。
    *
    * @param {Array<{id?: string, name?: string, cwd?: string, updatedAt?: number|string}>} threads Desktop 线程列表。

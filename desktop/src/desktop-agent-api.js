@@ -1,4 +1,3 @@
-const { createCodexAppServerClient } = require('./codex-app-server-client');
 const { applyDesktopRuntimeStatus } = require('./codex-session-reader');
 
 function requestError(message, code, status) {
@@ -7,13 +6,13 @@ function requestError(message, code, status) {
 
 class DesktopAgentApi {
   /**
-   * AI:创建面向本机 Codex App Server 的控制 API。
+   * AI:创建面向受控官方 Codex Desktop 的控制 API。
    *
-   * @param {{reader?: object, appServer?: object, listThreads?: Function, now?: Function}} options 本机线程、App Server 与目录依赖。
+   * @param {{reader?: object, desktopController?: object, listThreads?: Function, now?: Function}} options 本机线程、官方客户端控制器与目录依赖。
    */
   constructor(options = {}) {
     this.reader = options.reader || {};
-    this.appServer = options.appServer || createCodexAppServerClient();
+    this.desktopController = options.desktopController;
     this.listThreadsProvider = options.listThreads;
     this.now = options.now || (() => Date.now());
     this.onControlProgress = typeof options.onControlProgress === 'function' ? options.onControlProgress : null;
@@ -38,7 +37,7 @@ class DesktopAgentApi {
   }
 
   async handle(action, payload = {}) {
-    // AI:本地读取不占用 App Server 控制锁，避免手机刷新被发送或停止操作阻塞。
+    // AI:本地读取不占用官方客户端控制锁，避免手机刷新被发送或停止操作阻塞。
     if (action === 'history') return this.history(payload);
     if (action === 'status') return this.status(payload);
     if (action === 'send') return this.send(payload);
@@ -93,24 +92,17 @@ class DesktopAgentApi {
       throw requestError('本机状态读取器不可用。', 'STATUS_READER_UNAVAILABLE', 503);
     }
     const status = this.reader.parseStatus({ threadId, since: String(payload.since || '') });
-    let runtime = typeof this.appServer.getThreadRuntime === 'function'
-      ? this.appServer.getThreadRuntime(threadId)
-      : null;
-    const shouldRefresh = typeof this.appServer.refreshThreadRuntime === 'function' && (
-      !runtime
-      || runtime.state === 'unknown'
-      || runtime.state === 'running'
-      || (status.status === 'running' && runtime.state === 'notLoaded')
-    );
-    if (shouldRefresh) {
-      this.reportControlProgress('status.reconcile.started', { threadId, localStatus: status.status, runtimeState: runtime && runtime.state || 'unknown' });
-      try {
-        runtime = await this.appServer.refreshThreadRuntime(threadId);
-        this.reportControlProgress('status.reconcile.completed', { threadId, runtimeState: runtime.state, turnId: runtime.turnId || '' });
-      } catch (error) {
-        this.reportControlProgress('status.reconcile.failed', { threadId, error: error.message || String(error) });
-        throw requestError(`无法校验对话运行状态：${error.message || String(error)}`, 'APP_SERVER_STATUS_FAILED', 503);
-      }
+    if (!this.desktopController || typeof this.desktopController.getThreadRuntime !== 'function') {
+      throw requestError('官方 Codex Desktop 控制器不可用。', 'CODEX_DESKTOP_CONTROL_UNAVAILABLE', 503);
+    }
+    let runtime;
+    this.reportControlProgress('status.reconcile.started', { threadId, localStatus: status.status });
+    try {
+      runtime = await this.desktopController.getThreadRuntime(threadId);
+      this.reportControlProgress('status.reconcile.completed', { threadId, runtimeState: runtime.state });
+    } catch (error) {
+      this.reportControlProgress('status.reconcile.failed', { threadId, error: error.message || String(error) });
+      throw requestError(`无法校验官方客户端运行状态：${error.message || String(error)}`, 'CODEX_DESKTOP_STATUS_FAILED', 503);
     }
     return applyDesktopRuntimeStatus(status, runtime);
   }
@@ -157,28 +149,23 @@ class DesktopAgentApi {
     const { threadId, text, clientUserMessageId } = payload;
 
     this.reportControlProgress('send.received', { threadId, clientUserMessageId, textLength: text.length });
-    try {
-      this.reportControlProgress('send.resume.started', { threadId, clientUserMessageId });
-      await this.appServer.resumeThread(threadId);
-      this.reportControlProgress('send.resume.completed', { threadId, clientUserMessageId });
-    } catch (error) {
-      this.reportControlProgress('send.resume.failed', { threadId, clientUserMessageId, error: error.message || String(error) });
-      throw requestError(`无法恢复目标对话：${error.message || String(error)}`, 'THREAD_RESUME_FAILED', 409);
+    if (!this.desktopController || typeof this.desktopController.sendMessage !== 'function') {
+      throw requestError('官方 Codex Desktop 控制器不可用。', 'CODEX_DESKTOP_CONTROL_UNAVAILABLE', 503);
     }
     let started;
     try {
-      this.reportControlProgress('send.turn.started', { threadId, clientUserMessageId });
-      started = await this.appServer.startTurn(threadId, text, clientUserMessageId);
+      this.reportControlProgress('send.desktop.started', { threadId, clientUserMessageId });
+      started = await this.desktopController.sendMessage(threadId, text);
     } catch (error) {
-      this.reportControlProgress('send.turn.failed', { threadId, clientUserMessageId, error: error.message || String(error) });
-      throw requestError(`无法启动目标对话的回复：${error.message || String(error)}`, 'TURN_START_FAILED', 502);
+      this.reportControlProgress('send.desktop.failed', { threadId, clientUserMessageId, error: error.message || String(error) });
+      throw requestError(`无法通过官方客户端发送消息：${error.message || String(error)}`, 'CODEX_DESKTOP_SEND_FAILED', 503);
     }
-    const turnId = String(started && started.turn && started.turn.id || '').trim();
+    const turnId = String(started && started.turnId || '').trim();
     if (!turnId) {
-      this.reportControlProgress('send.turn.failed', { threadId, clientUserMessageId, error: 'App Server 未返回回合标识。' });
-      throw requestError('无法启动目标对话：App Server 未返回回合标识。', 'TURN_START_FAILED', 502);
+      this.reportControlProgress('send.desktop.failed', { threadId, clientUserMessageId, error: 'JSONL 未确认回合标识。' });
+      throw requestError('无法通过官方客户端发送消息：JSONL 未确认回合标识。', 'CODEX_DESKTOP_SEND_FAILED', 503);
     }
-    this.reportControlProgress('send.turn.completed', { threadId, turnId, clientUserMessageId });
+    this.reportControlProgress('send.desktop.completed', { threadId, turnId, clientUserMessageId });
     return {
       ok: true,
       watch: { threadId, turnId, clientUserMessageId, since: new Date(this.now()).toISOString() },
@@ -204,7 +191,10 @@ class DesktopAgentApi {
     if (!threadId) throw requestError('缺少对话标识。', 'THREAD_ID_REQUIRED', 400);
     this.reportControlProgress('stop.received', { threadId });
     try {
-      await this.appServer.interruptTurn(threadId);
+      if (!this.desktopController || typeof this.desktopController.stop !== 'function') {
+        throw new Error('官方 Codex Desktop 控制器不可用。');
+      }
+      await this.desktopController.stop(threadId);
     } catch (error) {
       this.reportControlProgress('stop.failed', { threadId, error: error.message || String(error) });
       throw requestError(`无法停止 Codex Desktop 回复：${error.message || String(error)}`, 'CODEX_DESKTOP_CONTROL_FAILED', 503);

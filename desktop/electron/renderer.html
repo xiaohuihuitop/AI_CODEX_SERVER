@@ -40,7 +40,7 @@
       <article class="status-card" id="codexCard">
         <span class="status-dot"></span>
         <div>
-          <h2>会话服务</h2>
+          <h2>官方客户端</h2>
           <p id="codexStatus">检测中</p>
           <small id="codexDetail"></small>
           <small id="codexVersion" class="runtime-version"></small>
@@ -68,6 +68,10 @@
             <input id="deviceName" name="deviceName" type="text" autocomplete="off">
           </label>
         </div>
+        <label>
+          <span>Codex 控制端口</span>
+          <input id="debugPort" name="debugPort" type="number" min="1024" max="65535" step="1">
+        </label>
         <label class="checkbox-line">
           <input id="autoStart" name="autoStart" type="checkbox">
           <span>开机自启</span>

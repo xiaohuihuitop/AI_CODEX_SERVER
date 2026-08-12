@@ -18,7 +18,7 @@ const {
   saveConfig,
 } = require('../src/desktop-manager-server');
 const { appendLog, createDesktopAgentProcess } = require('../src/desktop-agent-process');
-const { resolveAppServerStatus } = require('../src/app-server-status');
+const { resolveControlledCodexStatus } = require('../src/controlled-codex-status');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
 const CONFIG_PATH = getDefaultConfigPath();
@@ -48,24 +48,24 @@ let config = loadConfig(CONFIG_PATH);
 let mainWindow = null;
 let tray = null;
 const managerLogs = [];
-let previousAppServerState = '';
+let previousControlledCodexState = '';
 
 function appendManagerLog(message) {
   const timestamp = new Date().toLocaleTimeString('zh-CN', { hour12: false });
   appendLog(managerLogs, `[${timestamp}] ${message}`);
 }
 
-function appServerStatus(agent) {
-  return resolveAppServerStatus(agent, config);
+function controlledCodexStatus(agent) {
+  return resolveControlledCodexStatus(agent, config);
 }
 
-function recordAppServerState(appServer) {
-  const state = appServer.ok ? 'ready' : `unavailable:${appServer.message || ''}`;
-  if (state === previousAppServerState) return;
-  previousAppServerState = state;
-  appendManagerLog(appServer.ok
-    ? 'App Server 已就绪：通过本机 stdio 管理 Codex 会话'
-    : `App Server 未就绪：${appServer.message || '等待 Agent 初始化'}`);
+function recordControlledCodexState(controlledCodex) {
+  const state = controlledCodex.ok ? 'ready' : `unavailable:${controlledCodex.message || ''}`;
+  if (state === previousControlledCodexState) return;
+  previousControlledCodexState = state;
+  appendManagerLog(controlledCodex.ok
+    ? '官方 Codex Desktop 已受控连接'
+    : `官方 Codex Desktop 未就绪：${controlledCodex.message || '等待 Agent 初始化'}`);
 }
 
 if (!app.requestSingleInstanceLock()) {
@@ -163,8 +163,8 @@ async function getState() {
   const normalized = normalizeManagerConfig(config);
   const cloud = await probeCloud(normalized);
   const agent = agentController.status();
-  const appServer = appServerStatus(agent);
-  recordAppServerState(appServer);
+  const controlledCodex = controlledCodexStatus(agent);
+  recordControlledCodexState(controlledCodex);
   return {
     ok: true,
     managerVersion: MANAGER_VERSION,
@@ -174,7 +174,7 @@ async function getState() {
     agent,
     managerLogs: [...managerLogs],
     cloud,
-    appServer,
+    controlledCodex,
     ports: {
       cloud: serverPortFromUrl(normalized.serverUrl),
     },

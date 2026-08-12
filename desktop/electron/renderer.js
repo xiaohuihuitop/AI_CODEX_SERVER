@@ -8,6 +8,7 @@ const elements = {
   serverUrl: document.getElementById('serverUrl'),
   token: document.getElementById('token'),
   deviceName: document.getElementById('deviceName'),
+  debugPort: document.getElementById('debugPort'),
   autoStart: document.getElementById('autoStart'),
   saveState: document.getElementById('saveState'),
   configForm: document.getElementById('configForm'),
@@ -41,6 +42,7 @@ function getFormConfig() {
     token: elements.token.value,
     deviceName: elements.deviceName.value,
     autoStart: elements.autoStart.checked,
+    debugPort: elements.debugPort.value,
   };
 }
 
@@ -72,6 +74,7 @@ function renderConfig(config) {
   elements.token.value = config.token || '';
   elements.deviceName.value = config.deviceName || '';
   elements.autoStart.checked = Boolean(config.autoStart);
+  elements.debugPort.value = config.debugPort || 9230;
 }
 
 function renderState(nextState, options = {}) {
@@ -92,19 +95,20 @@ function renderState(nextState, options = {}) {
   elements.agentStatus.textContent = !configured ? '配置不完整' : featureStarted ? '已启动' : '已停止';
   elements.agentDetail.textContent = nextState.agent.pid ? `同步服务 PID ${nextState.agent.pid}` : '手机端暂时不能控制这台电脑';
 
-  setCard(elements.codexCard, nextState.appServer.ok);
+  setCard(elements.codexCard, nextState.controlledCodex.ok);
   const cloudPort = nextState.ports.cloud || '未配置';
-  elements.codexStatus.textContent = nextState.appServer.ok ? '已就绪' : '未就绪';
-  elements.codexDetail.textContent = nextState.appServer.message || '等待 App Server 初始化';
-  const codexVersion = String(nextState.appServer.codexVersion || '').trim();
+  elements.codexStatus.textContent = nextState.controlledCodex.ok ? '已连接' : '未连接';
+  elements.codexDetail.textContent = nextState.controlledCodex.message || '等待受控 Codex Desktop 初始化';
+  const codexVersion = String(nextState.controlledCodex.codexVersion || '').trim();
   elements.codexVersion.textContent = codexVersion ? `当前 Codex：v${codexVersion}` : '';
-  elements.portStatus.textContent = `云端 ${cloudPort} / App Server stdio`;
+  elements.portStatus.textContent = `云端 ${cloudPort} / CDP ${nextState.config.debugPort || 9230}`;
 
   elements.mobileUrl.textContent = nextState.mobileUrl || '请先填写云端服务器地址和固定 Token。';
   elements.agentEnv.textContent = [
     `CODEX_CLOUD_URL=${nextState.agentEnv.CODEX_CLOUD_URL || ''}`,
     `CODEX_DEVICE_TOKEN=${nextState.agentEnv.CODEX_DEVICE_TOKEN || ''}`,
     `CODEX_DEVICE_NAME=${nextState.agentEnv.CODEX_DEVICE_NAME || ''}`,
+    `CODEX_DEBUG_PORT=${nextState.agentEnv.CODEX_DEBUG_PORT || ''}`,
   ].join('\n');
 
   const logs = [
@@ -176,6 +180,7 @@ elements.clearLogsButton.addEventListener('click', () => {
   elements.token,
   elements.deviceName,
   elements.autoStart,
+  elements.debugPort,
 ].forEach(input => {
   input.addEventListener('input', () => {
     elements.saveState.textContent = '配置已修改，点击保存配置后生效';

@@ -49,7 +49,7 @@ function normalizeAgentStatus(input = {}) {
 }
 
 /**
- * AI:原子写入当前 Agent 的 app-server 状态，避免管理器读取到半截 JSON。
+ * AI:原子写入当前 Agent 的受控官方客户端状态，避免管理器读取到半截 JSON。
  *
  * @param {string} statusPath 状态文件路径。
  * @param {object} status 原始状态载荷。

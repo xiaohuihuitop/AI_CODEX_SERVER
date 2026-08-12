@@ -10,6 +10,9 @@ const legacyControlFiles = [
   'server.js',
   path.join('src', 'windows-codex-controller.js'),
   path.join('src', 'codex-desktop-process.js'),
+  path.join('src', 'codex-app-server-client.js'),
+  path.join('src', 'app-server-event-stream.js'),
+  path.join('src', 'app-server-status.js'),
   path.join('scripts', 'win-codex-control.ps1'),
   path.join('scripts', 'codex-desktop-manager-gui.ps1'),
 ];
@@ -27,7 +30,7 @@ const productionSources = [
   path.join('src', 'desktop-manager.js'),
 ];
 
-test('正式控制平面不保留 CDP 控制实现或旧本机桥接入口', () => {
+test('正式控制平面不保留旧 CDP 脚本或独立 App Server 控制入口', () => {
   for (const relativePath of legacyControlFiles) {
     assert.equal(fs.existsSync(path.join(desktopDir, relativePath)), false, `不应保留旧控制文件：${relativePath}`);
   }
@@ -39,12 +42,14 @@ test('正式控制平面不保留 CDP 控制实现或旧本机桥接入口', () 
   assert.equal(Object.hasOwn(packageJson.build, 'asarUnpack'), false);
 });
 
-test('正式入口只允许 App Server 控制线程，禁止重新引入 CDP 标识', () => {
+test('正式入口只允许受控官方 Codex Desktop 作为会话控制面', () => {
   const forbiddenPatterns = [
     /WindowsCodexController/,
     /restartCodexDesktopWithDebug/,
-    /CODEX_DEBUG_PORT/,
-    /remote-debugging-port/,
+    /createCodexAppServerClient/,
+    /\.resumeThread\(/,
+    /\.startTurn\(/,
+    /\.interruptTurn\(/,
     /win-codex-control\.ps1/,
   ];
 
@@ -57,8 +62,16 @@ test('正式入口只允许 App Server 控制线程，禁止重新引入 CDP 标
 
   const agent = fs.readFileSync(path.join(desktopDir, 'desktop-agent.js'), 'utf8');
   const api = fs.readFileSync(path.join(desktopDir, 'src', 'desktop-agent-api.js'), 'utf8');
-  assert.match(agent, /createCodexAppServerClient/);
-  assert.match(api, /await this\.appServer\.resumeThread\(threadId\)/);
-  assert.match(api, /await this\.appServer\.startTurn\(threadId, text, clientUserMessageId\)/);
-  assert.match(api, /await this\.appServer\.interruptTurn\(threadId\)/);
+  assert.match(agent, /new ControlledCodexRuntime\(\{ debugPort, reader \}\)/);
+  assert.match(agent, /desktopController: controlledCodex/);
+  assert.match(agent, /CODEX_DEBUG_PORT/);
+  assert.match(api, /await this\.desktopController\.sendMessage\(threadId, text\)/);
+  assert.match(api, /await this\.desktopController\.stop\(threadId\)/);
+
+  const processSource = fs.readFileSync(path.join(desktopDir, 'src', 'controlled-codex-process.js'), 'utf8');
+  const controllerSource = fs.readFileSync(path.join(desktopDir, 'src', 'codex-desktop-ui-controller.js'), 'utf8');
+  assert.match(processSource, /remote-debugging-port/);
+  assert.match(processSource, /ApplicationActivationManager/);
+  assert.match(controllerSource, /data-app-action-sidebar-thread-id/);
+  assert.match(controllerSource, /sessionConfirmer/);
 });

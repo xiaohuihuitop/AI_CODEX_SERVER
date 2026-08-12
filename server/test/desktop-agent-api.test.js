@@ -2,11 +2,11 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createDesktopAgentApi } = require('../../desktop/src/desktop-agent-api');
 
-function createAppServer(overrides = {}) {
+function createDesktopController(overrides = {}) {
   return Object.assign({
-    resumeThread: async () => ({ thread: { id: 'thread-1' } }),
-    startTurn: async () => ({ turn: { id: 'turn-1' } }),
-    interruptTurn: async () => ({ ok: true }),
+    sendMessage: async () => ({ turnId: 'turn-1', observedAt: '2026-06-08T09:13:20.000Z' }),
+    stop: async threadId => ({ ok: true, threadId, status: 'interrupted' }),
+    getThreadRuntime: async threadId => ({ state: 'idle', threadId }),
   }, overrides);
 }
 
@@ -31,15 +31,14 @@ test('desktop-agent API 缺少 Desktop 线程目录时明确拒绝读取列表',
   );
 });
 
-test('desktop-agent API 通过 App Server 恢复并启动目标线程', async () => {
+test('desktop-agent API 通过受控官方客户端启动目标线程', async () => {
   const calls = [];
   const progress = [];
   const api = createDesktopAgentApi({
-    appServer: createAppServer({
-      resumeThread: async threadId => calls.push(['resume', threadId]),
-      startTurn: async (threadId, text, clientUserMessageId) => {
-        calls.push(['start', threadId, text, clientUserMessageId]);
-        return { turn: { id: 'turn-9' } };
+    desktopController: createDesktopController({
+      sendMessage: async (threadId, text) => {
+        calls.push(['send', threadId, text]);
+        return { turnId: 'turn-9', observedAt: '2026-06-08T09:13:20.000Z' };
       },
     }),
     now: () => 1780910000000,
@@ -60,15 +59,12 @@ test('desktop-agent API 通过 App Server 恢复并启动目标线程', async ()
     since: '2026-06-08T09:13:20.000Z',
   });
   assert.deepEqual(calls, [
-    ['resume', 'thread-1'],
-    ['start', 'thread-1', '你好', 'message-9'],
+    ['send', 'thread-1', '你好'],
   ]);
   assert.deepEqual(progress.map(event => event.phase), [
     'send.received',
-    'send.resume.started',
-    'send.resume.completed',
-    'send.turn.started',
-    'send.turn.completed',
+    'send.desktop.started',
+    'send.desktop.completed',
   ]);
   assert.equal(progress[0].textLength, 2);
   assert.equal(progress[0].clientUserMessageId, 'message-9');
@@ -77,10 +73,10 @@ test('desktop-agent API 通过 App Server 恢复并启动目标线程', async ()
 test('desktop-agent API 对相同消息标识只启动一个回合', async () => {
   const calls = [];
   const api = createDesktopAgentApi({
-    appServer: createAppServer({
-      startTurn: async (threadId, text, clientUserMessageId) => {
-        calls.push([threadId, text, clientUserMessageId]);
-        return { turn: { id: 'turn-idempotent' } };
+    desktopController: createDesktopController({
+      sendMessage: async (threadId, text) => {
+        calls.push([threadId, text]);
+        return { turnId: 'turn-idempotent', observedAt: '2026-06-08T09:13:20.000Z' };
       },
     }),
     now: () => 1780910000000,
@@ -95,46 +91,46 @@ test('desktop-agent API 对相同消息标识只启动一个回合', async () =>
   const repeated = await api.handle('send', payload);
 
   assert.deepEqual(repeated, first);
-  assert.deepEqual(calls, [['thread-1', '只执行一次', 'message-idempotent']]);
+  assert.deepEqual(calls, [['thread-1', '只执行一次']]);
 });
 
-test('desktop-agent API 在恢复线程失败时返回明确错误', async () => {
+test('desktop-agent API 在官方客户端发送失败时返回明确错误', async () => {
   const api = createDesktopAgentApi({
-    appServer: createAppServer({
-      resumeThread: async () => { throw new Error('thread not found'); },
+    desktopController: createDesktopController({
+      sendMessage: async () => { throw new Error('thread not found'); },
     }),
   });
 
   await assert.rejects(
     () => api.handle('send', { threadId: 'thread-1', text: '你好', clientUserMessageId: 'message-resume-failed' }),
-    error => error.code === 'THREAD_RESUME_FAILED' && error.status === 409 && /thread not found/.test(error.message),
+    error => error.code === 'CODEX_DESKTOP_SEND_FAILED' && error.status === 503 && /thread not found/.test(error.message),
   );
 });
 
-test('desktop-agent API 在启动回合失败或缺少回合标识时返回明确错误', async () => {
+test('desktop-agent API 在官方客户端未确认回合标识时返回明确错误', async () => {
   const failure = createDesktopAgentApi({
-    appServer: createAppServer({
-      startTurn: async () => { throw new Error('request timeout'); },
+    desktopController: createDesktopController({
+      sendMessage: async () => { throw new Error('request timeout'); },
     }),
   });
   const missingTurn = createDesktopAgentApi({
-    appServer: createAppServer({ startTurn: async () => ({ turn: {} }) }),
+    desktopController: createDesktopController({ sendMessage: async () => ({ turnId: '', observedAt: '' }) }),
   });
 
   await assert.rejects(
     () => failure.handle('send', { threadId: 'thread-1', text: '你好', clientUserMessageId: 'message-start-failed' }),
-    error => error.code === 'TURN_START_FAILED' && error.status === 502 && /request timeout/.test(error.message),
+    error => error.code === 'CODEX_DESKTOP_SEND_FAILED' && error.status === 503 && /request timeout/.test(error.message),
   );
   await assert.rejects(
     () => missingTurn.handle('send', { threadId: 'thread-1', text: '你好', clientUserMessageId: 'message-missing-turn' }),
-    error => error.code === 'TURN_START_FAILED' && error.status === 502 && /未返回回合标识/.test(error.message),
+    error => error.code === 'CODEX_DESKTOP_SEND_FAILED' && error.status === 503 && /未确认回合标识/.test(error.message),
   );
 });
 
-test('desktop-agent API 按指定线程停止 App Server 回合', async () => {
+test('desktop-agent API 按指定线程停止官方客户端回合', async () => {
   const calls = [];
   const api = createDesktopAgentApi({
-    appServer: createAppServer({ interruptTurn: async threadId => calls.push(threadId) }),
+    desktopController: createDesktopController({ stop: async threadId => calls.push(threadId) }),
   });
 
   await assert.rejects(
@@ -148,7 +144,7 @@ test('desktop-agent API 按指定线程停止 App Server 回合', async () => {
 });
 
 test('desktop-agent API 拒绝未知动作和空发送内容', async () => {
-  const api = createDesktopAgentApi({ appServer: createAppServer() });
+  const api = createDesktopAgentApi({ desktopController: createDesktopController() });
 
   await assert.rejects(
     () => api.handle('unknown', {}),
@@ -186,11 +182,11 @@ test('desktop-agent API 在控制命令执行期间仍可读取本地历史和�
         turns: [],
       }),
     },
-    appServer: createAppServer({
-      startTurn: async () => {
+    desktopController: createDesktopController({
+      sendMessage: async () => {
         markSendStarted();
         await new Promise(resolve => { releaseSend = resolve; });
-        return { turn: { id: 'turn-1' } };
+        return { turnId: 'turn-1', observedAt: '2026-08-05T00:00:01.000Z' };
       },
     }),
   });
@@ -213,7 +209,7 @@ test('desktop-agent API 在控制命令执行期间仍可读取本地历史和�
   assert.equal(status.threadId, 'thread-1');
 });
 
-test('desktop-agent API 在线状态叠加同线程 App Server 运行态', async () => {
+test('desktop-agent API 在线状态叠加同线程官方客户端运行态', async () => {
   const api = createDesktopAgentApi({
     reader: {
       parseStatus: () => ({
@@ -226,8 +222,8 @@ test('desktop-agent API 在线状态叠加同线程 App Server 运行态', async
         turns: [{ turnId: 'old-turn', status: 'complete', steps: [] }],
       }),
     },
-    appServer: createAppServer({
-      getThreadRuntime: () => ({ state: 'running', turnId: 'new-turn', observedAt: '2026-08-10T10:00:00.000Z' }),
+    desktopController: createDesktopController({
+      getThreadRuntime: async () => ({ state: 'running', threadId: 'thread-1' }),
     }),
   });
 
@@ -238,9 +234,8 @@ test('desktop-agent API 在线状态叠加同线程 App Server 运行态', async
   assert.equal(status.final, '');
 });
 
-test('desktop-agent API 对 JSONL 进行中状态执行 App Server 权威校验', async () => {
+test('desktop-agent API 对 JSONL 进行中状态执行官方客户端权威校验', async () => {
   const calls = [];
-  let runtime = { state: 'unknown', turnId: '', observedAt: '' };
   const api = createDesktopAgentApi({
     reader: {
       parseStatus: () => ({
@@ -253,17 +248,10 @@ test('desktop-agent API 对 JSONL 进行中状态执行 App Server 权威校验'
         turns: [{ turnId: 'turn-1', status: 'running', steps: [] }],
       }),
     },
-    appServer: createAppServer({
-      getThreadRuntime: () => runtime,
-      refreshThreadRuntime: async threadId => {
+    desktopController: createDesktopController({
+      getThreadRuntime: async threadId => {
         calls.push(threadId);
-        runtime = {
-          state: 'complete',
-          turnId: 'turn-1',
-          turnStatus: 'completed',
-          observedAt: '2026-08-10T12:00:00.000Z',
-        };
-        return runtime;
+        return { state: 'idle', threadId };
       },
     }),
   });
@@ -276,7 +264,7 @@ test('desktop-agent API 对 JSONL 进行中状态执行 App Server 权威校验'
   assert.equal(status.turns[0].status, 'complete');
 });
 
-test('desktop-agent API 权威状态校验失败时不返回陈旧运行态', async () => {
+test('desktop-agent API 官方客户端状态校验失败时不返回陈旧运行态', async () => {
   const api = createDesktopAgentApi({
     reader: {
       parseStatus: () => ({
@@ -289,16 +277,15 @@ test('desktop-agent API 权威状态校验失败时不返回陈旧运行态', as
         turns: [{ turnId: 'turn-1', status: 'running', steps: [] }],
       }),
     },
-    appServer: createAppServer({
-      getThreadRuntime: () => ({ state: 'unknown', turnId: '', observedAt: '' }),
-      refreshThreadRuntime: async () => { throw new Error('thread/read timeout'); },
+    desktopController: createDesktopController({
+      getThreadRuntime: async () => { throw new Error('CDP timeout'); },
     }),
   });
 
   await assert.rejects(
     () => api.handle('status', { threadId: 'thread-1' }),
-    error => error.code === 'APP_SERVER_STATUS_FAILED'
+    error => error.code === 'CODEX_DESKTOP_STATUS_FAILED'
       && error.status === 503
-      && /thread\/read timeout/.test(error.message),
+      && /CDP timeout/.test(error.message),
   );
 });

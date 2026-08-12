@@ -1,9 +1,8 @@
 const { createDesktopAgentApi } = require('./src/desktop-agent-api');
 const fs = require('node:fs');
 const { createDesktopAgentClient } = require('./src/desktop-agent-client');
-const { createAppServerEventStream } = require('./src/app-server-event-stream');
-const { createCodexAppServerClient } = require('./src/codex-app-server-client');
 const { createCodexDesktopThreadCatalog } = require('./src/codex-desktop-thread-catalog');
+const { ControlledCodexRuntime } = require('./src/controlled-codex-runtime');
 const { reconcileDesktopCatalog } = require('./src/desktop-catalog-reconcile');
 const { CodexSessionReader } = require('./src/codex-session-reader');
 const { AGENT_STATUS_HEARTBEAT_MS, writeAgentStatus } = require('./src/desktop-agent-status');
@@ -18,10 +17,10 @@ if (!serverUrl || !token) {
 }
 
 const deviceName = process.env.CODEX_DEVICE_NAME || require('node:os').hostname();
-const appServerStatusPath = String(process.env.CODEX_AGENT_STATUS_PATH || '').trim();
-const appServer = createCodexAppServerClient();
-const appServerEvents = createAppServerEventStream({ deviceId: deviceName });
+const agentStatusPath = String(process.env.CODEX_AGENT_STATUS_PATH || '').trim();
+const debugPort = Math.max(1024, Math.min(65535, Number(process.env.CODEX_DEBUG_PORT) || 9230));
 const reader = new CodexSessionReader();
+const controlledCodex = new ControlledCodexRuntime({ debugPort, reader });
 const desktopCatalog = createCodexDesktopThreadCatalog();
 const syncOffsets = new Map();
 const catalogCheckIntervalMs = Math.max(1000, Number(process.env.CODEX_AGENT_CATALOG_CHECK_INTERVAL_MS || 1000));
@@ -35,44 +34,43 @@ let lastDiscoveryAt = 0;
 let syncBatchCursor = 0;
 let pendingCatalogMetadata = true;
 let pendingControlSync = null;
-let lastAppServerError = '';
-let appServerState = 'starting';
-let appServerStatusMessage = '正在初始化本机 stdio 会话服务';
-let appServerCodexVersion = '';
-let lastAppServerStatusAt = 0;
+let controlledState = 'starting';
+let controlledStatusMessage = `正在连接受控 Codex Desktop：CDP ${debugPort}`;
+let controlledCodexVersion = '';
+let lastControlledStatusAt = 0;
 let lastConfirmedSessionCount = null;
+let ws = null;
 
 /**
- * AI:将 app-server 生命周期写入管理器可跨进程读取的本机状态文件。
+ * AI:将受控官方客户端生命周期写入管理器可跨进程读取的本机状态文件。
  *
  * @param {'starting'|'ready'|'unavailable'|'stopped'} state 当前服务状态。
  * @param {string} message 当前状态说明。
  * @param {boolean} force 是否跳过心跳间隔立即写入。
  * @returns {void}
  */
-function reportAppServerStatus(state, message, force = false) {
-  appServerState = state;
-  appServerStatusMessage = String(message || '');
-  if (!appServerStatusPath) return;
+function reportControlledStatus(state, message, force = false) {
+  controlledState = state;
+  controlledStatusMessage = String(message || '');
+  if (!agentStatusPath) return;
   const now = Date.now();
-  if (!force && now - lastAppServerStatusAt < AGENT_STATUS_HEARTBEAT_MS) return;
-  lastAppServerStatusAt = now;
+  if (!force && now - lastControlledStatusAt < AGENT_STATUS_HEARTBEAT_MS) return;
+  lastControlledStatusAt = now;
   try {
-    writeAgentStatus(appServerStatusPath, {
+    writeAgentStatus(agentStatusPath, {
       pid: process.pid,
-      state: appServerState,
-      message: appServerStatusMessage,
-      codexVersion: appServerCodexVersion,
+      state: controlledState,
+      message: controlledStatusMessage,
+      codexVersion: controlledCodexVersion,
       updatedAt: new Date(now).toISOString(),
     });
   } catch (error) {
-    console.error(`App Server 状态上报失败：${error.message}`);
+    console.error(`受控 Codex 状态上报失败：${error.message}`);
   }
 }
 
 function discoverDesktopThreadTargets(threads = desktopCatalog.listThreads()) {
   const targets = reader.discoverDesktopThreadSessions(threads);
-  applyAppServerRuntime(targets);
   return { threads, targets };
 }
 
@@ -134,7 +132,7 @@ function nextSyncBatch(targets) {
  */
 const api = createDesktopAgentApi({
   reader,
-  appServer,
+  desktopController: controlledCodex,
   onControlProgress: logControlProgress,
   listThreads: async () => {
     const listed = discoverDesktopThreadTargets();
@@ -196,23 +194,15 @@ function logControlProgress(event) {
     console.log(`重复发送已去重：${thread}${request}`);
     return;
   }
-  if (event.phase === 'send.resume.started') {
-    console.log(`正在恢复目标对话：${thread}${request}`);
+  if (event.phase === 'send.desktop.started') {
+    console.log(`正在通过官方 Codex Desktop 发送：${thread}${request}`);
     return;
   }
-  if (event.phase === 'send.resume.completed') {
-    console.log(`目标对话已恢复：${thread}`);
+  if (event.phase === 'send.desktop.completed') {
+    console.log(`官方客户端发送已落盘：${thread}${request}，回合 ${String(event.turnId || '').slice(0, 8)}…`);
     return;
   }
-  if (event.phase === 'send.turn.started') {
-    console.log(`手机回合已启动：${thread}，等待 App Server 返回回合标识`);
-    return;
-  }
-  if (event.phase === 'send.turn.completed') {
-    console.log(`手机回合已确认：${thread}${request}，回合 ${String(event.turnId || '').slice(0, 8)}…`);
-    return;
-  }
-  if (event.phase === 'send.resume.failed' || event.phase === 'send.turn.failed') {
+  if (event.phase === 'send.desktop.failed') {
     console.error(`手机发送失败：${thread}，${event.error || '未知错误'}`);
     return;
   }
@@ -227,19 +217,14 @@ function logControlProgress(event) {
   if (event.phase === 'stop.failed') console.error(`手机停止失败：${thread}，${event.error || '未知错误'}`);
 }
 
-function applyAppServerRuntime(targets) {
-  for (const target of targets) target.desktopRuntime = appServer.getThreadRuntime(target.threadId);
-}
-
-function recordAppServerError(error) {
+function recordControlledError(error) {
   const message = String(error && error.message || '未知错误');
-  if (message !== lastAppServerError) console.error(`App Server 不可用：${message}`);
-  lastAppServerError = message;
-  reportAppServerStatus('unavailable', message, true);
+  console.error(`受控 Codex Desktop 不可用：${message}`);
+  reportControlledStatus('unavailable', message, true);
 }
 
 async function syncProvider() {
-  reportAppServerStatus(appServerState, appServerStatusMessage);
+  reportControlledStatus(controlledState, controlledStatusMessage);
   const busy = api.isBusy();
   const now = Date.now();
   let hasPendingControlTarget = Boolean(pendingControlSync && knownThreadTargets.some(target => target.threadId === pendingControlSync.threadId));
@@ -276,7 +261,6 @@ async function syncProvider() {
       throw error;
     }
   }
-  applyAppServerRuntime(knownThreadTargets);
   hasPendingControlTarget = Boolean(pendingControlSync && knownThreadTargets.some(target => target.threadId === pendingControlSync.threadId));
   if (hasPendingControlTarget) console.log(`手机控制状态同步：${describeControlThread(pendingControlSync.threadId)}`);
   const catalogMetadata = pendingCatalogMetadata && !hasPendingControlTarget ? createCatalogMetadata(knownThreadTargets) : [];
@@ -324,135 +308,105 @@ async function syncProvider() {
   };
 }
 
-reportAppServerStatus('starting', appServerStatusMessage, true);
-appServer.on('launch', ({ command, source }) => {
-  appServerCodexVersion = '';
-  const type = source === 'desktop' ? 'Codex Desktop 内置程序' : '系统 PATH 程序';
-  console.log(`App Server 启动：${type}，${command}`);
-});
-appServer.on('version', ({ version }) => {
-  appServerCodexVersion = String(version || '').trim();
-  console.log(`Codex 运行时版本：v${appServerCodexVersion}`);
-  reportAppServerStatus(appServerState, appServerStatusMessage, true);
-});
-appServer.on('version-error', ({ error }) => {
-  console.error(`Codex 运行时版本读取失败：${error && error.message || '未知错误'}`);
-});
-appServer.on('ready', () => {
-  lastAppServerError = '';
-  reportAppServerStatus('ready', '本机 stdio 会话服务已就绪', true);
-  ws.sendEventState();
-  console.log('App Server 已初始化：JSON-RPC stdio 连接就绪');
-});
-appServer.on('stderr', message => console.error(`App Server 输出：${String(message).slice(0, 300)}`));
-appServer.on('runtime', ({ threadId, runtime }) => {
-  console.log(`回合状态已更新：${threadId.slice(0, 8)}… 为 ${runtime.state}`);
-});
-appServer.on('exit', ({ message }) => {
-  lastDiscoveryAt = 0;
-  recordAppServerError(new Error(message));
-  ws.sendEventState();
-});
-appServer.on('protocol-error', error => {
-  recordAppServerError(error);
-  ws.sendEventState();
-});
-appServer.on('late-response', ({ id, method, timedOutAt, receivedAt }) => {
-  const delayedMs = Math.max(0, Date.parse(receivedAt) - Date.parse(timedOutAt));
-  console.log(`App Server 迟到响应已隔离：请求 ${id}，方法 ${method}，超时后 ${delayedMs}ms 返回`);
+reportControlledStatus('starting', controlledStatusMessage, true);
+
+function createAgentConnection() {
+  const client = createDesktopAgentClient({
+    serverUrl,
+    token,
+    api,
+    syncProvider,
+    eventStateProvider: () => ({
+      streamId: `controlled-${process.pid}`,
+      lastSeq: 0,
+      deviceId: deviceName,
+      appServerState: controlledState,
+      appServerMessage: controlledStatusMessage,
+    }),
+    syncIntervalMs: Number(process.env.CODEX_AGENT_SYNC_INTERVAL_MS || 1000),
+    syncTimeoutMs: Number(process.env.CODEX_AGENT_SYNC_TIMEOUT_MS || 45000),
+  });
+  return client;
+}
+
+function attachAgentListeners(client) {
+  client.on('open', () => {
+    syncOffsets.clear();
+    knownCatalogThreadIds = [];
+    lastCatalogCheckAt = 0;
+    lastDiscoveryAt = 0;
+    knownThreadTargets = [];
+    syncBatchCursor = 0;
+    pendingCatalogMetadata = true;
+    pendingControlSync = null;
+    lastConfirmedSessionCount = null;
+    console.log(`Desktop agent connected: ${deviceName}`);
+    console.log('同步游标已重置：将重新上传本地对话列表和历史快照');
+  });
+
+  client.on('control-complete', ({ action, payload, result }) => {
+    pendingControlSync = {
+      threadId: String(payload && payload.threadId || '').trim(),
+      turnId: action === 'send' ? String(result && result.watch && result.watch.turnId || '').trim() : '',
+      accepted: false,
+      deadline: Date.now() + controlSyncTimeoutMs,
+    };
+    console.log(`控制命令已确认：${action}，持续优先同步目标对话直到读取到新记录`);
+  });
+  client.on('control-failed', ({ action, payload, error }) => {
+    console.error(`手机控制命令失败：${action}，${describeControlThread(payload && payload.threadId)}，${error.code || 'UNKNOWN'}：${error.message || '未知错误'}`);
+  });
+  client.on('close', (code, reason) => {
+    console.log(`Desktop agent disconnected: ${code} ${reason.toString()}`);
+  });
+  client.on('error', error => {
+    console.error(`Desktop agent error: ${error.message}`);
+  });
+  client.on('sync-error', error => {
+    console.error(`Desktop agent sync error: ${error.message}`);
+  });
+  client.on('sync-sent', payload => {
+    const sessions = Array.isArray(payload && payload.sessions) ? payload.sessions : [];
+    const snapshotCount = sessions.filter(session => session.snapshot).length;
+    console.log(`同步请求已发送：${sessions.length} 个对话，${snapshotCount} 个携带历史快照，${describeSyncedThreads(sessions)}`);
+  });
+  client.on('sync-ack', ack => {
+    const sessionCount = Number(ack.sessionCount) || 0;
+    const appliedSessionCount = Number(ack.appliedSessionCount) || 0;
+    const removedSessionCount = Number(ack.removedSessionCount) || 0;
+    if (lastConfirmedSessionCount === null || sessionCount !== lastConfirmedSessionCount || appliedSessionCount || removedSessionCount) {
+      const removed = removedSessionCount ? `，物理清理 ${removedSessionCount} 个对话缓存` : '';
+      console.log(`服务器已确认同步：缓存 ${sessionCount} 个对话${removed}，${ack.updatedAt || ''}`);
+    }
+    lastConfirmedSessionCount = sessionCount;
+  });
+  client.on('event-state-error', error => {
+    console.error(`控制状态生成失败：${error.message}`);
+  });
+}
+
+controlledCodex.on('unavailable', error => {
+  recordControlledError(error);
+  if (ws) ws.sendEventState();
 });
 
-const ws = createDesktopAgentClient({
-  serverUrl,
-  token,
-  api,
-  syncProvider,
-  eventStateProvider: () => ({
-    ...appServerEvents.state(),
-    appServerState,
-    appServerMessage: appServerStatusMessage,
-  }),
-  syncIntervalMs: Number(process.env.CODEX_AGENT_SYNC_INTERVAL_MS || 1000),
-  syncTimeoutMs: Number(process.env.CODEX_AGENT_SYNC_TIMEOUT_MS || 45000),
-});
-
-ws.on('open', () => {
-  syncOffsets.clear();
-  knownCatalogThreadIds = [];
-  lastCatalogCheckAt = 0;
-  lastDiscoveryAt = 0;
-  knownThreadTargets = [];
-  syncBatchCursor = 0;
-  pendingCatalogMetadata = true;
-  pendingControlSync = null;
-  lastConfirmedSessionCount = null;
-  console.log(`Desktop agent connected: ${deviceName}`);
-  console.log('同步游标已重置：将重新上传本地对话列表和历史快照');
-});
-
-ws.on('control-complete', ({ action, payload, result }) => {
-  pendingControlSync = {
-    threadId: String(payload && payload.threadId || '').trim(),
-    turnId: action === 'send' ? String(result && result.watch && result.watch.turnId || '').trim() : '',
-    accepted: false,
-    deadline: Date.now() + controlSyncTimeoutMs,
-  };
-  console.log(`控制命令已确认：${action}，持续优先同步目标对话直到读取到新记录`);
-});
-ws.on('control-failed', ({ action, payload, error }) => {
-  console.error(`手机控制命令失败：${action}，${describeControlThread(payload && payload.threadId)}，${error.code || 'UNKNOWN'}：${error.message || '未知错误'}`);
-});
-ws.on('close', (code, reason) => {
-  console.log(`Desktop agent disconnected: ${code} ${reason.toString()}`);
-});
-ws.on('error', error => {
-  console.error(`Desktop agent error: ${error.message}`);
-});
-ws.on('sync-error', error => {
-  console.error(`Desktop agent sync error: ${error.message}`);
-});
-ws.on('sync-sent', payload => {
-  const sessions = Array.isArray(payload && payload.sessions) ? payload.sessions : [];
-  const snapshotCount = sessions.filter(session => session.snapshot).length;
-  console.log(`同步请求已发送：${sessions.length} 个对话，${snapshotCount} 个携带历史快照，${describeSyncedThreads(sessions)}`);
-});
-ws.on('sync-ack', ack => {
-  const sessionCount = Number(ack.sessionCount) || 0;
-  const appliedSessionCount = Number(ack.appliedSessionCount) || 0;
-  const removedSessionCount = Number(ack.removedSessionCount) || 0;
-  if (lastConfirmedSessionCount === null || sessionCount !== lastConfirmedSessionCount || appliedSessionCount || removedSessionCount) {
-    const removed = removedSessionCount ? `，物理清理 ${removedSessionCount} 个对话缓存` : '';
-    console.log(`服务器已确认同步：缓存 ${sessionCount} 个对话${removed}，${ack.updatedAt || ''}`);
-  }
-  lastConfirmedSessionCount = sessionCount;
-});
-ws.on('event-dropped', event => {
-  console.error(`实时事件未发送：Agent WebSocket 未连接，事件 ${event.eventId || '未知'}，线程 ${String(event.threadId || '').slice(0, 8)}…`);
-});
-ws.on('event-state-error', error => {
-  console.error(`事件流状态生成失败：${error.message}`);
-});
-
-appServer.on('notification', ({ method, params }) => {
-  const event = appServerEvents.fromNotification(method, params);
-  if (!event) return;
-  const sent = ws.sendAppServerEvent(event);
-  if (sent && (event.type === 'turn.started' || event.type === 'turn.completed' || event.type === 'thread.status.changed')) {
-    console.log(`实时事件已发送：${event.type}，线程 ${event.threadId.slice(0, 8)}…，回合 ${String(event.turnId || '').slice(0, 8)}…，序号 ${event.seq}`);
-  }
-});
-appServer.on('server-request', request => {
-  console.error(`App Server 主动请求未获授权：${request.method}，请求 ${request.id}`);
-});
-appServer.start().catch(error => {
-  recordAppServerError(error);
-  ws.sendEventState();
+controlledCodex.start().then(result => {
+  controlledCodexVersion = String(result.version || '');
+  reportControlledStatus('ready', `受控 Codex Desktop 已连接：CDP ${result.debugPort}`, true);
+  const action = result.restarted ? '已受控重启' : '已复用受控实例';
+  console.log(`${action}：PID ${result.pid || '未知'}，CDP ${result.debugPort}，Codex v${controlledCodexVersion || '未知'}`);
+  ws = createAgentConnection();
+  attachAgentListeners(ws);
+}).catch(error => {
+  recordControlledError(error);
+  process.exitCode = 1;
+  setTimeout(() => process.exit(1), 50);
 });
 
 function shutdown() {
-  reportAppServerStatus('stopped', 'Agent 正在停止', true);
-  ws.close();
-  appServer.stop();
+  reportControlledStatus('stopped', 'Agent 正在停止', true);
+  if (ws) ws.close();
+  controlledCodex.stopRuntime();
 }
 
 process.once('SIGINT', () => {

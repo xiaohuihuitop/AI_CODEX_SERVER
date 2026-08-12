@@ -4,7 +4,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { buildAgentEnv, buildMobileUrl, createDefaultManagerConfig, normalizeManagerConfig } = require('./desktop-manager');
 const { createDesktopAgentProcess } = require('./desktop-agent-process');
-const { resolveAppServerStatus } = require('./app-server-status');
+const { resolveControlledCodexStatus } = require('./controlled-codex-status');
 const { readBody, sendJson, sendOptions } = require('./http-utils');
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -165,7 +165,7 @@ function renderHtml(config, agentStatus) {
       <div class="status-grid">
         <div class="status"><strong>云端</strong><span id="cloud"><span class="dot"></span>检测中</span><div class="muted" id="cloudDetail"></div></div>
         <div class="status"><strong>Agent</strong><span id="agent"><span class="dot ${agentStatus.running ? 'ok' : ''}"></span>${agentStatus.running ? '运行中' : '未运行'}</span><div class="muted" id="agentDetail">${agentStatus.pid ? `PID ${agentStatus.pid}` : ''}</div></div>
-        <div class="status"><strong>会话服务</strong><span id="appServer"><span class="dot"></span>检测中</span><div class="muted" id="appServerDetail"></div></div>
+        <div class="status"><strong>官方客户端</strong><span id="controlledCodex"><span class="dot"></span>检测中</span><div class="muted" id="controlledCodexDetail"></div></div>
       </div>
     </section>
     <section>
@@ -211,7 +211,7 @@ function renderHtml(config, agentStatus) {
       const data = await res.json();
       setStatus('cloud', data.cloud.ok, data.cloud.ok ? '可访问' : '不可访问', data.cloud.online ? 'Agent 已在线' : (data.cloud.message || 'Agent 未在线'));
       setStatus('agent', data.agent.running, data.agent.running ? '运行中' : '未运行', data.agent.pid ? 'PID ' + data.agent.pid : '');
-      setStatus('appServer', data.appServer.ok, data.appServer.ok ? '已就绪' : '未就绪', data.appServer.message || '');
+      setStatus('controlledCodex', data.controlledCodex.ok, data.controlledCodex.ok ? '已连接' : '未连接', data.controlledCodex.message || '');
       document.getElementById('agentLog').textContent = [...(data.agent.lastOutput || []), ...(data.agent.lastError || [])].slice(-10).join('\\n');
     }
     async function postAction(url) {
@@ -244,13 +244,13 @@ function createDesktopManagerServer(options = {}) {
   const agentController = options.agentController || createDesktopAgentProcess({ cwd: options.cwd || path.join(__dirname, '..') });
   const probes = {
     cloud: options.probes?.cloud || probeCloud,
-    appServer: options.probes?.appServer || resolveAppServerStatus,
+    controlledCodex: options.probes?.controlledCodex || resolveControlledCodexStatus,
   };
 
   async function getStatus() {
-    const [cloud, appServer] = await Promise.all([
+    const [cloud, controlledCodex] = await Promise.all([
       probes.cloud(config),
-      Promise.resolve(probes.appServer(agentController.status(), config)),
+      Promise.resolve(probes.controlledCodex(agentController.status(), config)),
     ]);
     return {
       ok: true,
@@ -258,7 +258,7 @@ function createDesktopManagerServer(options = {}) {
       mobileUrl: config.serverUrl && config.token ? buildMobileUrl(config) : '',
       agent: agentController.status(),
       cloud,
-      appServer,
+      controlledCodex,
     };
   }
 

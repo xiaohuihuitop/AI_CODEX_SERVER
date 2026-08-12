@@ -25,8 +25,9 @@
 - Windows 10 或更高版本。
 - Node.js 20 或更高版本。
 - 已安装 Codex Desktop。
-- 正常发送和停止由 Codex Desktop 内置 `codex.exe app-server` 完成。Windows Agent 会自动从 `%LOCALAPPDATA%\OpenAI\Codex\bin` 选择最新安装版本，不能依赖 PATH 中的全局 CLI。
-- CDP 不是本项目的产品能力，也不是同步和发送的前置条件。Windows 管理器不会为了调试端口关闭、重启或控制 Codex Desktop。
+- Windows Agent 通过受控官方 Codex Desktop 完成发送和停止，手机与电脑操作同一个官方界面和同一份会话状态。
+- 管理器通过 Appx manifest 识别官方应用，通过 AUMID 启动并注入本机 CDP 参数，不依赖 PATH 中的全局 CLI。
+- 受控官方 Codex Desktop 是唯一会话控制面；项目不会启动独立 `codex.exe app-server`，也不会在 CDP 异常时自动回退到另一套实现。
 
 ## 安装依赖
 
@@ -46,9 +47,10 @@ npm run start:manager:gui
 - 配置云端服务器地址。
 - 配置固定 token。
 - 配置设备名。
+- 配置 Codex 控制端口，默认 `9230`。
 - 启动功能：启动或重连 Windows Agent。
 - 停止功能：停止 Agent 并关闭自动启动。
-- 会话服务：显示本机 App Server 是否已就绪，以及当前使用的内置 Codex 运行时版本。
+- 官方客户端：显示受控 Codex Desktop 是否连接，以及当前官方应用版本。
 - 最小化到系统托盘，托盘菜单可恢复窗口或退出管理器。
 
 示例配置：
@@ -57,6 +59,7 @@ npm run start:manager:gui
 云端服务器地址：http://example.com:8008
 固定 Token：token_replace_with_random_value
 设备名称：home-pc
+Codex 控制端口：9230
 ```
 
 ## 构建 Windows 可执行文件
@@ -85,6 +88,7 @@ desktop/dist/win-unpacked/Codex Desktop 管理器.exe
 $env:CODEX_CLOUD_URL="http://example.com:8008"
 $env:CODEX_DEVICE_TOKEN="token_replace_with_random_value"
 $env:CODEX_DEVICE_NAME="home-pc"
+$env:CODEX_DEBUG_PORT="9230"
 npm run start:agent
 ```
 
@@ -106,7 +110,12 @@ npm run start:manager
 
 该入口用于调试或兼容旧流程，正式使用推荐 Electron 图形管理器。
 
-如果管理器显示 App Server 未就绪，先检查日志中的 `App Server 启动` 行：它必须指向 `%LOCALAPPDATA%\OpenAI\Codex\bin\<版本>\codex.exe`，而不是 npm 全局安装目录。排查手机/Web 展示异常时，应检查会话目录、JSONL 同步和 relay 状态，不能切换到 CDP 控制。
+如果管理器显示官方客户端未连接，应检查日志中的明确错误：
+
+- 控制端口被其他进程占用时直接报错，不会自动更换端口或终止未知进程。
+- 官方 Codex 没有携带配置的 CDP 参数时，Agent 会在确认编辑器没有草稿后受控重启官方应用。
+- 存在草稿或无法确认草稿状态时拒绝重启，避免丢失输入内容。
+- CDP 断开后状态会变为未连接，不会用独立 App Server 掩盖故障。
 
 ## 配置保存位置
 
@@ -128,4 +137,4 @@ npm test
 npm run check
 ```
 
-`npm run build:manager:win` 在 Electron 打包后会自动检查 `app.asar`，构建产物包含 CDP 控制代码、CDP 重启入口或旧控制脚本时会直接失败。
+`npm run build:manager:win` 在 Electron 打包后会自动检查 `app.asar`：产物必须包含受控进程、持久 CDP、按 threadId 精确定位和 JSONL 证据确认；包含独立 App Server 控制客户端或旧控制脚本时会直接失败。
