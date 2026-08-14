@@ -390,6 +390,13 @@ controlledCodex.on('unavailable', error => {
   if (ws) ws.sendEventState();
 });
 
+controlledCodex.on('reconnected', result => {
+  controlledCodexVersion = String(result.version || controlledCodexVersion || '');
+  reportControlledStatus('ready', `受控 Codex Desktop 已恢复连接：CDP ${result.debugPort}`, true);
+  console.log(`CDP 连接已恢复：端口 ${result.debugPort}，Codex v${controlledCodexVersion || '未知'}`);
+  if (ws) ws.sendEventState();
+});
+
 controlledCodex.start().then(result => {
   controlledCodexVersion = String(result.version || '');
   reportControlledStatus('ready', `受控 Codex Desktop 已连接：CDP ${result.debugPort}`, true);

@@ -84,3 +84,28 @@ test('受控运行时未就绪时拒绝所有控制操作', async () => {
   const runtime = new ControlledCodexRuntime({ reader: {}, cdp: createCdp(), processManager: {}, controller: {} });
   await assert.rejects(() => runtime.sendMessage('thread-1', '消息'), error => error.code === 'CONTROLLED_CODEX_NOT_READY');
 });
+
+test('受控运行时在 CDP 短暂断开后自动恢复，不重启官方客户端', async () => {
+  const cdp = createCdp();
+  let connectCount = 0;
+  cdp.connect = async () => {
+    connectCount += 1;
+  };
+  const runtime = new ControlledCodexRuntime({
+    reader: {},
+    cdp,
+    processManager: {},
+    controller: {},
+    reconnectIntervalMs: 1,
+  });
+  runtime.state = 'ready';
+  const recovered = new Promise(resolve => runtime.once('reconnected', resolve));
+
+  cdp.emit('disconnected', Object.assign(new Error('CDP 连接已关闭：1006'), { code: 'CDP_DISCONNECTED' }));
+  const details = await recovered;
+
+  assert.equal(connectCount, 1);
+  assert.equal(runtime.state, 'ready');
+  assert.equal(details.reconnected, true);
+  runtime.stopRuntime();
+});

@@ -113,6 +113,7 @@ test('桌面管理器提供日志清除操作', () => {
   assert.match(agent, /手机回合完整同步/);
   assert.match(agent, /手机控制同步完成/);
   assert.match(agent, /官方客户端发送已落盘：/);
+  assert.match(agent, /CDP 连接已恢复：/);
   assert.match(main, /resolveControlledCodexStatus/);
   assert.match(main, /官方 Codex Desktop 未就绪：/);
   assert.doesNotMatch(main, /restartCodexDesktopWithDebug/);

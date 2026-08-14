@@ -59,12 +59,13 @@ await runtime.getThreadRuntime(threadId);
 | 编辑器有草稿或线程运行中 | `LOCAL_DRAFT_EXISTS` / `THREAD_ALREADY_RUNNING` |
 | 点击发送但目标 JSONL 未出现新回合 | `TURN_START_CONFIRM_TIMEOUT`；不得返回成功 |
 | 点击停止但目标 JSONL 未出现中断证据 | `STOP_CONFIRM_TIMEOUT`；不得返回成功 |
-| CDP 连接断开 | Agent 和管理器立即显示未连接；不得保持虚假在线 |
+| CDP 连接断开 | Agent 和管理器立即显示未连接；仅重连现有 CDP 目标，恢复后再显示已连接；不得重启官方进程、换端口或切换控制面 |
 
 ### 5. 正常 / 基准 / 异常案例
 
 - 正常：Web 向 `threadId=A` 发送唯一文本，官方 Desktop 自动选中 A 并显示用户消息和回复，JSONL 出现同一回合，Web 自动刷新到完成。
 - 基准：官方实例已由管理器以配置端口启动，Agent 复用进程和持久 CDP，不重启、不创建第二控制服务。
+- 短暂异常：CDP WebSocket 收到 `1006` 等断线事件时，Agent 立即写入不可控状态并按固定间隔重连同一端口；重连成功后写回 ready 心跳并通知 relay。重连期间不得把 JSONL 同步正常误报为官方客户端可控。
 - 异常：两个项目存在同名线程。只能选择属性中精确匹配的 `threadId`；找不到时显式失败。
 - 异常：端口已被其他进程监听。管理器显示占用 PID，用户修改配置或处理占用后重试，不做隐式恢复。
 

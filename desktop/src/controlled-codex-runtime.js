@@ -9,7 +9,7 @@ const { ControlledCodexProcess, probeCdp, resolvePortOwner } = require('./contro
  */
 class ControlledCodexRuntime extends EventEmitter {
   /**
-   * @param {{debugPort?: number, processManager?: object, reader: object, cdp?: object}} options 运行时依赖。
+   * @param {{debugPort?: number, processManager?: object, reader: object, cdp?: object, reconnectIntervalMs?: number}} options 运行时依赖。
    */
   constructor(options = {}) {
     super();
@@ -19,6 +19,9 @@ class ControlledCodexRuntime extends EventEmitter {
     this.portOwnerResolver = options.portOwnerResolver || resolvePortOwner;
     this.cdpProbe = options.cdpProbe || probeCdp;
     this.reader = options.reader;
+    this.reconnectIntervalMs = Math.max(100, Number(options.reconnectIntervalMs) || 2000);
+    this.reconnectTimer = null;
+    this.reconnecting = false;
     this.cdp = options.cdp || new CodexCdpClient({ debugPort: this.debugPort });
     this.evidence = options.evidence || new CodexSessionEvidence({ reader: this.reader });
     this.controller = options.controller || new CodexDesktopUiController({
@@ -29,6 +32,65 @@ class ControlledCodexRuntime extends EventEmitter {
     this.state = 'starting';
     this.message = '正在连接受控 Codex Desktop';
     this.version = '';
+    this.cdp.on('disconnected', error => this.handleDisconnected(error));
+  }
+
+  /**
+   * AI:CDP 短暂断开时立即暴露不可控状态，并安排只重连现有调试目标。
+   *
+   * @param {Error} error CDP 断开原因。
+   * @returns {void}
+   */
+  handleDisconnected(error) {
+    if (this.state === 'stopped') return;
+    this.state = 'unavailable';
+    this.message = error && error.message || 'Codex Desktop CDP 已断开。';
+    this.emit('unavailable', error);
+    this.scheduleReconnect();
+  }
+
+  /**
+   * AI:避免多个定时器同时重连同一个 CDP 客户端。
+   *
+   * @returns {void}
+   */
+  scheduleReconnect() {
+    if (this.state === 'stopped' || this.reconnectTimer || this.reconnecting) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.reconnect();
+    }, this.reconnectIntervalMs);
+  }
+
+  /**
+   * AI:恢复同一官方实例的 CDP 连接，不执行进程重启或控制面切换。
+   *
+   * @returns {Promise<void>} 重连完成或本轮失败后结束。
+   */
+  async reconnect() {
+    if (this.state === 'stopped' || this.reconnecting) return;
+    this.reconnecting = true;
+    try {
+      await this.cdp.connect();
+      if (typeof this.cdp.isConnected === 'function' && !this.cdp.isConnected()) {
+        throw Object.assign(new Error('Codex Desktop CDP 重连后仍未建立连接。'), { code: 'CDP_RECONNECT_FAILED' });
+      }
+      this.state = 'ready';
+      this.message = `受控 Codex Desktop 已连接：CDP ${this.debugPort}`;
+      this.emit('reconnected', {
+        reconnected: true,
+        debugPort: this.debugPort,
+        version: this.version,
+      });
+    } catch (error) {
+      if (this.state !== 'stopped') {
+        this.state = 'unavailable';
+        this.message = `CDP 自动重连失败：${error.message || String(error)}`;
+        this.scheduleReconnect();
+      }
+    } finally {
+      this.reconnecting = false;
+    }
   }
 
   async start() {
@@ -57,11 +119,6 @@ class ControlledCodexRuntime extends EventEmitter {
       version: this.version,
     };
     this.emit('ready', details);
-    this.cdp.on('disconnected', error => {
-      this.state = 'unavailable';
-      this.message = error.message;
-      this.emit('unavailable', error);
-    });
     return details;
   }
 
@@ -89,6 +146,8 @@ class ControlledCodexRuntime extends EventEmitter {
   stopRuntime() {
     this.state = 'stopped';
     this.message = 'Agent 已停止';
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
     this.cdp.close();
   }
 }
