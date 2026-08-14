@@ -5,7 +5,7 @@ if (process.argv.includes('--codex-manager-agent-child') || process.env.CODEX_MA
   return;
 }
 
-const { app, BrowserWindow, ipcMain, shell, Menu, Tray, nativeImage } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, shell, Menu, Tray, nativeImage } = require('electron');
 const {
   buildAgentEnv,
   buildMobileUrl,
@@ -18,6 +18,7 @@ const {
   saveConfig,
 } = require('../src/desktop-manager-server');
 const { appendLog, createDesktopAgentProcess } = require('../src/desktop-agent-process');
+const { ControlledCodexProcess } = require('../src/controlled-codex-process');
 const { resolveControlledCodexStatus } = require('../src/controlled-codex-status');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -43,6 +44,7 @@ function createAgentController() {
 }
 
 const agentController = createAgentController();
+const controlledCodexProcess = new ControlledCodexProcess();
 
 let config = loadConfig(CONFIG_PATH);
 let mainWindow = null;
@@ -238,6 +240,51 @@ ipcMain.handle('manager:restart-agent', async () => {
   config = normalizeManagerConfig(Object.assign({}, config, { autoStart: true }));
   saveConfig(CONFIG_PATH, config);
   await agentController.restart(config);
+  return getState();
+});
+
+ipcMain.handle('manager:restart-codex', async () => {
+  const normalized = normalizeManagerConfig(config);
+  const dialogOptions = {
+    type: 'warning',
+    title: '重启官方 Codex Desktop',
+    message: `重启官方 Codex Desktop 以启用 CDP ${normalized.debugPort}？`,
+    detail: '管理器会先检查未发送草稿。存在草稿或无法确认草稿状态时，将拒绝关闭 Codex。',
+    buttons: ['取消', '重启 Codex'],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  };
+  const confirmation = mainWindow
+    ? await dialog.showMessageBox(mainWindow, dialogOptions)
+    : await dialog.showMessageBox(dialogOptions);
+  if (confirmation.response !== 1) return getState();
+
+  const shouldResumeAgent = Boolean(agentController.status().running || normalized.autoStart);
+  const stopped = agentController.stop();
+  if (stopped.pid) await agentController.waitUntilStopped(stopped.pid);
+  appendManagerLog(`正在重启官方 Codex Desktop 以启用 CDP ${normalized.debugPort}`);
+
+  let restartError = null;
+  try {
+    const result = await controlledCodexProcess.restart({ debugPort: normalized.debugPort });
+    appendManagerLog(`官方 Codex Desktop 已重启，CDP ${result.debugPort} 已就绪`);
+  } catch (error) {
+    restartError = error;
+    appendManagerLog(`官方 Codex Desktop 重启失败：${error.message || String(error)}`);
+  }
+
+  let agentError = null;
+  if (shouldResumeAgent) {
+    try {
+      agentController.start(normalized);
+    } catch (error) {
+      agentError = error;
+      appendManagerLog(`Agent 恢复失败：${error.message || String(error)}`);
+    }
+  }
+  if (restartError) throw restartError;
+  if (agentError) throw agentError;
   return getState();
 });
 

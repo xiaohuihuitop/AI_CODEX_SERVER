@@ -101,7 +101,7 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.doesNotMatch(electronPreload, /\bstartAgent:\s*\(/);
   assert.match(electronPreload, /pauseFeature/);
   assert.match(electronPreload, /restartAgent/);
-  assert.doesNotMatch(electronPreload, /restartCodex/);
+  assert.match(electronPreload, /restartCodex/);
   assert.match(electronHtml, /Codex Desktop 管理器/);
   assert.doesNotMatch(electronHtml, /启动 Agent/);
   assert.doesNotMatch(electronHtml, /停止 Agent/);
@@ -110,7 +110,8 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.doesNotMatch(electronHtml, /startButton/);
   assert.match(electronHtml, /启动功能/);
   assert.match(electronHtml, /停止功能/);
-  assert.doesNotMatch(electronHtml, /重启 Codex 启用 CDP/);
+  assert.match(electronHtml, /id="restartCodexButton"/);
+  assert.match(electronHtml, /重启 Codex 启用 CDP/);
   assert.match(electronHtml, /id="portStatus"/);
   assert.match(electronHtml, /id="codexVersion"/);
   assert.match(electronHtml, /id="debugPort"/);
@@ -129,6 +130,10 @@ test('桌面管理小软件入口使用本地管理端口和配置模块', () =>
   assert.match(electronRenderer, /配置不完整/);
   assert.match(electronRenderer, /等待受控 Codex Desktop 初始化/);
   assert.doesNotMatch(electronMain, /restartCodexDesktopWithDebug/);
+  assert.match(electronMain, /manager:restart-codex/);
+  assert.match(electronMain, /controlledCodexProcess\.restart/);
+  assert.match(electronMain, /重启官方 Codex Desktop/);
+  assert.match(electronRenderer, /window\.codexManager\.restartCodex\(\)/);
   assert.match(electronRenderer, /window\.codexManager\.pauseFeature\(\)/);
   assert.match(electronRenderer, /async function refreshSilently\(\)/);
   assert.match(electronRenderer, /const SILENT_REFRESH_MS = 15000/);

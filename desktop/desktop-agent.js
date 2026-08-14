@@ -420,8 +420,7 @@ async function startControlledCodex() {
     const result = await controlledCodex.start();
     controlledCodexVersion = String(result.version || controlledCodexVersion || '');
     reportControlledStatus('ready', `受控 Codex Desktop 已连接：CDP ${result.debugPort}`, true);
-    const action = result.restarted ? '已受控重启' : '已复用受控实例';
-    console.log(`${action}：PID ${result.pid || '未知'}，CDP ${result.debugPort}，Codex v${controlledCodexVersion || '未知'}`);
+    console.log(`已连接现有受控实例：PID ${result.pid || '未知'}，CDP ${result.debugPort}，Codex v${controlledCodexVersion || '未知'}`);
     if (!ws) {
       ws = createAgentConnection();
       attachAgentListeners(ws);

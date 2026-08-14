@@ -18,7 +18,9 @@ await runtime.stop(threadId);
 await runtime.getThreadRuntime(threadId);
 ```
 
-- `start()`：当前官方主进程持有配置端口且 `/json/list` 返回目标页面时直接复用；不得依赖 Appx 主进程命令行是否保留 CDP 参数。只有真实 CDP 不可用时，才允许在草稿安全检查后执行一次受控重启。
+- `start()`：只连接已经存在的 CDP。当前官方主进程持有配置端口且 `/json/list` 返回目标页面时直接复用；不得依赖 Appx 主进程命令行是否保留 CDP 参数，也不得关闭或重启官方客户端。
+- 管理器“启动功能”：只启动或重连 Agent、Relay 和会话同步，并调用上述连接逻辑。
+- 管理器“重启 Codex 启用 CDP”：唯一允许重启官方客户端的显式入口；必须由用户确认，并在草稿安全检查通过后执行。
 - `sendMessage(threadId, text)`：按 `threadId` 精确选择官方侧栏线程，点击前精确核对编辑器正文，点击后等待目标 JSONL 新 `task_started/turnId` 证据。
 - `stop(threadId)`：按 `threadId` 精确选择线程，点击官方停止按钮，并等待目标 JSONL `turn_aborted` 证据。
 - `getThreadRuntime(threadId)`：只读取当前已选线程的官方运行态；不得为了状态轮询切换电脑界面。
@@ -50,12 +52,11 @@ await runtime.getThreadRuntime(threadId);
 | 非 Windows 平台 | `WINDOWS_ONLY` |
 | 未安装官方 Codex 包或 manifest 无入口 | `CODEX_PACKAGE_NOT_FOUND` |
 | 配置端口被非目标官方进程占用 | `CDP_PORT_OCCUPIED`；不得终止未知进程或自动换端口 |
-| 官方实例无正确 CDP 参数 | 检查草稿后受控重启 |
+| 官方实例无正确 CDP 参数 | `CDP_NOT_READY`；Agent 保持运行并继续探测，提示用户显式点击“重启 Codex 启用 CDP” |
 | 当前官方实例持有可用 CDP，但命令行未显示参数 | 直接复用，不得重启 |
 | 存在草稿 | `CODEX_DRAFT_EXISTS`；不得关闭官方客户端 |
 | 无法确认草稿 | `CODEX_DRAFT_UNKNOWN`；不得关闭官方客户端 |
 | AUMID 启动后 CDP 未就绪 | `CDP_START_FAILED` |
-| 同一 Agent 生命周期已执行过一次受控启动但 CDP 仍未就绪 | `CDP_START_RETRY_BLOCKED`；只继续探测，不得再次关闭官方客户端 |
 | 侧栏无精确 `threadId` | `THREAD_ROW_NOT_FOUND`；不得按标题选择 |
 | 切换后选中 ID 不一致 | `THREAD_SELECTION_FAILED` |
 | 编辑器有草稿或线程运行中 | `LOCAL_DRAFT_EXISTS` / `THREAD_ALREADY_RUNNING` |
@@ -68,7 +69,7 @@ await runtime.getThreadRuntime(threadId);
 - 正常：Web 向 `threadId=A` 发送唯一文本，官方 Desktop 自动选中 A 并显示用户消息和回复，JSONL 出现同一回合，Web 自动刷新到完成。
 - 基准：官方实例已由管理器以配置端口启动，Agent 复用进程和持久 CDP，不重启、不创建第二控制服务。
 - 初次接管：关闭旧实例时只调用主窗口 `CloseMainWindow()`，不得使用 `Stop-Process -Force`。无法正常退出时显式失败，避免产生 System 持有的残留监听端口。
-- 初始化异常：Agent 保持运行并定时重试接管，不因一次失败退出；同一 Agent 生命周期最多执行一次可能关闭官方客户端的受控启动。
+- 初始化异常：Agent 保持运行并定时重试连接，不因一次失败退出；所有自动重试均不得关闭或重启官方客户端。
 - 短暂异常：CDP WebSocket 收到 `1006` 等断线事件时，Agent 立即写入不可控状态并按固定间隔重连同一端口；重连成功后写回 ready 心跳并通知 relay。重连期间不得把 JSONL 同步正常误报为官方客户端可控。
 - 异常：两个项目存在同名线程。只能选择属性中精确匹配的 `threadId`；找不到时显式失败。
 - 异常：端口已被其他进程监听。管理器显示占用 PID，用户修改配置或处理占用后重试，不做隐式恢复。
@@ -79,7 +80,7 @@ await runtime.getThreadRuntime(threadId);
 - `server/test/codex-cdp-client.test.js`：持久连接、请求 ID、断线和协议错误。
 - `server/test/codex-desktop-ui-controller.test.js`：精确 threadId、草稿、发送、停止及不切换式状态读取。
 - `server/test/codex-session-evidence.test.js`：目标消息时间边界和停止证据。
-- `server/test/controlled-codex-runtime.test.js`：复用/重启决策和唯一控制器委托；必须覆盖命令行参数不可见但 CDP 可用时复用，以及受控启动失败后不重复关闭官方客户端。
+- `server/test/controlled-codex-runtime.test.js`：连接决策和唯一控制器委托；必须覆盖命令行参数不可见但 CDP 可用时复用，以及 CDP 未就绪和重复探测时重启调用次数始终为零。
 - `server/test/control-plane-contract.test.js`：禁止独立 App Server 控制模块重新进入正式源码。
 - `desktop/scripts/verify-manager-artifact.js`：对实际 `app.asar` 执行相同控制面约束。
 - 真实 E2E：在 `codex_temp` 线程从 Web 连续发送至少 3 轮；逐轮核对官方 UI、JSONL、Web 回复和完成状态。另执行 1 轮 Web 停止及 1 轮官方 Desktop 手动停止。

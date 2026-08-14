@@ -25,12 +25,12 @@ app/      Android-only uni-app 手机端
         v
 Windows desktop-agent
         |
-        | 同版本 App Server JSON-RPC stdio
+        | 本机 CDP + JSONL 证据确认
         v
-Codex Desktop 内置 codex.exe
+官方 Codex Desktop
 ```
 
-云端只保存会话同步缓存和转发控制指令，不直接访问电脑上的 Codex Desktop。Windows Agent 会从 Codex Desktop 当前安装目录解析内置 `codex.exe` 并启动 `app-server`，避免全局 npm CLI 与 Desktop 会话格式版本不一致。CDP 不是项目产品能力，不参与发送、停止、同步或管理器启动。
+云端只保存会话同步缓存和转发控制指令，不直接访问电脑上的 Codex Desktop。Windows Agent 通过本机 CDP 控制官方界面，并用 Codex Desktop 的 JSONL 会话记录确认发送、停止和最终状态。官方 Codex Desktop 是唯一会话执行者；项目不会启动独立 App Server 或 CLI 执行手机回合。
 
 ## 功能概览
 
@@ -89,7 +89,7 @@ npm run start:manager:gui
 设备名称：home-pc
 ```
 
-然后点击“启动功能”。管理器会显示 App Server 状态；如果未就绪，确认 Windows 已安装并可正常打开 Codex Desktop。Windows 商店版 Codex 不支持通过外部参数稳定启用 CDP，因此管理器不会为此关闭或重启 Codex；CDP 不是手机发送消息的前置条件。
+首次使用先点击“重启 Codex 启用 CDP”，确认草稿检查通过并等待官方 Codex Desktop 重新打开；随后点击“启动功能”启动 Agent、云端连接和会话同步。以后 CDP 已经可用时，“启动功能”只启动 Agent，不会关闭或重启官方 Codex Desktop。
 
 ### 3. 启动 Android 手机端
 
@@ -124,7 +124,7 @@ npm run check
 
 ## 注意事项
 
-- 当前控制链路依赖 Codex Desktop 内置 App Server；Windows Agent 必须使用与 Desktop 同一安装版本的 `codex.exe`，不能用 PATH 中的全局旧版 CLI 代替。
+- 当前控制链路依赖官方 Codex Desktop 的本机 CDP 和 JSONL 会话记录；CDP 未就绪时必须使用管理器中的显式重启按钮，不得启动第二套 App Server 或 CLI 控制面。
 - 云端 relay 建议只暴露必要端口，并使用强随机 token。
 - 手机端和桌面端必须使用同一个 token 才能打通同一台电脑。
 - 多台电脑建议每台电脑使用不同 token。

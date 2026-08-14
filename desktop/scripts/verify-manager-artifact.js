@@ -81,14 +81,22 @@ function verifyManagerArtifact() {
 
   const agent = readArtifactText('desktop-agent.js');
   const api = readArtifactText('src/desktop-agent-api.js');
+  const runtimeSource = readArtifactText('src/controlled-codex-runtime.js');
   const processSource = readArtifactText('src/controlled-codex-process.js');
   const controllerSource = readArtifactText('src/codex-desktop-ui-controller.js');
+  const electronMain = readArtifactText('electron/main.js');
+  const electronPreload = readArtifactText('electron/preload.js');
+  const electronHtml = readArtifactText('electron/renderer.html');
   if (!/new ControlledCodexRuntime\(\{ debugPort, reader \}\)/.test(agent)) fail('desktop-agent.js 未创建受控 Codex 运行时');
   if (!/desktopController: controlledCodex/.test(agent)) fail('桌面 API 未绑定受控 Codex 运行时');
   if (!/desktopController\.sendMessage\(threadId, text\)/.test(api)) fail('桌面 API 未通过官方界面发送消息');
   if (!/desktopController\.stop\(threadId\)/.test(api)) fail('桌面 API 未通过官方界面停止回合');
   if (!/ApplicationActivationManager/.test(processSource)) fail('未使用 Windows 应用激活接口启动官方 Codex');
   if (!/remote-debugging-port/.test(processSource)) fail('受控 Codex 启动未配置 CDP 端口');
+  if (/processManager\.restart\(/.test(runtimeSource)) fail('Agent 运行时仍会隐式重启官方 Codex');
+  if (!/manager:restart-codex/.test(electronMain)) fail('管理器缺少独立 Codex 重启操作');
+  if (!/restartCodex/.test(electronPreload)) fail('渲染层未暴露独立 Codex 重启操作');
+  if (!/重启 Codex 启用 CDP/.test(electronHtml)) fail('管理器缺少独立 Codex 重启按钮');
   if (!/data-app-action-sidebar-thread-id/.test(controllerSource)) fail('官方界面控制未按 threadId 精确定位');
   if (!/sessionConfirmer/.test(controllerSource)) fail('官方界面发送缺少 JSONL 证据确认');
 

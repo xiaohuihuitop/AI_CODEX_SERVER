@@ -22,7 +22,6 @@ class ControlledCodexRuntime extends EventEmitter {
     this.reconnectIntervalMs = Math.max(100, Number(options.reconnectIntervalMs) || 2000);
     this.reconnectTimer = null;
     this.reconnecting = false;
-    this.restartAttempted = false;
     this.cdp = options.cdp || new CodexCdpClient({ debugPort: this.debugPort });
     this.evidence = options.evidence || new CodexSessionEvidence({ reader: this.reader });
     this.controller = options.controller || new CodexDesktopUiController({
@@ -102,35 +101,22 @@ class ControlledCodexRuntime extends EventEmitter {
     const currentOwnsPort = owner && current && Number(owner.pid) === Number(current.pid);
     // AI:以真实 CDP 探测结果为准，Windows Appx 单实例可能不会把启动参数保留在主进程命令行中。
     const probe = currentOwnsPort ? await this.cdpProbe(this.debugPort) : { ok: false };
-
-    let restarted = false;
-    let processState = inspected;
     if (!probe.ok) {
-      if (this.restartAttempted) {
-        throw Object.assign(new Error(`已尝试启动受控 Codex Desktop，正在等待 CDP ${this.debugPort} 恢复，拒绝再次关闭官方客户端。`), {
-          code: 'CDP_START_RETRY_BLOCKED',
+      if (owner && !currentOwnsPort) {
+        throw Object.assign(new Error(`CDP 端口 ${this.debugPort} 已被其他进程占用：PID ${owner.pid}`), {
+          code: 'CDP_PORT_OCCUPIED',
         });
       }
-      this.restartAttempted = true;
-      let result;
-      try {
-        result = await this.processManager.restart({ debugPort: this.debugPort });
-      } catch (error) {
-        if (['CODEX_DRAFT_UNKNOWN', 'CODEX_DRAFT_EXISTS', 'CDP_PORT_OCCUPIED'].includes(error && error.code)) {
-          this.restartAttempted = false;
-        }
-        throw error;
-      }
-      restarted = true;
-      processState = { app: result.app, mainProcess: result.mainProcess };
+      throw Object.assign(new Error(`Codex Desktop CDP ${this.debugPort} 未就绪，请点击“重启 Codex 启用 CDP”。`), {
+        code: 'CDP_NOT_READY',
+      });
     }
     await this.cdp.connect();
     this.state = 'ready';
     this.message = `受控 Codex Desktop 已连接：CDP ${this.debugPort}`;
     const details = {
-      restarted,
       debugPort: this.debugPort,
-      pid: processState.mainProcess && processState.mainProcess.pid || null,
+      pid: current && current.pid || null,
       version: this.version,
     };
     this.emit('ready', details);
