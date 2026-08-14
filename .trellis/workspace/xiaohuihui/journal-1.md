@@ -163,3 +163,24 @@
 ### Next Steps
 
 - 推送 build-v2.18 触发离线 Docker 镜像构建
+
+
+## Session 7: 拆分 Agent 启动与 Codex CDP 重启
+
+**Date**: 2026-08-14
+**Task**: 拆分 Agent 启动与 Codex CDP 重启
+**Branch**: `master`
+
+### Summary
+
+新增显式重启 Codex 启用 CDP 按钮；启动功能仅管理 Agent、云端与同步，不再隐式重启官方客户端；完成全量测试、产物构建和 PID 不变验证。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d3b315a` | (see git log) |
+
+### Status
+
+[OK] **Completed**
