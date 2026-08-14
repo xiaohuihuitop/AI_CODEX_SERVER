@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
+  buildTerminatePackageScript,
   ControlledCodexProcess,
   parsePowerShellJson,
 } = require('../../desktop/src/controlled-codex-process');
@@ -28,12 +29,14 @@ test('端口探测脚本不把已退出且无法查询进程的 PID 当作占用
   assert.match(source, /if \(\$null -eq \$proc\) \{ Write-Output ''; exit 0 \}/);
 });
 
-test('受控重启通过窗口关闭请求退出官方客户端，不强制终止进程', () => {
-  const fs = require('node:fs');
-  const path = require('node:path');
-  const source = fs.readFileSync(path.join(__dirname, '../../desktop/src/controlled-codex-process.js'), 'utf8');
-  assert.match(source, /CloseMainWindow\(\)/);
-  assert.doesNotMatch(source, /Stop-Process -Id \$id -Force/);
+test('受控重启使用包生命周期接口真正终止官方客户端', () => {
+  const script = buildTerminatePackageScript(APP);
+
+  assert.match(script, /PackageDebugSettings/);
+  assert.match(script, /TerminateAllProcesses/);
+  assert.match(script, /OpenAI\.Codex_26\.707\.3748\.0_x64__2p2nqsd0c76g0/);
+  assert.doesNotMatch(script, /CloseMainWindow/);
+  assert.doesNotMatch(script, /Stop-Process/);
 });
 
 test('受控进程从 Appx manifest 结果识别当前 ChatGPT 主进程', async () => {
@@ -97,6 +100,28 @@ test('用户确认受控重启后不再执行不可靠的草稿自动检查', as
   assert.equal(result.ok, true);
   assert.equal(stopped, true);
   assert.equal(draftReadCount, 0);
+});
+
+test('旧包进程未真正退出时拒绝启动新实例', async () => {
+  let launchCount = 0;
+  const process = new ControlledCodexProcess({
+    platform: 'win32',
+    packageResolver: async () => APP,
+    processResolver: async () => [{ pid: 120, executablePath: APP.executablePath, commandLine: '' }],
+    portOwnerResolver: async () => null,
+    processStopper: async () => {},
+    launcher: async () => {
+      launchCount += 1;
+      return { pid: 220 };
+    },
+    sleep: async () => {},
+  });
+
+  await assert.rejects(
+    () => process.restart({ debugPort: 9230, exitTimeoutMs: 1 }),
+    error => error.code === 'CODEX_STOP_TIMEOUT',
+  );
+  assert.equal(launchCount, 0);
 });
 
 test('受控启动只停止目标包进程并通过 AUMID 传递 CDP 参数', async () => {

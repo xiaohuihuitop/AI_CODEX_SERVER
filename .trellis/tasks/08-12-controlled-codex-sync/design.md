@@ -37,7 +37,7 @@
 
 - 读取 `OpenAI.Codex` 包清单中的 `Application.Id`、`Executable` 与 `EntryPoint`。
 - 识别属于该包安装目录的主进程及其完整子进程树。
-- 管理器确认框明确提示未发送草稿风险；用户确认后关闭主进程并等待整个实例退出，不使用 UI Automation 猜测 Electron 编辑器内容。
+- 管理器确认框明确提示未发送草稿风险；用户确认后通过 `IPackageDebugSettings.TerminateAllProcesses` 终止目标 Appx 包并等待整个实例退出，不使用会被托盘行为拦截的窗口关闭消息，也不使用 UI Automation 猜测 Electron 编辑器内容。
 - 用 `ApplicationActivationManager.ActivateApplication` 启动包应用并传入固定 CDP 参数。
 - CDP 端口从配置读取，但不自动迁移；占用冲突直接失败。
 - 启动成功条件：新主进程、正确命令行/会话标识、CDP `/json/list` 出现预期目标、WebSocket 握手与兼容性探针全部通过。

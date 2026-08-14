@@ -52,6 +52,7 @@ await runtime.getThreadRuntime(threadId);
 | 非 Windows 平台 | `WINDOWS_ONLY` |
 | 未安装官方 Codex 包或 manifest 无入口 | `CODEX_PACKAGE_NOT_FOUND` |
 | 配置端口被非目标官方进程占用 | `CDP_PORT_OCCUPIED`；不得终止未知进程或自动换端口 |
+| 官方应用包无法终止或进程未退出 | `CODEX_PACKAGE_TERMINATION_FAILED` / `CODEX_STOP_TIMEOUT`；不得继续启动新实例 |
 | 官方实例无正确 CDP 参数 | `CDP_NOT_READY`；Agent 保持运行并继续探测，提示用户显式点击“重启 Codex 启用 CDP” |
 | 当前官方实例持有可用 CDP，但命令行未显示参数 | 直接复用，不得重启 |
 | AUMID 启动后 CDP 未就绪 | `CDP_START_FAILED` |
@@ -66,7 +67,7 @@ await runtime.getThreadRuntime(threadId);
 
 - 正常：Web 向 `threadId=A` 发送唯一文本，官方 Desktop 自动选中 A 并显示用户消息和回复，JSONL 出现同一回合，Web 自动刷新到完成。
 - 基准：官方实例已由管理器以配置端口启动，Agent 复用进程和持久 CDP，不重启、不创建第二控制服务。
-- 初次接管：关闭旧实例时只调用主窗口 `CloseMainWindow()`，不得使用 `Stop-Process -Force`。无法正常退出时显式失败，避免产生 System 持有的残留监听端口。
+- 初次接管：通过 `IPackageDebugSettings.TerminateAllProcesses(packageFullName)` 终止目标 Appx 包，并等待包进程完全消失；不得使用会被托盘行为拦截的 `CloseMainWindow()`，也不得按 PID 调用 `Stop-Process`。无法退出时显式失败，不得继续激活新实例。
 - 初始化异常：Agent 保持运行并定时重试连接，不因一次失败退出；所有自动重试均不得关闭或重启官方客户端。
 - 短暂异常：CDP WebSocket 收到 `1006` 等断线事件时，Agent 立即写入不可控状态并按固定间隔重连同一端口；重连成功后写回 ready 心跳并通知 relay。重连期间不得把 JSONL 同步正常误报为官方客户端可控。
 - 异常：两个项目存在同名线程。只能选择属性中精确匹配的 `threadId`；找不到时显式失败。

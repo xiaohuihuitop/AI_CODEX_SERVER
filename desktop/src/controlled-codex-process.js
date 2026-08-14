@@ -110,22 +110,48 @@ async function resolvePortOwner(port) {
   } : null;
 }
 
-async function stopCodexProcesses(_app, processes) {
-  const ids = processes.map(item => Number(item.pid)).filter(Number.isInteger);
-  if (!ids.length) return;
-  const script = [
-    `$ids = @(${ids.join(',')})`,
-    'foreach ($id in $ids) {',
-    '  $process = Get-Process -Id $id -ErrorAction SilentlyContinue',
-    '  if ($null -eq $process) { continue }',
-    "  if ($process.MainWindowHandle -eq 0) { throw \"CODEX_MAIN_WINDOW_NOT_FOUND:$id\" }",
-    "  if (-not $process.CloseMainWindow()) { throw \"CODEX_GRACEFUL_CLOSE_REJECTED:$id\" }",
-    '}',
-  ].join('\n');
+/**
+ * AI:生成按 Appx 包生命周期终止 Codex Desktop 的 PowerShell 脚本。
+ *
+ * @param {object} app Codex Desktop 应用包信息。
+ * @returns {string} 可交给 PowerShell 执行的脚本。
+ */
+function buildTerminatePackageScript(app) {
+  return `
+$ErrorActionPreference = 'Stop'
+$code = @'
+using System;
+using System.Runtime.InteropServices;
+[ComImport, Guid("B1AEC16F-2383-4852-B0E9-8F0B1DC66B4D")]
+public class PackageDebugSettings { }
+[ComImport, Guid("F27C3930-8029-4AD1-94E3-3DBA417810C1"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+public interface IPackageDebugSettings {
+  [PreserveSig] int EnableDebugging([MarshalAs(UnmanagedType.LPWStr)] string packageFullName, [MarshalAs(UnmanagedType.LPWStr)] string debuggerCommandLine, IntPtr environment);
+  [PreserveSig] int DisableDebugging([MarshalAs(UnmanagedType.LPWStr)] string packageFullName);
+  [PreserveSig] int Suspend([MarshalAs(UnmanagedType.LPWStr)] string packageFullName);
+  [PreserveSig] int Resume([MarshalAs(UnmanagedType.LPWStr)] string packageFullName);
+  [PreserveSig] int TerminateAllProcesses([MarshalAs(UnmanagedType.LPWStr)] string packageFullName);
+}
+public static class CodexPackageLifecycleHelper {
+  public static void Terminate(string packageFullName) {
+    var settings = new PackageDebugSettings() as IPackageDebugSettings;
+    if (settings == null) throw new InvalidOperationException("PackageDebugSettings unavailable.");
+    int hr = settings.TerminateAllProcesses(packageFullName);
+    if (hr < 0) Marshal.ThrowExceptionForHR(hr);
+  }
+}
+'@
+Add-Type -TypeDefinition $code
+[CodexPackageLifecycleHelper]::Terminate(${quotePowerShell(app.packageFullName)})
+`;
+}
+
+async function stopCodexProcesses(app, processes) {
+  if (!processes.length) return;
   try {
-    await runPowerShell(script, { timeoutMs: 15000 });
+    await runPowerShell(buildTerminatePackageScript(app), { timeoutMs: 15000 });
   } catch (error) {
-    throw processError(`无法安全关闭 Codex Desktop：${error.message}`, 'CODEX_GRACEFUL_STOP_FAILED');
+    throw processError(`无法终止 Codex Desktop 应用包：${error.message}`, 'CODEX_PACKAGE_TERMINATION_FAILED');
   }
 }
 
@@ -178,7 +204,7 @@ async function probeCdp(port) {
 }
 
 /**
- * AI:负责受控官方 Codex Desktop 的发现、草稿保护、关闭和 CDP 启动。
+ * AI:负责受控官方 Codex Desktop 的发现、包生命周期终止和 CDP 启动。
  */
 class ControlledCodexProcess {
   /**
@@ -262,6 +288,7 @@ class ControlledCodexProcess {
 
 module.exports = {
   DEFAULT_DEBUG_PORT,
+  buildTerminatePackageScript,
   ControlledCodexProcess,
   activateCodexApplication,
   parsePowerShellJson,
