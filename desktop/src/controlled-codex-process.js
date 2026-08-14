@@ -99,6 +99,7 @@ async function resolvePortOwner(port) {
     `$row = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { $_.LocalPort -eq ${Number(port)} } | Select-Object -First 1)[0]`,
     "if ($null -eq $row) { Write-Output ''; exit 0 }",
     '$proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($row.OwningProcess)" -ErrorAction SilentlyContinue',
+    "if ($null -eq $proc) { Write-Output ''; exit 0 }",
     '[pscustomobject]@{ ProcessId = $row.OwningProcess; ExecutablePath = $proc.ExecutablePath; CommandLine = $proc.CommandLine } | ConvertTo-Json -Compress',
   ].join('\n');
   const parsed = parsePowerShellJson(await runPowerShell(script));

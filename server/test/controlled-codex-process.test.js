@@ -21,6 +21,13 @@ test('PowerShell 单对象和数组输出均规范为单对象', () => {
   assert.equal(parsePowerShellJson(''), null);
 });
 
+test('端口探测脚本不把已退出且无法查询进程的 PID 当作占用者', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const source = fs.readFileSync(path.join(__dirname, '../../desktop/src/controlled-codex-process.js'), 'utf8');
+  assert.match(source, /if \(\$null -eq \$proc\) \{ Write-Output ''; exit 0 \}/);
+});
+
 test('受控进程从 Appx manifest 结果识别当前 ChatGPT 主进程', async () => {
   const process = new ControlledCodexProcess({
     platform: 'win32',
