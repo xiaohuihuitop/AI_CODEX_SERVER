@@ -205,3 +205,24 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 9: 修复 Codex 激活成功后的界面误报
+
+**Date**: 2026-08-14
+**Task**: 修复 Codex 激活成功后的界面误报
+**Branch**: `master`
+
+### Summary
+
+修复 PowerShell $pid 与只读 $PID 冲突导致的重启成功后 IPC 误报；新增三层回归校验，构建并实测 Codex Desktop 管理器 v0.3.8。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `d2680bd` | (see git log) |
+
+### Status
+
+[OK] **Completed**
