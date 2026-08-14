@@ -132,7 +132,20 @@ if ($editor.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Patte
 async function stopCodexProcesses(_app, processes) {
   const ids = processes.map(item => Number(item.pid)).filter(Number.isInteger);
   if (!ids.length) return;
-  await runPowerShell(`$ids = @(${ids.join(',')}); foreach ($id in $ids) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }`, { timeoutMs: 15000 });
+  const script = [
+    `$ids = @(${ids.join(',')})`,
+    'foreach ($id in $ids) {',
+    '  $process = Get-Process -Id $id -ErrorAction SilentlyContinue',
+    '  if ($null -eq $process) { continue }',
+    "  if ($process.MainWindowHandle -eq 0) { throw \"CODEX_MAIN_WINDOW_NOT_FOUND:$id\" }",
+    "  if (-not $process.CloseMainWindow()) { throw \"CODEX_GRACEFUL_CLOSE_REJECTED:$id\" }",
+    '}',
+  ].join('\n');
+  try {
+    await runPowerShell(script, { timeoutMs: 15000 });
+  } catch (error) {
+    throw processError(`无法安全关闭 Codex Desktop：${error.message}`, 'CODEX_GRACEFUL_STOP_FAILED');
+  }
 }
 
 async function activateCodexApplication(app, args) {

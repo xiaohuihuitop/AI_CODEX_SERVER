@@ -22,6 +22,7 @@ class ControlledCodexRuntime extends EventEmitter {
     this.reconnectIntervalMs = Math.max(100, Number(options.reconnectIntervalMs) || 2000);
     this.reconnectTimer = null;
     this.reconnecting = false;
+    this.restartAttempted = false;
     this.cdp = options.cdp || new CodexCdpClient({ debugPort: this.debugPort });
     this.evidence = options.evidence || new CodexSessionEvidence({ reader: this.reader });
     this.controller = options.controller || new CodexDesktopUiController({
@@ -98,14 +99,28 @@ class ControlledCodexRuntime extends EventEmitter {
     this.version = inspected.app.version;
     const owner = await this.portOwnerResolver(this.debugPort);
     const current = inspected.mainProcess;
-    const hasArgument = current && new RegExp(`--remote-debugging-port(?:=|\\s+)${this.debugPort}(?:\\s|$)`).test(current.commandLine);
     const currentOwnsPort = owner && current && Number(owner.pid) === Number(current.pid);
-    const probe = hasArgument && currentOwnsPort ? await this.cdpProbe(this.debugPort) : { ok: false };
+    // AI:以真实 CDP 探测结果为准，Windows Appx 单实例可能不会把启动参数保留在主进程命令行中。
+    const probe = currentOwnsPort ? await this.cdpProbe(this.debugPort) : { ok: false };
 
     let restarted = false;
     let processState = inspected;
     if (!probe.ok) {
-      const result = await this.processManager.restart({ debugPort: this.debugPort });
+      if (this.restartAttempted) {
+        throw Object.assign(new Error(`已尝试启动受控 Codex Desktop，正在等待 CDP ${this.debugPort} 恢复，拒绝再次关闭官方客户端。`), {
+          code: 'CDP_START_RETRY_BLOCKED',
+        });
+      }
+      this.restartAttempted = true;
+      let result;
+      try {
+        result = await this.processManager.restart({ debugPort: this.debugPort });
+      } catch (error) {
+        if (['CODEX_DRAFT_UNKNOWN', 'CODEX_DRAFT_EXISTS', 'CDP_PORT_OCCUPIED'].includes(error && error.code)) {
+          this.restartAttempted = false;
+        }
+        throw error;
+      }
       restarted = true;
       processState = { app: result.app, mainProcess: result.mainProcess };
     }

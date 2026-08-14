@@ -33,6 +33,8 @@ test('云端和桌面端入口文件存在并使用固定 token 环境变量', (
   assert.match(agent, /CODEX_AGENT_CONTROL_SYNC_TIMEOUT_MS \|\| 30000/);
   assert.doesNotMatch(agent, /if \(api\.isBusy\(\)\) \{\s*return null;\s*\}/);
   assert.match(agent, /new ControlledCodexRuntime\(\{ debugPort, reader \}\)/);
+  assert.match(agent, /controlledStartupRetryTimer/);
+  assert.doesNotMatch(agent, /setTimeout\(\(\) => process\.exit\(1\), 50\)/);
   assert.match(agent, /createCodexDesktopThreadCatalog/);
   assert.match(agent, /discoverDesktopThreadSessions/);
   assert.doesNotMatch(agent, /createCodexAppServerClient/);

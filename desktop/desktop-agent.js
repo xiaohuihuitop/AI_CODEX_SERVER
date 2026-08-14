@@ -27,6 +27,7 @@ const catalogCheckIntervalMs = Math.max(1000, Number(process.env.CODEX_AGENT_CAT
 const discoveryIntervalMs = Math.max(5000, Number(process.env.CODEX_AGENT_DISCOVERY_INTERVAL_MS || 10000));
 const syncBatchSize = Math.max(1, Number(process.env.CODEX_AGENT_SYNC_BATCH_SIZE || 1));
 const controlSyncTimeoutMs = Math.max(5000, Number(process.env.CODEX_AGENT_CONTROL_SYNC_TIMEOUT_MS || 30000));
+const controlledStartupRetryMs = Math.max(1000, Number(process.env.CODEX_CONTROLLED_START_RETRY_MS || 5000));
 let knownThreadTargets = [];
 let knownCatalogThreadIds = [];
 let lastCatalogCheckAt = 0;
@@ -40,6 +41,9 @@ let controlledCodexVersion = '';
 let lastControlledStatusAt = 0;
 let lastConfirmedSessionCount = null;
 let ws = null;
+let controlledStartupRetryTimer = null;
+let controlledStartupInFlight = false;
+let shuttingDown = false;
 
 /**
  * AI:将受控官方客户端生命周期写入管理器可跨进程读取的本机状态文件。
@@ -394,23 +398,49 @@ controlledCodex.on('reconnected', result => {
   controlledCodexVersion = String(result.version || controlledCodexVersion || '');
   reportControlledStatus('ready', `受控 Codex Desktop 已恢复连接：CDP ${result.debugPort}`, true);
   console.log(`CDP 连接已恢复：端口 ${result.debugPort}，Codex v${controlledCodexVersion || '未知'}`);
+  if (!ws) {
+    ws = createAgentConnection();
+    attachAgentListeners(ws);
+  }
   if (ws) ws.sendEventState();
 });
 
-controlledCodex.start().then(result => {
-  controlledCodexVersion = String(result.version || '');
-  reportControlledStatus('ready', `受控 Codex Desktop 已连接：CDP ${result.debugPort}`, true);
-  const action = result.restarted ? '已受控重启' : '已复用受控实例';
-  console.log(`${action}：PID ${result.pid || '未知'}，CDP ${result.debugPort}，Codex v${controlledCodexVersion || '未知'}`);
-  ws = createAgentConnection();
-  attachAgentListeners(ws);
-}).catch(error => {
-  recordControlledError(error);
-  process.exitCode = 1;
-  setTimeout(() => process.exit(1), 50);
-});
+function scheduleControlledStartupRetry() {
+  if (shuttingDown || controlledStartupRetryTimer) return;
+  controlledStartupRetryTimer = setTimeout(() => {
+    controlledStartupRetryTimer = null;
+    void startControlledCodex();
+  }, controlledStartupRetryMs);
+}
+
+async function startControlledCodex() {
+  if (shuttingDown || controlledStartupInFlight || controlledCodex.state === 'ready') return;
+  controlledStartupInFlight = true;
+  try {
+    const result = await controlledCodex.start();
+    controlledCodexVersion = String(result.version || controlledCodexVersion || '');
+    reportControlledStatus('ready', `受控 Codex Desktop 已连接：CDP ${result.debugPort}`, true);
+    const action = result.restarted ? '已受控重启' : '已复用受控实例';
+    console.log(`${action}：PID ${result.pid || '未知'}，CDP ${result.debugPort}，Codex v${controlledCodexVersion || '未知'}`);
+    if (!ws) {
+      ws = createAgentConnection();
+      attachAgentListeners(ws);
+    }
+  } catch (error) {
+    recordControlledError(error);
+    console.error(`受控 Codex 初始化失败，将在 ${Math.ceil(controlledStartupRetryMs / 1000)} 秒后重试`);
+    scheduleControlledStartupRetry();
+  } finally {
+    controlledStartupInFlight = false;
+  }
+}
+
+void startControlledCodex();
 
 function shutdown() {
+  shuttingDown = true;
+  if (controlledStartupRetryTimer) clearTimeout(controlledStartupRetryTimer);
+  controlledStartupRetryTimer = null;
   reportControlledStatus('stopped', 'Agent 正在停止', true);
   if (ws) ws.close();
   controlledCodex.stopRuntime();

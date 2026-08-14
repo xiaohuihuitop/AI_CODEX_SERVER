@@ -32,6 +32,30 @@ test('受控运行时复用已经正确启动的官方客户端', async () => {
   assert.equal(runtime.state, 'ready');
 });
 
+test('受控运行时只要当前进程持有可用 CDP 就复用，不依赖命令行参数可见', async () => {
+  const processManager = {
+    inspect: async () => ({
+      app: { version: '26.707.3748.0' },
+      mainProcess: { pid: 10, commandLine: 'ChatGPT.exe' },
+    }),
+    restart: async () => { throw new Error('不应重启'); },
+  };
+  const runtime = new ControlledCodexRuntime({
+    debugPort: 9230,
+    reader: {},
+    cdp: createCdp(),
+    processManager,
+    controller: {},
+    portOwnerResolver: async () => ({ pid: 10 }),
+    cdpProbe: async () => ({ ok: true }),
+  });
+
+  const result = await runtime.start();
+
+  assert.equal(result.restarted, false);
+  assert.equal(result.pid, 10);
+});
+
 test('受控运行时发现普通官方客户端时执行受控重启', async () => {
   const calls = [];
   const runtime = new ControlledCodexRuntime({
@@ -54,6 +78,29 @@ test('受控运行时发现普通官方客户端时执行受控重启', async ()
   assert.equal(result.restarted, true);
   assert.equal(result.pid, 20);
   assert.deepEqual(calls, [{ debugPort: 9230 }]);
+});
+
+test('受控启动失败后重试不会再次关闭官方客户端', async () => {
+  let restartCount = 0;
+  const runtime = new ControlledCodexRuntime({
+    debugPort: 9230,
+    reader: {},
+    cdp: createCdp(),
+    processManager: {
+      inspect: async () => ({ app: { version: '26.707.3748.0' }, mainProcess: { pid: 10, commandLine: 'ChatGPT.exe' } }),
+      restart: async () => {
+        restartCount += 1;
+        throw Object.assign(new Error('CDP 未就绪'), { code: 'CDP_START_FAILED' });
+      },
+    },
+    controller: {},
+    portOwnerResolver: async () => null,
+    cdpProbe: async () => ({ ok: false }),
+  });
+
+  await assert.rejects(() => runtime.start(), error => error.code === 'CDP_START_FAILED');
+  await assert.rejects(() => runtime.start(), error => error.code === 'CDP_START_RETRY_BLOCKED');
+  assert.equal(restartCount, 1);
 });
 
 test('受控运行时将发送、停止和状态读取交给同一官方客户端控制器', async () => {
