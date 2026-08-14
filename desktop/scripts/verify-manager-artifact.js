@@ -92,8 +92,9 @@ function verifyManagerArtifact() {
   if (!/desktopController\.sendMessage\(threadId, text\)/.test(api)) fail('桌面 API 未通过官方界面发送消息');
   if (!/desktopController\.stop\(threadId\)/.test(api)) fail('桌面 API 未通过官方界面停止回合');
   if (!/ApplicationActivationManager/.test(processSource)) fail('未使用 Windows 应用激活接口启动官方 Codex');
-  if (!/PackageDebugSettings/.test(processSource) || !/TerminateAllProcesses/.test(processSource)) fail('未使用 Windows 包生命周期接口终止官方 Codex');
-  if (/CloseMainWindow|Stop-Process/.test(processSource)) fail('受控重启仍使用窗口关闭或 PID 终止');
+  if (!/buildProcessTreeSnapshot/.test(processSource) || !/terminateProcessTree/.test(processSource) || !/SIGKILL/.test(processSource)) fail('未按进程树逐 PID 终止官方 Codex');
+  if (/taskkill\.exe|PackageDebugSettings|CloseMainWindow|Stop-Process/.test(processSource)) fail('受控重启仍包含不可靠的进程退出方式');
+  if (!/waitForPortRelease/.test(processSource) || !/exclusive: true/.test(processSource)) fail('受控重启缺少 CDP 端口释放门禁');
   if (!/remote-debugging-port/.test(processSource)) fail('受控 Codex 启动未配置 CDP 端口');
   if (/readCodexDraft|CODEX_DRAFT_(?:UNKNOWN|EXISTS)/.test(processSource)) fail('受控重启仍包含不可靠的草稿自动检查');
   if (/processManager\.restart\(/.test(runtimeSource)) fail('Agent 运行时仍会隐式重启官方 Codex');

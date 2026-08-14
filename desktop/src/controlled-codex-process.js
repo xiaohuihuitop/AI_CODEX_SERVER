@@ -1,8 +1,10 @@
 const { execFile } = require('node:child_process');
+const net = require('node:net');
 const path = require('node:path');
 
 const DEFAULT_DEBUG_PORT = 9229;
 const DEFAULT_WAIT_TIMEOUT_MS = 20000;
+const DEFAULT_PORT_RELEASE_TIMEOUT_MS = 10000;
 
 function processError(message, code) {
   return Object.assign(new Error(message), { code });
@@ -25,8 +27,12 @@ function parsePowerShellJson(raw) {
 }
 
 function runPowerShell(script, options = {}) {
+  return runExecutable('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], options);
+}
+
+function runExecutable(file, args, options = {}) {
   return new Promise((resolve, reject) => {
-    execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+    execFile(file, args, {
       encoding: 'utf8',
       windowsHide: true,
       timeout: Number(options.timeoutMs) || 10000,
@@ -111,48 +117,109 @@ async function resolvePortOwner(port) {
 }
 
 /**
- * AI:生成按 Appx 包生命周期终止 Codex Desktop 的 PowerShell 脚本。
+ * AI:从 Windows 进程快照中筛选受控主进程及其全部后代，并保留终止深度。
  *
- * @param {object} app Codex Desktop 应用包信息。
- * @returns {string} 可交给 PowerShell 执行的脚本。
+ * @param {Array<object>} allProcesses Win32_Process 快照。
+ * @param {Array<object>} rootProcesses 已核对的官方 Codex 主进程。
+ * @returns {Array<object>} 按快照顺序返回的受控进程树。
  */
-function buildTerminatePackageScript(app) {
-  return `
-$ErrorActionPreference = 'Stop'
-$code = @'
-using System;
-using System.Runtime.InteropServices;
-[ComImport, Guid("B1AEC16F-2383-4852-B0E9-8F0B1DC66B4D")]
-public class PackageDebugSettings { }
-[ComImport, Guid("F27C3930-8029-4AD1-94E3-3DBA417810C1"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-public interface IPackageDebugSettings {
-  [PreserveSig] int EnableDebugging([MarshalAs(UnmanagedType.LPWStr)] string packageFullName, [MarshalAs(UnmanagedType.LPWStr)] string debuggerCommandLine, IntPtr environment);
-  [PreserveSig] int DisableDebugging([MarshalAs(UnmanagedType.LPWStr)] string packageFullName);
-  [PreserveSig] int Suspend([MarshalAs(UnmanagedType.LPWStr)] string packageFullName);
-  [PreserveSig] int Resume([MarshalAs(UnmanagedType.LPWStr)] string packageFullName);
-  [PreserveSig] int TerminateAllProcesses([MarshalAs(UnmanagedType.LPWStr)] string packageFullName);
-}
-public static class CodexPackageLifecycleHelper {
-  public static void Terminate(string packageFullName) {
-    var settings = new PackageDebugSettings() as IPackageDebugSettings;
-    if (settings == null) throw new InvalidOperationException("PackageDebugSettings unavailable.");
-    int hr = settings.TerminateAllProcesses(packageFullName);
-    if (hr < 0) Marshal.ThrowExceptionForHR(hr);
+function buildProcessTreeSnapshot(allProcesses, rootProcesses) {
+  const rows = Array.isArray(allProcesses) ? allProcesses : [];
+  const normalized = rows.map(item => ({
+    pid: Number(item.pid ?? item.ProcessId),
+    parentPid: Number(item.parentPid ?? item.ParentProcessId),
+    name: String(item.name ?? item.Name ?? ''),
+    executablePath: String(item.executablePath ?? item.ExecutablePath ?? ''),
+    commandLine: String(item.commandLine ?? item.CommandLine ?? ''),
+  })).filter(item => Number.isInteger(item.pid) && item.pid > 0);
+  const byParent = new Map();
+  for (const item of normalized) {
+    const children = byParent.get(item.parentPid) || [];
+    children.push(item);
+    byParent.set(item.parentPid, children);
   }
+  const rootPids = new Set((Array.isArray(rootProcesses) ? rootProcesses : [])
+    .map(item => Number(typeof item === 'number' ? item : item.pid ?? item.ProcessId))
+    .filter(pid => Number.isInteger(pid) && pid > 0));
+  const tree = [];
+  const visited = new Set();
+  const queue = normalized.filter(item => rootPids.has(item.pid)).map(item => ({ item, depth: 0 }));
+  while (queue.length) {
+    const current = queue.shift();
+    if (visited.has(current.item.pid)) continue;
+    visited.add(current.item.pid);
+    tree.push({ ...current.item, depth: current.depth });
+    for (const child of byParent.get(current.item.pid) || []) {
+      if (!visited.has(child.pid)) queue.push({ item: child, depth: current.depth + 1 });
+    }
+  }
+  return tree;
 }
-'@
-Add-Type -TypeDefinition $code
-[CodexPackageLifecycleHelper]::Terminate(${quotePowerShell(app.packageFullName)})
-`;
+
+async function resolveCodexProcessTree(app, processes) {
+  const script = [
+    'Get-CimInstance Win32_Process |',
+    'Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine |',
+    'ConvertTo-Json -Compress',
+  ].join('\n');
+  const raw = await runPowerShell(script);
+  if (!raw) return [];
+  const parsed = JSON.parse(raw.replace(/^\uFEFF/, ''));
+  const snapshot = Array.isArray(parsed) ? parsed : [parsed];
+  return buildProcessTreeSnapshot(snapshot, processes);
+}
+
+function terminateProcessByPid(pid) {
+  const normalized = Number(pid);
+  if (!Number.isInteger(normalized) || normalized <= 0) {
+    throw processError(`Codex Desktop 进程 PID 无效：${pid}`, 'CODEX_PROCESS_ID_INVALID');
+  }
+  process.kill(normalized, 'SIGKILL');
+}
+
+async function terminateProcessTree(tree, terminator = terminateProcessByPid) {
+  const processes = (Array.isArray(tree) ? tree : [])
+    .slice()
+    .sort((left, right) => Number(right.depth || 0) - Number(left.depth || 0) || Number(right.pid) - Number(left.pid));
+  const terminatedPids = [];
+  const missingPids = [];
+  for (const process of processes) {
+    const pid = Number(process.pid);
+    try {
+      await terminator(pid);
+      terminatedPids.push(pid);
+    } catch (error) {
+      if (error && error.code === 'ESRCH') {
+        missingPids.push(pid);
+        continue;
+      }
+      throw processError(`无法终止 Codex Desktop 进程 PID ${pid}（${process.name || '未知进程'}）：${error && error.message || error}`, 'CODEX_PROCESS_TREE_TERMINATION_FAILED');
+    }
+  }
+  return { terminatedPids, missingPids };
 }
 
 async function stopCodexProcesses(app, processes) {
   if (!processes.length) return;
-  try {
-    await runPowerShell(buildTerminatePackageScript(app), { timeoutMs: 15000 });
-  } catch (error) {
-    throw processError(`无法终止 Codex Desktop 应用包：${error.message}`, 'CODEX_PACKAGE_TERMINATION_FAILED');
-  }
+  const tree = await resolveCodexProcessTree(app, processes);
+  await terminateProcessTree(tree);
+}
+
+function probePortAvailable(port) {
+  return new Promise(resolve => {
+    const server = net.createServer();
+    let settled = false;
+    const finish = available => {
+      if (settled) return;
+      settled = true;
+      resolve(available);
+    };
+    server.unref();
+    server.once('error', () => finish(false));
+    server.listen({ host: '127.0.0.1', port: Number(port), exclusive: true }, () => {
+      server.close(error => finish(!error));
+    });
+  });
 }
 
 async function activateCodexApplication(app, args) {
@@ -204,7 +271,7 @@ async function probeCdp(port) {
 }
 
 /**
- * AI:负责受控官方 Codex Desktop 的发现、包生命周期终止和 CDP 启动。
+ * AI:负责受控官方 Codex Desktop 的发现、进程树终止和 CDP 启动。
  */
 class ControlledCodexProcess {
   /**
@@ -216,6 +283,7 @@ class ControlledCodexProcess {
     this.processResolver = options.processResolver || resolveCodexProcesses;
     this.portOwnerResolver = options.portOwnerResolver || resolvePortOwner;
     this.processStopper = options.processStopper || stopCodexProcesses;
+    this.portAvailabilityProbe = options.portAvailabilityProbe || probePortAvailable;
     this.launcher = options.launcher || activateCodexApplication;
     this.cdpProbe = options.cdpProbe || probeCdp;
     this.sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
@@ -245,6 +313,7 @@ class ControlledCodexProcess {
       await this.processStopper(state.app, state.processes);
       await this.waitForExit(state.app, Number(options.exitTimeoutMs) || 10000);
     }
+    await this.waitForPortRelease(debugPort, Number(options.portReleaseTimeoutMs) || DEFAULT_PORT_RELEASE_TIMEOUT_MS);
     const args = [
       `--remote-debugging-port=${debugPort}`,
       '--remote-debugging-address=127.0.0.1',
@@ -284,16 +353,29 @@ class ControlledCodexProcess {
     }
     return latest;
   }
+
+  async waitForPortRelease(port, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (await this.portAvailabilityProbe(port)) return;
+      await this.sleep(250);
+    }
+    throw processError(`CDP 端口 ${port} 未能在超时时间内释放。`, 'CDP_PORT_RELEASE_TIMEOUT');
+  }
 }
 
 module.exports = {
   DEFAULT_DEBUG_PORT,
-  buildTerminatePackageScript,
+  buildProcessTreeSnapshot,
   ControlledCodexProcess,
   activateCodexApplication,
   parsePowerShellJson,
+  probePortAvailable,
   probeCdp,
   resolveCodexDesktopPackage,
+  resolveCodexProcessTree,
   resolveCodexProcesses,
   resolvePortOwner,
+  terminateProcessByPid,
+  terminateProcessTree,
 };

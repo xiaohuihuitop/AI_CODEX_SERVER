@@ -52,7 +52,8 @@ await runtime.getThreadRuntime(threadId);
 | 非 Windows 平台 | `WINDOWS_ONLY` |
 | 未安装官方 Codex 包或 manifest 无入口 | `CODEX_PACKAGE_NOT_FOUND` |
 | 配置端口被非目标官方进程占用 | `CDP_PORT_OCCUPIED`；不得终止未知进程或自动换端口 |
-| 官方应用包无法终止或进程未退出 | `CODEX_PACKAGE_TERMINATION_FAILED` / `CODEX_STOP_TIMEOUT`；不得继续启动新实例 |
+| 官方进程树无法终止或主进程未退出 | `CODEX_PROCESS_TREE_TERMINATION_FAILED` / `CODEX_STOP_TIMEOUT`；不得继续启动新实例 |
+| 旧实例退出后 CDP 端口仍不可绑定 | `CDP_PORT_RELEASE_TIMEOUT`；不得继续启动新实例或自动换端口 |
 | 官方实例无正确 CDP 参数 | `CDP_NOT_READY`；Agent 保持运行并继续探测，提示用户显式点击“重启 Codex 启用 CDP” |
 | 当前官方实例持有可用 CDP，但命令行未显示参数 | 直接复用，不得重启 |
 | AUMID 启动后 CDP 未就绪 | `CDP_START_FAILED` |
@@ -67,7 +68,7 @@ await runtime.getThreadRuntime(threadId);
 
 - 正常：Web 向 `threadId=A` 发送唯一文本，官方 Desktop 自动选中 A 并显示用户消息和回复，JSONL 出现同一回合，Web 自动刷新到完成。
 - 基准：官方实例已由管理器以配置端口启动，Agent 复用进程和持久 CDP，不重启、不创建第二控制服务。
-- 初次接管：通过 `IPackageDebugSettings.TerminateAllProcesses(packageFullName)` 终止目标 Appx 包，并等待包进程完全消失；不得使用会被托盘行为拦截的 `CloseMainWindow()`，也不得按 PID 调用 `Stop-Process`。无法退出时显式失败，不得继续激活新实例。
+- 初次接管：先用 Appx 清单路径核对官方主进程，再读取 `Win32_Process` 快照建立完整子树，按深度从后代到主进程逐 PID 强制终止；仅忽略 Node 明确返回 `ESRCH` 的已退出 PID，其他 PID 错误必须中止并报告。随后必须同时确认主进程消失且配置端口能够在 `127.0.0.1` 独占绑定，才允许重新激活。不得使用会被失效 CIM 子 PID 阻断整棵树的 `taskkill /T /F`，也不得使用会被托盘行为拦截的 `CloseMainWindow()` 或对 Packaged Win32 主进程无效的 `IPackageDebugSettings.TerminateAllProcesses()`。
 - 初始化异常：Agent 保持运行并定时重试连接，不因一次失败退出；所有自动重试均不得关闭或重启官方客户端。
 - 短暂异常：CDP WebSocket 收到 `1006` 等断线事件时，Agent 立即写入不可控状态并按固定间隔重连同一端口；重连成功后写回 ready 心跳并通知 relay。重连期间不得把 JSONL 同步正常误报为官方客户端可控。
 - 异常：两个项目存在同名线程。只能选择属性中精确匹配的 `threadId`；找不到时显式失败。
@@ -82,6 +83,7 @@ await runtime.getThreadRuntime(threadId);
 - `server/test/controlled-codex-runtime.test.js`：连接决策和唯一控制器委托；必须覆盖命令行参数不可见但 CDP 可用时复用，以及 CDP 未就绪和重复探测时重启调用次数始终为零。
 - `server/test/control-plane-contract.test.js`：禁止独立 App Server 控制模块重新进入正式源码。
 - `desktop/scripts/verify-manager-artifact.js`：对实际 `app.asar` 执行相同控制面约束。
+- Windows 生命周期门禁：必须先用同一产物算法终止一个真实 Electron 两层进程树并确认零残留，再由用户对官方 Codex 执行一次显式重启，核对主 PID 已更换、CDP 端口可访问；只看到窗口消失或命令返回成功不得判定通过。
 - 真实 E2E：在 `codex_temp` 线程从 Web 连续发送至少 3 轮；逐轮核对官方 UI、JSONL、Web 回复和完成状态。另执行 1 轮 Web 停止及 1 轮官方 Desktop 手动停止。
 
 ### 7. 错误与正确做法
