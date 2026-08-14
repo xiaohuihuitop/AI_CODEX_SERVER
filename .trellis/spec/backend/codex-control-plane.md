@@ -21,9 +21,10 @@ await runtime.getThreadRuntime(threadId);
 - `start()`：只连接已经存在的 CDP。当前官方主进程持有配置端口且 `/json/list` 返回目标页面时直接复用；不得依赖 Appx 主进程命令行是否保留 CDP 参数，也不得关闭或重启官方客户端。
 - 管理器“启动功能”：只启动或重连 Agent、Relay 和会话同步，并调用上述连接逻辑。
 - 管理器“重启 Codex 启用 CDP”：唯一允许重启官方客户端的显式入口；确认框必须明确提示未发送草稿风险，用户确认后直接执行，不再使用 UI Automation 猜测草稿状态。
-- `sendMessage(threadId, text)`：按 `threadId` 精确选择官方侧栏线程，点击前精确核对编辑器正文，点击后等待目标 JSONL 新 `task_started/turnId` 证据。
-- `stop(threadId)`：按 `threadId` 精确选择线程，点击官方停止按钮，并等待目标 JSONL `turn_aborted` 证据。
+- `sendMessage(threadId, text)`：为该命令创建独立 CDP 控制会话，按 `threadId` 精确选择官方侧栏线程，点击前精确核对编辑器正文，点击后等待目标 JSONL 新 `task_started/turnId` 证据；命令结束后关闭该控制会话。
+- `stop(threadId)`：为该命令创建独立 CDP 控制会话，按 `threadId` 精确选择线程，点击官方停止按钮，并等待目标 JSONL `turn_aborted` 证据；命令结束后关闭该控制会话。
 - `getThreadRuntime(threadId)`：只读取当前已选线程的官方运行态；不得为了状态轮询切换电脑界面。
+- 长连接 CDP 只负责就绪探测和无副作用状态读取，不得承载发送、停止等有副作用命令；命令失败不得自动重放。
 
 ### 3. 契约
 
@@ -137,6 +138,7 @@ advanceControlSyncState(state, evidence, now);
 - `openThreadIds` 是当前侧栏未归档线程的完整集合；显式空数组表示清空。
 - `sessions` 可分批或仅含元数据，不能决定线程是否仍存在。
 - 手机发送分两阶段：编辑器正文精确核对且目标 JSONL 出现新回合后确认受理；同一回合最终回复/终态同步后才解除优先同步。
+- 手机 `/send` 使用传输与业务两阶段确认：Relay 校验 Agent 在线并将命令写入 Agent WebSocket 后立即返回 `202 accepted`；Agent 形成目标 JSONL 新回合或明确失败后，Relay 必须通过 `/mobile` 实时通道发送带同一 `clientUserMessageId` 的 `control-result`。客户端不得让 HTTP 请求等待整个 CDP 控制过程，也不得因 HTTP 超时把已提交文本恢复到输入框。
 - 手机首次读取最近 5 轮，向上分页继续读取 5 轮，使用稳定 `turn:<turnId>` 游标。
 - Relay 与客户端不得用无关线程的版本增长或固定等待时长推断完成。
 

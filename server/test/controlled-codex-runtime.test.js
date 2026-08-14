@@ -126,6 +126,45 @@ test('受控运行时将发送、停止和状态读取交给同一官方客户�
   ]);
 });
 
+test('受控运行时为每个业务命令创建并关闭独立 CDP 控制会话', async () => {
+  const calls = [];
+  let commandIndex = 0;
+  const runtime = new ControlledCodexRuntime({
+    reader: {},
+    cdp: createCdp(),
+    processManager: {},
+    controller: {
+      getThreadRuntime: async threadId => ({ state: 'idle', threadId }),
+    },
+    commandControllerFactory: () => {
+      commandIndex += 1;
+      const index = commandIndex;
+      return {
+        connect: async () => { calls.push(['connect', index]); },
+        close: () => { calls.push(['close', index]); },
+        controller: {
+          sendMessage: async (...args) => { calls.push(['send', index, ...args]); return { turnId: 'turn-1' }; },
+          stop: async (...args) => { calls.push(['stop', index, ...args]); return { status: 'interrupted' }; },
+        },
+      };
+    },
+  });
+  runtime.state = 'ready';
+
+  await runtime.sendMessage('thread-1', '消息');
+  await runtime.stop('thread-1');
+  runtime.stopRuntime();
+
+  assert.deepEqual(calls, [
+    ['connect', 1],
+    ['send', 1, 'thread-1', '消息'],
+    ['close', 1],
+    ['connect', 2],
+    ['stop', 2, 'thread-1'],
+    ['close', 2],
+  ]);
+});
+
 test('受控运行时未就绪时拒绝所有控制操作', async () => {
   const runtime = new ControlledCodexRuntime({ reader: {}, cdp: createCdp(), processManager: {}, controller: {} });
   await assert.rejects(() => runtime.sendMessage('thread-1', '消息'), error => error.code === 'CONTROLLED_CODEX_NOT_READY');

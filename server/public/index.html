@@ -534,9 +534,10 @@
      * @param {string} text 用户发送文本。
      * @param {number} sentAt 本地发送时间戳。
      * @param {number} baseMessageCount 发送前历史消息数量。
+     * @param {string} clientUserMessageId 客户端消息标识。
      * @returns {object} 本地待确认消息。
      */
-    function registerPendingLocalSend(threadId, text, sentAt, baseMessageCount) {
+    function registerPendingLocalSend(threadId, text, sentAt, baseMessageCount, clientUserMessageId) {
       const row = {
         threadId,
         text,
@@ -544,9 +545,42 @@
         assistantId: `local-assistant-${sentAt}`,
         baseMessageCount,
         turnId: '',
+        clientUserMessageId,
+        failedMessage: '',
       };
       pendingLocalSends = pendingLocalSends.concat([row]);
       return row;
+    }
+
+    /**
+     * AI:按客户端消息标识绑定 Agent 返回的真实回合。
+     *
+     * @param {string} clientUserMessageId 客户端消息标识。
+     * @param {string} turnId App Server 回合标识。
+     * @returns {void}
+     */
+    function bindPendingLocalSendResult(clientUserMessageId, turnId) {
+      if (!clientUserMessageId || !turnId) return;
+      pendingLocalSends = pendingLocalSends.map(row => (
+        row.clientUserMessageId === clientUserMessageId
+          ? Object.assign({}, row, { turnId })
+          : row
+      ));
+    }
+
+    /**
+     * AI:记录 Agent 明确返回的发送失败，不恢复网页输入框。
+     *
+     * @param {string} clientUserMessageId 客户端消息标识。
+     * @param {string} message 失败说明。
+     * @returns {void}
+     */
+    function markPendingLocalSendFailed(clientUserMessageId, message) {
+      pendingLocalSends = pendingLocalSends.map(row => (
+        row.clientUserMessageId === clientUserMessageId
+          ? Object.assign({}, row, { failedMessage: message || '电脑未能发送这条消息。' })
+          : row
+      ));
     }
 
     /**
@@ -615,6 +649,21 @@
     }
 
     /**
+     * AI:从展示消息中剔除网页端临时气泡，只保留电脑返回的权威历史。
+     *
+     * @param {Array<object>} rows 展示消息或电脑历史。
+     * @returns {Array<object>} 电脑已确认的历史消息。
+     */
+    function confirmedHistoryRows(rows) {
+      return (rows || []).filter(row => {
+        const id = String(row && row.id || '');
+        return !(row && row.pending)
+          && id.indexOf('local-user-') !== 0
+          && id.indexOf('local-assistant-') !== 0;
+      });
+    }
+
+    /**
      * AI:合并电脑端历史和网页端待确认消息，避免刷新覆盖刚发送的用户消息。
      *
      * @param {string} threadId Codex 线程 ID。
@@ -622,7 +671,7 @@
      * @returns {Array<object>} 可展示消息。
      */
     function mergePendingLocalMessages(threadId, historyRows) {
-      const rows = (historyRows || []).slice();
+      const rows = confirmedHistoryRows(historyRows);
       const nextPending = [];
       let insertedCount = 0;
       for (const pending of pendingLocalSends) {
@@ -635,7 +684,14 @@
         const localRows = [];
         localRows.push({ role: 'user', text: pending.text, pending: true, id: pending.userId });
         if (!hasAssistantAfterPendingBase(rows, pending)) {
-          localRows.push({ role: 'assistant', text: '已发送，等待 Codex 回复...', pending: true, id: pending.assistantId, turnId: pending.turnId });
+          localRows.push({
+            role: 'assistant',
+            text: pending.failedMessage || '已发送，等待 Codex 回复...',
+            pending: !pending.failedMessage,
+            error: Boolean(pending.failedMessage),
+            id: pending.assistantId,
+            turnId: pending.turnId,
+          });
         }
         const insertAt = Math.min(rows.length, Math.max(0, (Number(pending.baseMessageCount) || 0) + insertedCount));
         for (let localIndex = 0; localIndex < localRows.length; localIndex += 1) {
@@ -1342,6 +1398,10 @@
         try {
           const data = JSON.parse(event.data || '{}');
           if (!applyRelayState(data)) return;
+          if (data.type === 'control-result') {
+            applyControlResult(data);
+            return;
+          }
           if (data.type === 'thread-event') {
             applyRealtimeThreadEvent(data);
             const payload = data.event || {};
@@ -1424,6 +1484,57 @@
       }, 12000);
     }
 
+    /**
+     * AI:等待 Relay 通过实时通道返回 Agent 控制结果。
+     *
+     * @param {object} watch 待确认发送窗口。
+     * @returns {void}
+     */
+    function waitForControlResult(watch) {
+      if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
+      commandConfirmTimer = setTimeout(() => {
+        if (!pendingWatch || pendingWatch.clientUserMessageId !== watch.clientUserMessageId) return;
+        pendingWatch = Object.assign({}, pendingWatch, { unconfirmed: true });
+        notice('电脑尚未返回发送结果，请核对电脑端后再继续发送。');
+      }, 32000);
+    }
+
+    /**
+     * AI:处理 Relay 两阶段发送协议的最终控制结果。
+     *
+     * @param {object} event 实时控制结果事件。
+     * @returns {boolean} 是否已处理该事件。
+     */
+    function applyControlResult(event) {
+      if (!event || event.type !== 'control-result' || event.action !== 'send') return false;
+      if (!pendingWatch
+        || pendingWatch.threadId !== event.threadId
+        || pendingWatch.clientUserMessageId !== event.clientUserMessageId) return false;
+      if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
+      commandConfirmTimer = null;
+      if (!event.ok) {
+        const messageText = event.error && event.error.message || '电脑未能发送这条消息。';
+        markPendingLocalSendFailed(event.clientUserMessageId, messageText);
+        pendingWatch = null;
+        renderHistoryRows(mergePendingLocalMessages(selectedThreadId, renderedHistoryRows));
+        notice(messageText);
+        return true;
+      }
+      const result = event.result || {};
+      const turnId = String(result.watch && result.watch.turnId || '');
+      pendingWatch = Object.assign({}, pendingWatch, result.watch || {}, {
+        kind: 'send',
+        unconfirmed: false,
+        acceptedSyncVersion: Number(event.acceptedSyncVersion) || pendingWatch.acceptedSyncVersion,
+      });
+      bindPendingLocalSendResult(event.clientUserMessageId, turnId);
+      renderHistoryRows(mergePendingLocalMessages(selectedThreadId, renderedHistoryRows));
+      notice('电脑已接收消息，等待 Codex 回复...');
+      waitForCommandConfirmation(pendingWatch);
+      pollStatus(pendingWatch).catch(error => notice(error.message));
+      return true;
+    }
+
     document.getElementById('refresh').addEventListener('click', async () => {
       try {
         await loadThreads();
@@ -1484,9 +1595,21 @@
       setRunning(false);
       notice('正在发送给电脑 Codex...');
       historyReloadedForCompletion = false;
+      const clientUserMessageId = createClientUserMessageId();
+      const baseMessageCount = confirmedHistoryRows(renderedHistoryRows).length;
+      const sentAt = Date.now();
+      registerPendingLocalSend(selectedThreadId, text, sentAt, baseMessageCount, clientUserMessageId);
+      pendingWatch = {
+        threadId: selectedThreadId,
+        clientUserMessageId,
+        kind: 'send',
+        acceptedSyncVersion: syncState.version,
+        awaitingControlResult: true,
+      };
+      renderHistoryRows(mergePendingLocalMessages(selectedThreadId, renderedHistoryRows));
+      scrollToBottom();
+      waitForControlResult(pendingWatch);
       try {
-        const clientUserMessageId = createClientUserMessageId();
-        const baseMessageCount = renderedHistoryRows.length;
         const res = await api('/send', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
@@ -1494,18 +1617,17 @@
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.message || '发送失败');
-        const sentAt = Date.now();
-        const pendingLocal = registerPendingLocalSend(selectedThreadId, text, sentAt, baseMessageCount);
-        pendingWatch = Object.assign({}, data.watch || { threadId: selectedThreadId }, {
-          kind: 'send',
-          acceptedSyncVersion: Number(data.acceptedSyncVersion) || syncState.version,
-        });
-        renderHistoryRows(mergePendingLocalMessages(selectedThreadId, renderedHistoryRows));
-        scrollToBottom();
-        waitForCommandConfirmation(pendingWatch);
-        await pollStatus(pendingWatch);
+        if (pendingWatch && pendingWatch.clientUserMessageId === clientUserMessageId) {
+          pendingWatch = Object.assign({}, pendingWatch, data.watch || {}, {
+            acceptedSyncVersion: Number(data.acceptedSyncVersion) || syncState.version,
+          });
+        }
       } catch (error) {
-        if (!textEl.value) textEl.value = text;
+        markPendingLocalSendFailed(clientUserMessageId, error.message);
+        if (pendingWatch && pendingWatch.clientUserMessageId === clientUserMessageId) pendingWatch = null;
+        if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
+        commandConfirmTimer = null;
+        renderHistoryRows(mergePendingLocalMessages(selectedThreadId, renderedHistoryRows));
         notice(error.message);
       } finally {
         sending = false;

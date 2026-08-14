@@ -415,6 +415,60 @@ function isPublicAssetRequest(req) {
 }
 
 /**
+ * AI:异步执行手机发送命令，并通过手机实时通道回传唯一的最终控制结果。
+ *
+ * @param {object} state Relay 运行状态。
+ * @param {string} token 设备 token。
+ * @param {object} payload Agent 发送负载。
+ * @param {number} timeoutMs Agent 控制超时。
+ * @returns {object} 可立即返回给手机的受理结果。
+ */
+function acceptSendCommand(state, token, payload, timeoutMs) {
+  const ws = state.agents.get(token);
+  if (!ws || ws.readyState !== ws.OPEN) {
+    throw Object.assign(new Error('对应 token 的电脑 Agent 不在线。'), {
+      status: 503,
+      code: 'AGENT_OFFLINE',
+    });
+  }
+  const acceptedSyncVersion = syncHealthFor(state, token).version;
+  forwardToAgent(state, token, 'send', payload, timeoutMs).then(result => {
+    broadcastToMobileClients(state, token, Object.assign({
+      type: 'control-result',
+      action: 'send',
+      ok: true,
+      threadId: payload.threadId,
+      clientUserMessageId: payload.clientUserMessageId,
+      acceptedSyncVersion,
+      result,
+    }, relayStateForToken(state, token)));
+  }).catch(error => {
+    broadcastToMobileClients(state, token, Object.assign({
+      type: 'control-result',
+      action: 'send',
+      ok: false,
+      threadId: payload.threadId,
+      clientUserMessageId: payload.clientUserMessageId,
+      acceptedSyncVersion,
+      error: {
+        code: error.code || 'AGENT_REQUEST_FAILED',
+        message: error.message || '电脑 Agent 发送失败。',
+        status: error.status || 500,
+      },
+    }, relayStateForToken(state, token)));
+  });
+  return {
+    ok: true,
+    accepted: true,
+    watch: {
+      threadId: payload.threadId,
+      clientUserMessageId: payload.clientUserMessageId,
+    },
+    acceptedSyncVersion,
+  };
+}
+
+/**
  * AI:校验控制请求只能作用于电脑当前打开的线程。
  *
  * @param {object} state Relay 运行状态。
@@ -594,12 +648,12 @@ function createCloudRelayServer(options = {}) {
         const payload = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');
         const threadId = requireOpenThread(state, token, payload.threadId);
         const clientUserMessageId = requireClientUserMessageId(payload.clientUserMessageId);
-        const result = await forwardToAgent(state, token, 'send', {
+        const accepted = acceptSendCommand(state, token, {
           text: typeof payload.text === 'string' ? payload.text : '',
           threadId,
           clientUserMessageId,
         }, requestTimeoutMs);
-        return sendJson(res, 200, Object.assign({}, result, { acceptedSyncVersion: syncHealthFor(state, token).version }));
+        return sendJson(res, 202, accepted);
       }
       if (req.method === 'POST' && req.url.startsWith('/codex/stop')) {
         const payload = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');
@@ -639,6 +693,7 @@ function createCloudRelayServer(options = {}) {
 
 module.exports = {
   attachMobileClient,
+  acceptSendCommand,
   applyAppServerEvent,
   applyEventStreamState,
   broadcastToMobileClients,

@@ -421,3 +421,28 @@ Whenever a terminal event kind is added or discovered, replay the same payload
 through the Desktop reader, Relay parser including `since` cache, Web reducer,
 and uni-app reducer. A UI-only timeout or stale-state conversion is not an
 acceptable substitute for parsing the source event.
+
+## Optimistic Projections Must Not Confirm Themselves
+
+Any UI that overlays pending local data on an authoritative server snapshot has
+two distinct collections even when both are rendered as one list:
+
+```text
+authoritative history + pending command records -> rendered messages
+```
+
+The rendered list must never flow back into the authoritative input without
+first removing every local projection marker. Otherwise a second merge can find
+its own optimistic user row, treat the command as server-confirmed, delete the
+pending record, and make the row disappear on the next refresh.
+
+Checklist for optimistic message flows:
+
+- [ ] Base indices and pagination cursors count only authoritative rows.
+- [ ] Local rows carry stable IDs and are stripped before every re-merge.
+- [ ] A transport acknowledgement cannot remove pending business state.
+- [ ] Only an authoritative payload without local markers can confirm history.
+- [ ] Regression tests run the merge twice with the first rendered output as the
+      second input, then apply delayed success and delayed failure events.
+- [ ] Browser/mobile E2E checks the input value, pending row, final row, and send
+      button state across the complete transition.

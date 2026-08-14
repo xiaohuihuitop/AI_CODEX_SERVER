@@ -25,6 +25,19 @@ function buildRealtimeUrl(serverUrl) {
 const REQUEST_TIMEOUT_MS = 15000;
 
 /**
+ * AI:创建带稳定错误码的请求异常，供页面区分超时与明确失败。
+ *
+ * @param {string} message 错误说明。
+ * @param {string} code 稳定错误码。
+ * @returns {Error} 请求异常。
+ */
+function createRequestError(message, code) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+/**
  * AI:建立手机实时状态订阅，控制命令仍经 HTTP 请求发送。
  *
  * @param {{serverUrl: string, token: string}} config 连接配置。
@@ -85,13 +98,20 @@ export function requestJson(config, apiPath, options = {}) {
       success(response) {
         const data = response.data || {};
         if (response.statusCode < 200 || response.statusCode >= 300 || data.ok === false) {
-          settle(reject, new Error(data.message || `请求失败：${response.statusCode}`));
+          settle(reject, createRequestError(
+            data.message || `请求失败：${response.statusCode}`,
+            data.code || 'REQUEST_REJECTED',
+          ));
           return;
         }
         settle(resolve, data);
       },
       fail(error) {
-        settle(reject, new Error(error.errMsg || '网络请求失败'));
+        const message = error.errMsg || '网络请求失败';
+        const code = String(message).toLowerCase().indexOf('timeout') !== -1
+          ? 'REQUEST_TIMEOUT'
+          : 'REQUEST_FAILED';
+        settle(reject, createRequestError(message, code));
       },
       complete() {
         if (typeof options.unregisterTask === 'function') options.unregisterTask(task);
@@ -99,7 +119,10 @@ export function requestJson(config, apiPath, options = {}) {
     });
     if (typeof options.registerTask === 'function') options.registerTask(task);
     timeoutTimer = setTimeout(() => {
-      settle(reject, new Error('请求超时，请检查电脑 Agent 或服务器连接。'));
+      settle(reject, createRequestError(
+        '请求超时，请检查电脑 Agent 或服务器连接。',
+        'REQUEST_TIMEOUT',
+      ));
       if (task && typeof task.abort === 'function') task.abort();
     }, timeoutMs + 1000);
   });

@@ -37,6 +37,17 @@ test('云端手机网页端通过实时通道接收状态更新，不使用固�
   assert.doesNotMatch(html, /setInterval\(/);
 });
 
+test('云端手机网页端重复合并时不把本地临时气泡误判为电脑历史', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+  const mergeFunction = html.match(/function mergePendingLocalMessages\(threadId, historyRows\) \{([\s\S]*?)\n    \}/)?.[1] || '';
+
+  assert.match(html, /function confirmedHistoryRows\(rows\)/);
+  assert.match(mergeFunction, /const rows = confirmedHistoryRows\(historyRows\);/);
+  assert.match(html, /id\.indexOf\('local-user-'\) !== 0/);
+  assert.match(html, /id\.indexOf\('local-assistant-'\) !== 0/);
+  assert.match(html, /const baseMessageCount = confirmedHistoryRows\(renderedHistoryRows\)\.length;/);
+});
+
 test('云端手机网页端以 Agent 直接终态清除迟到的实时运行覆盖', () => {
   const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
   const source = html.match(/function reconcileRealtimeThreadState\(status\) \{([\s\S]*?)\n    \}/)?.[0] || '';
@@ -368,11 +379,17 @@ test('云端 relay 将手机发送请求转发给 Agent', async () => {
   });
   const body = await readJson(res);
 
+  const forwardedDeadline = Date.now() + 500;
+  while (!forwardedPayload && Date.now() < forwardedDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+
   agent.close();
   await closeRelayServer(server);
 
-  assert.equal(res.status, 200);
+  assert.equal(res.status, 202);
   assert.equal(body.ok, true);
+  assert.equal(body.accepted, true);
   assert.equal(body.watch.threadId, 'thread-1');
   assert.deepEqual(forwardedPayload, {
     text: '你好',
@@ -380,6 +397,66 @@ test('云端 relay 将手机发送请求转发给 Agent', async () => {
     clientUserMessageId: 'message-send-1',
   });
 
+});
+
+test('云端 relay 立即受理发送并通过手机实时通道回传最终控制结果', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['async-send-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+  });
+  const port = await listen(server);
+  const mobileEvents = [];
+  const mobile = new WebSocket(`ws://127.0.0.1:${port}/mobile?token=async-send-token`);
+  mobile.on('message', data => mobileEvents.push(JSON.parse(data.toString())));
+  await new Promise(resolve => mobile.once('open', resolve));
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=async-send-token`);
+  await new Promise(resolve => agent.once('open', resolve));
+  let releaseAgent;
+  agent.on('message', data => {
+    const message = JSON.parse(data.toString());
+    if (!message.action) return;
+    releaseAgent = () => agent.send(JSON.stringify({
+      id: message.id,
+      ok: true,
+      result: { ok: true, watch: { threadId: 'thread-1', turnId: 'turn-1' } },
+    }));
+  });
+  agent.send(JSON.stringify({
+    type: 'session-sync',
+    payload: {
+      openThreadIds: ['thread-1'],
+      sessions: [{ threadId: 'thread-1', threadName: '异步发送线程', metadataOnly: true }],
+    },
+  }));
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  const startedAt = Date.now();
+  const response = await fetch(`http://127.0.0.1:${port}/send?token=async-send-token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: '你好', threadId: 'thread-1', clientUserMessageId: 'async-message-1' }),
+  });
+  const accepted = await readJson(response);
+
+  assert.equal(response.status, 202);
+  assert.equal(Date.now() - startedAt < 500, true);
+  assert.equal(accepted.accepted, true);
+  assert.equal(accepted.watch.clientUserMessageId, 'async-message-1');
+  assert.equal(typeof releaseAgent, 'function');
+  releaseAgent();
+  const deadline = Date.now() + 1000;
+  while (!mobileEvents.some(event => event.type === 'control-result') && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  const result = mobileEvents.find(event => event.type === 'control-result');
+  assert.equal(result.ok, true);
+  assert.equal(result.clientUserMessageId, 'async-message-1');
+  assert.equal(result.result.watch.turnId, 'turn-1');
+
+  mobile.close();
+  agent.close();
+  await closeRelayServer(server);
 });
 
 test('云端 relay 拒绝缺少客户端消息标识的发送请求', async () => {
@@ -422,6 +499,10 @@ test('云端 relay 在 Agent 断开时立即结束待转发请求', async () => 
     requestTimeoutMs: 1500,
   });
   const port = await listen(server);
+  const mobileEvents = [];
+  const mobile = new WebSocket(`ws://127.0.0.1:${port}/mobile?token=disconnect-token`);
+  mobile.on('message', data => mobileEvents.push(JSON.parse(data.toString())));
+  await new Promise(resolve => mobile.once('open', resolve));
   const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=disconnect-token`);
 
   agent.on('message', data => {
@@ -445,11 +526,18 @@ test('云端 relay 在 Agent 断开时立即结束待转发请求', async () => 
     body: JSON.stringify({ text: '你好', threadId: 'thread-1', clientUserMessageId: 'message-disconnect-1' }),
   });
   const body = await readJson(res);
+  const deadline = Date.now() + 1000;
+  while (!mobileEvents.some(event => event.type === 'control-result') && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  const result = mobileEvents.find(event => event.type === 'control-result');
 
-  assert.equal(res.status, 503);
-  assert.equal(body.ok, false);
-  assert.equal(body.code, 'AGENT_DISCONNECTED');
+  assert.equal(res.status, 202);
+  assert.equal(body.accepted, true);
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, 'AGENT_DISCONNECTED');
 
+  mobile.close();
   await closeRelayServer(server);
 });
 
@@ -682,6 +770,10 @@ test('云端 relay 只用目标回合证据确认手机发送而不接受无关�
     requestTimeoutMs: 1500,
   });
   const port = await listen(server);
+  const mobileEvents = [];
+  const mobile = new WebSocket(`ws://127.0.0.1:${port}/mobile?token=control-confirm-token`);
+  mobile.on('message', data => mobileEvents.push(JSON.parse(data.toString())));
+  await new Promise(resolve => mobile.once('open', resolve));
   const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=control-confirm-token`);
   await new Promise(resolve => agent.once('open', resolve));
   agent.on('message', data => {
@@ -718,6 +810,11 @@ test('云端 relay 只用目标回合证据确认手机发送而不接受无关�
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ threadId: 'thread-1', text: '开始测试', clientUserMessageId: 'message-control-1' }),
     }));
+    const resultDeadline = Date.now() + 1000;
+    while (!mobileEvents.some(event => event.type === 'control-result') && Date.now() < resultDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const sendResult = mobileEvents.find(event => event.type === 'control-result');
 
     agent.send(JSON.stringify({
       type: 'session-sync',
@@ -737,11 +834,12 @@ test('云端 relay 只用目标回合证据确认手机发送而不接受无关�
     await new Promise(resolve => setTimeout(resolve, 20));
     const confirmed = await readJson(await fetch(`http://127.0.0.1:${port}/codex/status?token=control-confirm-token&thread=thread-1`));
 
-    assert.equal(send.watch.turnId, 'turn-control-1');
+    assert.equal(sendResult.result.watch.turnId, 'turn-control-1');
     assert.equal(unrelated.syncVersion > send.acceptedSyncVersion, true);
     assert.equal((unrelated.confirmedControlTurnIds || []).includes('turn-control-1'), false);
     assert.equal((confirmed.confirmedControlTurnIds || []).includes('turn-control-1'), true);
   } finally {
+    mobile.close();
     agent.close();
     await closeRelayServer(server);
   }

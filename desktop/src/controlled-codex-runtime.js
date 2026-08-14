@@ -32,6 +32,10 @@ class ControlledCodexRuntime extends EventEmitter {
       sessionConfirmer: (threadId, since) => this.evidence.waitForTurnStarted(threadId, since),
       sessionStopConfirmer: (threadId, since) => this.evidence.waitForStopped(threadId, since),
     });
+    this.commandControllerFactory = options.commandControllerFactory
+      || (options.controller ? null : () => this.createCommandController());
+    this.controlInFlight = false;
+    this.activeCommandSession = null;
     this.state = 'starting';
     this.message = '正在连接受控 Codex Desktop';
     this.version = '';
@@ -172,17 +176,64 @@ class ControlledCodexRuntime extends EventEmitter {
 
   async sendMessage(threadId, text) {
     this.assertReady();
-    return this.controller.sendMessage(threadId, text);
+    return this.runCommand('sendMessage', [threadId, text]);
   }
 
   async stop(threadId) {
     this.assertReady();
-    return this.controller.stop(threadId);
+    return this.runCommand('stop', [threadId]);
   }
 
   async getThreadRuntime(threadId) {
     this.assertReady();
+    if (this.controlInFlight) return { state: 'unknown', threadId };
     return this.controller.getThreadRuntime(threadId);
+  }
+
+  /**
+   * AI:为有副作用的业务命令创建独立 CDP 会话，避免长期监控连接的排队或半开状态污染发送。
+   *
+   * @returns {{connect: Function, close: Function, controller: CodexDesktopUiController}} 命令会话。
+   */
+  createCommandController() {
+    const cdp = new CodexCdpClient({ debugPort: this.debugPort });
+    const controller = new CodexDesktopUiController({
+      cdp,
+      sessionConfirmer: (threadId, since) => this.evidence.waitForTurnStarted(threadId, since),
+      sessionStopConfirmer: (threadId, since) => this.evidence.waitForStopped(threadId, since),
+    });
+    return {
+      connect: () => cdp.connect(),
+      close: () => cdp.close(),
+      controller,
+    };
+  }
+
+  /**
+   * AI:在一次性 CDP 会话中执行发送或停止；失败直接返回，不自动重放有副作用的命令。
+   *
+   * @param {'sendMessage'|'stop'} method 控制器方法。
+   * @param {Array<*>} args 方法参数。
+   * @returns {Promise<object>} 官方客户端控制结果。
+   */
+  async runCommand(method, args) {
+    if (!this.commandControllerFactory) return this.controller[method](...args);
+    if (this.controlInFlight) {
+      throw Object.assign(new Error('官方 Codex Desktop 正在处理上一条控制命令。'), { code: 'CONTROL_COMMAND_BUSY' });
+    }
+    this.controlInFlight = true;
+    this.clearHeartbeat();
+    const session = this.commandControllerFactory();
+    this.activeCommandSession = session;
+    try {
+      await session.connect();
+      return await session.controller[method](...args);
+    } finally {
+      if (this.activeCommandSession === session) this.activeCommandSession = null;
+      session.close();
+      this.controlInFlight = false;
+      this.scheduleHeartbeat();
+    }
   }
 
   assertReady() {
@@ -197,6 +248,9 @@ class ControlledCodexRuntime extends EventEmitter {
     this.clearHeartbeat();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+    if (this.activeCommandSession) this.activeCommandSession.close();
+    this.activeCommandSession = null;
+    this.controlInFlight = false;
     this.cdp.close();
   }
 }
