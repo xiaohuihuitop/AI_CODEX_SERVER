@@ -9,7 +9,7 @@ const { ControlledCodexProcess, probeCdp, resolvePortOwner } = require('./contro
  */
 class ControlledCodexRuntime extends EventEmitter {
   /**
-   * @param {{debugPort?: number, processManager?: object, reader: object, cdp?: object, reconnectIntervalMs?: number}} options 运行时依赖。
+   * @param {{debugPort?: number, processManager?: object, reader: object, cdp?: object, reconnectIntervalMs?: number, healthCheckIntervalMs?: number}} options 运行时依赖。
    */
   constructor(options = {}) {
     super();
@@ -20,8 +20,11 @@ class ControlledCodexRuntime extends EventEmitter {
     this.cdpProbe = options.cdpProbe || probeCdp;
     this.reader = options.reader;
     this.reconnectIntervalMs = Math.max(100, Number(options.reconnectIntervalMs) || 2000);
+    this.healthCheckIntervalMs = Math.max(10, Number(options.healthCheckIntervalMs) || 15000);
     this.reconnectTimer = null;
     this.reconnecting = false;
+    this.heartbeatTimer = null;
+    this.heartbeatRunning = false;
     this.cdp = options.cdp || new CodexCdpClient({ debugPort: this.debugPort });
     this.evidence = options.evidence || new CodexSessionEvidence({ reader: this.reader });
     this.controller = options.controller || new CodexDesktopUiController({
@@ -43,6 +46,7 @@ class ControlledCodexRuntime extends EventEmitter {
    */
   handleDisconnected(error) {
     if (this.state === 'stopped') return;
+    this.clearHeartbeat();
     this.state = 'unavailable';
     this.message = error && error.message || 'Codex Desktop CDP 已断开。';
     this.emit('unavailable', error);
@@ -63,6 +67,47 @@ class ControlledCodexRuntime extends EventEmitter {
   }
 
   /**
+   * AI:安排无副作用的页面探测，提前识别 readyState 仍为 OPEN 的半开连接。
+   *
+   * @returns {void}
+   */
+  scheduleHeartbeat() {
+    if (this.state !== 'ready' || this.heartbeatTimer || this.heartbeatRunning) return;
+    this.heartbeatTimer = setTimeout(() => {
+      this.heartbeatTimer = null;
+      void this.runHeartbeat();
+    }, this.healthCheckIntervalMs);
+  }
+
+  /**
+   * AI:执行轻量 Runtime.evaluate；失败只触发连接重建，不重放业务命令。
+   *
+   * @returns {Promise<void>} 本轮探测完成后结束。
+   */
+  async runHeartbeat() {
+    if (this.state !== 'ready' || this.heartbeatRunning) return;
+    this.heartbeatRunning = true;
+    try {
+      await this.cdp.evaluate('1 + 1');
+    } catch (error) {
+      if (this.state === 'ready') this.handleDisconnected(error);
+    } finally {
+      this.heartbeatRunning = false;
+      this.scheduleHeartbeat();
+    }
+  }
+
+  /**
+   * AI:清理健康探测定时器，避免断线或停止后残留重复探测。
+   *
+   * @returns {void}
+   */
+  clearHeartbeat() {
+    if (this.heartbeatTimer) clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = null;
+  }
+
+  /**
    * AI:恢复同一官方实例的 CDP 连接，不执行进程重启或控制面切换。
    *
    * @returns {Promise<void>} 重连完成或本轮失败后结束。
@@ -77,6 +122,7 @@ class ControlledCodexRuntime extends EventEmitter {
       }
       this.state = 'ready';
       this.message = `受控 Codex Desktop 已连接：CDP ${this.debugPort}`;
+      this.scheduleHeartbeat();
       this.emit('reconnected', {
         reconnected: true,
         debugPort: this.debugPort,
@@ -114,6 +160,7 @@ class ControlledCodexRuntime extends EventEmitter {
     await this.cdp.connect();
     this.state = 'ready';
     this.message = `受控 Codex Desktop 已连接：CDP ${this.debugPort}`;
+    this.scheduleHeartbeat();
     const details = {
       debugPort: this.debugPort,
       pid: current && current.pid || null,
@@ -147,6 +194,7 @@ class ControlledCodexRuntime extends EventEmitter {
   stopRuntime() {
     this.state = 'stopped';
     this.message = 'Agent 已停止';
+    this.clearHeartbeat();
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
     this.cdp.close();

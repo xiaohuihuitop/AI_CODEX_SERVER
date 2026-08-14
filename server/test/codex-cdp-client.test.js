@@ -97,3 +97,27 @@ test('CDP evaluate 返回页面表达式的按值结果', async () => {
   assert.equal(await evaluated, 'Codex');
   client.close();
 });
+
+test('CDP 请求超时会废弃半开连接并拒绝全部等待请求', async () => {
+  const socket = new FakeSocket();
+  const client = new CodexCdpClient({
+    requestTimeoutMs: 20,
+    fetchImpl: async () => ({ ok: true, json: async () => [{ url: 'app://-/index.html', webSocketDebuggerUrl: 'ws://target' }] }),
+    webSocketFactory: () => {
+      queueMicrotask(() => socket.open());
+      return socket;
+    },
+  });
+  const disconnected = new Promise(resolve => client.once('disconnected', resolve));
+
+  await client.connect();
+  const timedOut = client.request('Runtime.evaluate', { expression: '1 + 1' });
+  const pending = client.request('Page.bringToFront');
+
+  await assert.rejects(() => timedOut, error => error.code === 'CDP_TIMEOUT');
+  await assert.rejects(() => pending, error => error.code === 'CDP_TIMEOUT');
+  assert.equal((await disconnected).code, 'CDP_TIMEOUT');
+  assert.equal(client.isConnected(), false);
+  assert.equal(client.pending.size, 0);
+  assert.equal(socket.readyState, 3);
+});

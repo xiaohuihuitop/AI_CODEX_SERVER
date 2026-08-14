@@ -17,7 +17,7 @@ class CodexCdpClient extends EventEmitter {
     this.debugPort = Number(options.debugPort) || 9229;
     this.fetchImpl = options.fetchImpl || fetch;
     this.webSocketFactory = options.webSocketFactory || (url => new WebSocket(url));
-    this.requestTimeoutMs = Math.max(1000, Number(options.requestTimeoutMs) || 10000);
+    this.requestTimeoutMs = Math.max(10, Number(options.requestTimeoutMs) || 10000);
     this.socket = null;
     this.connecting = null;
     this.nextRequestId = 0;
@@ -56,7 +56,9 @@ class CodexCdpClient extends EventEmitter {
     const socket = this.webSocketFactory(target.webSocketDebuggerUrl);
     this.socket = socket;
     socket.on('message', data => this.handleMessage(data));
-    socket.on('close', (code, reason) => this.handleDisconnect(`CDP 连接已关闭：${code} ${String(reason || '')}`.trim()));
+    socket.on('close', (code, reason) => {
+      this.handleDisconnect(`CDP 连接已关闭：${code} ${String(reason || '')}`.trim(), socket);
+    });
     socket.on('error', error => {
       if (this.listenerCount('error') > 0) this.emit('error', error);
     });
@@ -103,8 +105,20 @@ class CodexCdpClient extends EventEmitter {
     pending.resolve(message.result || {});
   }
 
-  handleDisconnect(message) {
+  handleDisconnect(message, socket = this.socket) {
+    if (socket && socket !== this.socket) return;
     const failure = cdpError(message || 'Codex Desktop CDP 已断开。', 'CDP_DISCONNECTED');
+    this.invalidateConnection(failure);
+  }
+
+  /**
+   * AI:使当前半开连接立即失效，并以同一原因结束全部等待请求。
+   *
+   * @param {Error} failure 连接失效原因。
+   * @returns {void}
+   */
+  invalidateConnection(failure) {
+    const socket = this.socket;
     this.socket = null;
     for (const pending of this.pending.values()) {
       clearTimeout(pending.timer);
@@ -112,6 +126,10 @@ class CodexCdpClient extends EventEmitter {
     }
     this.pending.clear();
     this.emit('disconnected', failure);
+    if (socket && socket.readyState < 2) {
+      if (typeof socket.terminate === 'function') socket.terminate();
+      else socket.close();
+    }
   }
 
   async request(method, params = {}) {
@@ -120,8 +138,7 @@ class CodexCdpClient extends EventEmitter {
     const id = ++this.nextRequestId;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(cdpError(`CDP ${method} 请求超时。`, 'CDP_TIMEOUT'));
+        this.invalidateConnection(cdpError(`CDP ${method} 请求超时。`, 'CDP_TIMEOUT'));
       }, this.requestTimeoutMs);
       this.pending.set(id, { method, resolve, reject, timer });
       try {
@@ -147,9 +164,8 @@ class CodexCdpClient extends EventEmitter {
   }
 
   close() {
-    const socket = this.socket;
-    this.socket = null;
-    if (socket && socket.readyState < 2) socket.close();
+    if (!this.socket && this.pending.size === 0) return;
+    this.invalidateConnection(cdpError('Codex Desktop CDP 已断开。', 'CDP_DISCONNECTED'));
   }
 }
 

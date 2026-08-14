@@ -63,6 +63,7 @@ await runtime.getThreadRuntime(threadId);
 | 点击发送但目标 JSONL 未出现新回合 | `TURN_START_CONFIRM_TIMEOUT`；不得返回成功 |
 | 点击停止但目标 JSONL 未出现中断证据 | `STOP_CONFIRM_TIMEOUT`；不得返回成功 |
 | CDP 连接断开 | Agent 和管理器立即显示未连接；仅重连现有 CDP 目标，恢复后再显示已连接；不得重启官方进程、换端口或切换控制面 |
+| CDP WebSocket 保持 `OPEN` 但请求超时 | 将当前连接整体标记失效并拒绝全部等待请求；重新连接同一目标，不得继续复用半开连接 |
 
 ### 5. 正常 / 基准 / 异常案例
 
@@ -70,17 +71,18 @@ await runtime.getThreadRuntime(threadId);
 - 基准：官方实例已由管理器以配置端口启动，Agent 复用进程和持久 CDP，不重启、不创建第二控制服务。
 - 初次接管：先用 Appx 清单路径核对官方主进程，再读取 `Win32_Process` 快照建立完整子树，按深度从后代到主进程逐 PID 强制终止；仅忽略 Node 明确返回 `ESRCH` 的已退出 PID，其他 PID 错误必须中止并报告。随后必须同时确认主进程消失且配置端口能够在 `127.0.0.1` 独占绑定，才允许重新激活。不得使用会被失效 CIM 子 PID 阻断整棵树的 `taskkill /T /F`，也不得使用会被托盘行为拦截的 `CloseMainWindow()` 或对 Packaged Win32 主进程无效的 `IPackageDebugSettings.TerminateAllProcesses()`。
 - 初始化异常：Agent 保持运行并定时重试连接，不因一次失败退出；所有自动重试均不得关闭或重启官方客户端。
-- 短暂异常：CDP WebSocket 收到 `1006` 等断线事件时，Agent 立即写入不可控状态并按固定间隔重连同一端口；重连成功后写回 ready 心跳并通知 relay。重连期间不得把 JSONL 同步正常误报为官方客户端可控。
+- 短暂异常：CDP WebSocket 收到 `1006` 等断线事件，或任一 CDP 请求超时时，Agent 立即写入不可控状态并使当前连接整体失效，再按固定间隔重连同一端口；重连成功后写回 ready 心跳并通知 relay。`readyState=OPEN` 只代表本地套接字未收到关闭帧，不能作为页面可响应的证据。
+- 空闲探测：运行时处于 `ready` 时每 15 秒执行一次无副作用的 `Runtime.evaluate`。探测失败只重建同一 CDP 连接；发送、停止和点击等有副作用的业务命令失败后不得自动重放，避免重复提交。
 - 异常：两个项目存在同名线程。只能选择属性中精确匹配的 `threadId`；找不到时显式失败。
 - 异常：端口已被其他进程监听。管理器显示占用 PID，用户修改配置或处理占用后重试，不做隐式恢复。
 
 ### 6. 必需测试
 
 - `server/test/controlled-codex-process.test.js`：Appx 发现、端口所有权、显式确认后的直接重启、AUMID 启动和 CDP 参数。
-- `server/test/codex-cdp-client.test.js`：持久连接、请求 ID、断线和协议错误。
+- `server/test/codex-cdp-client.test.js`：持久连接、请求 ID、断线、协议错误，以及半开连接请求超时后的整体失效。
 - `server/test/codex-desktop-ui-controller.test.js`：精确 threadId、草稿、发送、停止及不切换式状态读取。
 - `server/test/codex-session-evidence.test.js`：目标消息时间边界和停止证据。
-- `server/test/controlled-codex-runtime.test.js`：连接决策和唯一控制器委托；必须覆盖命令行参数不可见但 CDP 可用时复用，以及 CDP 未就绪和重复探测时重启调用次数始终为零。
+- `server/test/controlled-codex-runtime.test.js`：连接决策和唯一控制器委托；必须覆盖命令行参数不可见但 CDP 可用时复用、CDP 未就绪和重复探测时重启调用次数始终为零，以及空闲半开连接由健康探测识别并自动重连。
 - `server/test/control-plane-contract.test.js`：禁止独立 App Server 控制模块重新进入正式源码。
 - `desktop/scripts/verify-manager-artifact.js`：对实际 `app.asar` 执行相同控制面约束。
 - Windows 生命周期门禁：必须先用同一产物算法终止一个真实 Electron 两层进程树并确认零残留，再由用户对官方 Codex 执行一次显式重启，核对主 PID 已更换、CDP 端口可访问；只看到窗口消失或命令返回成功不得判定通过。

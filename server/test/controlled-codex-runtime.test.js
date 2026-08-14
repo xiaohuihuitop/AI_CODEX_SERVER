@@ -6,6 +6,7 @@ const { ControlledCodexRuntime } = require('../../desktop/src/controlled-codex-r
 function createCdp() {
   const cdp = new EventEmitter();
   cdp.connect = async () => {};
+  cdp.evaluate = async () => 2;
   cdp.close = () => {};
   return cdp;
 }
@@ -30,6 +31,7 @@ test('受控运行时复用已经正确启动的官方客户端', async () => {
   const result = await runtime.start();
   assert.deepEqual(result, { debugPort: 9230, pid: 10, version: '26.707.3748.0' });
   assert.equal(runtime.state, 'ready');
+  runtime.stopRuntime();
 });
 
 test('受控运行时只要当前进程持有可用 CDP 就复用，不依赖命令行参数可见', async () => {
@@ -53,6 +55,7 @@ test('受控运行时只要当前进程持有可用 CDP 就复用，不依赖命
   const result = await runtime.start();
 
   assert.equal(result.pid, 10);
+  runtime.stopRuntime();
 });
 
 test('受控运行时发现 CDP 未就绪时明确失败且不重启官方客户端', async () => {
@@ -151,4 +154,47 @@ test('受控运行时在 CDP 短暂断开后自动恢复，不重启官方客户
   assert.equal(runtime.state, 'ready');
   assert.equal(details.reconnected, true);
   runtime.stopRuntime();
+});
+
+test('受控运行时定期探测闲置 CDP 并在半开连接失效后自动重连', async () => {
+  const cdp = createCdp();
+  let evaluateCount = 0;
+  let connectCount = 0;
+  cdp.isConnected = () => true;
+  cdp.evaluate = async () => {
+    evaluateCount += 1;
+    throw Object.assign(new Error('CDP Runtime.evaluate 请求超时。'), { code: 'CDP_TIMEOUT' });
+  };
+  cdp.connect = async () => {
+    connectCount += 1;
+  };
+  const runtime = new ControlledCodexRuntime({
+    debugPort: 9230,
+    reader: {},
+    cdp,
+    processManager: {
+      inspect: async () => ({ app: { version: '26.707.3748.0' }, mainProcess: { pid: 10 } }),
+    },
+    controller: {},
+    portOwnerResolver: async () => ({ pid: 10 }),
+    cdpProbe: async () => ({ ok: true }),
+    reconnectIntervalMs: 10,
+    healthCheckIntervalMs: 10,
+  });
+  const unavailable = new Promise(resolve => runtime.once('unavailable', resolve));
+  const reconnected = new Promise(resolve => runtime.once('reconnected', resolve));
+
+  await runtime.start();
+  assert.equal((await unavailable).code, 'CDP_TIMEOUT');
+  await reconnected;
+  runtime.stopRuntime();
+  const stoppedEvaluateCount = evaluateCount;
+  const stoppedConnectCount = connectCount;
+  await new Promise(resolve => setTimeout(resolve, 30));
+
+  assert.equal(runtime.state, 'stopped');
+  assert.equal(runtime.heartbeatTimer, null);
+  assert.equal(runtime.reconnectTimer, null);
+  assert.equal(evaluateCount, stoppedEvaluateCount);
+  assert.equal(connectCount, stoppedConnectCount);
 });
