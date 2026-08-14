@@ -8,7 +8,7 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 7
+- **Total Sessions**: 8
 - **Last Active**: 2026-08-14
 <!-- @@@/auto:current-status -->
 
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~186 | Active |
+| `journal-1.md` | ~207 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 8 | 2026-08-14 | 修复官方 Codex 进程树重启 | `05f54c2` | `master` |
 | 7 | 2026-08-14 | 拆分 Agent 启动与 Codex CDP 重启 | `d3b315a` | `master` |
 | 6 | 2026-08-09 | 完成跨端同步与缓存生命周期审计 | `4a09905` | `master` |
 | 5 | 2026-08-09 | 固化 App Server 控制面并验证跨端收发 | `8acba93` | `master` |

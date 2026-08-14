@@ -184,3 +184,24 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 8: 修复官方 Codex 进程树重启
+
+**Date**: 2026-08-14
+**Task**: 修复官方 Codex 进程树重启
+**Branch**: `master`
+
+### Summary
+
+定位 taskkill 整树终止被失效 CIM 子 PID 阻断，改为快照后按深度逐 PID 强制终止；管理器 v0.3.7 通过 206 项全量测试、真实 Electron 树零残留，并经用户确认官方 Codex 成功重启。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `05f54c2` | (see git log) |
+
+### Status
+
+[OK] **Completed**
