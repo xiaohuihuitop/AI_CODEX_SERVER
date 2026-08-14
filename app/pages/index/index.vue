@@ -1,5 +1,15 @@
 <template>
   <view class="page">
+    <view class="device-nav">
+      <view class="device-nav-bar">
+        <button class="device-switcher" @click="toggleDevicePopup">
+          <text class="device-switcher-name">{{ activeDeviceName }}</text>
+          <text class="device-switcher-arrow">⌄</text>
+        </button>
+        <button class="settings-button" @click="openSettings">设置</button>
+      </view>
+    </view>
+
     <view class="control-panel">
       <view class="topbar">
         <view class="status-row">
@@ -16,7 +26,6 @@
             <text class="status-text">{{ threadText }}</text>
           </view>
         </view>
-        <button class="settings-button" @click="openSettings">设置</button>
       </view>
 
       <view class="selectors">
@@ -24,10 +33,39 @@
           <text class="thread-selector-title">{{ selectedThreadName || '选择对话' }}</text>
           <text class="thread-selector-subtitle">{{ selectedProjectName || '未选择文件夹' }}</text>
         </button>
-        <button class="refresh-button" :disabled="loading || switchingThread" @click="manualRefresh">刷新</button>
+        <button class="refresh-button" :disabled="loading || switchingThread || switchingDevice" @click="manualRefresh">刷新</button>
       </view>
 
       <view class="notice">{{ notice }}</view>
+    </view>
+
+    <view v-if="devicePopupOpen" class="popup-mask" @click="closeDevicePopup"></view>
+    <view v-if="devicePopupOpen" class="device-popup">
+      <view class="popup-header">
+        <view>
+          <text class="popup-title">切换设备</text>
+          <text class="popup-subtitle">选择已在设置中保存的电脑</text>
+        </view>
+        <button class="popup-close" @click="closeDevicePopup">关闭</button>
+      </view>
+      <scroll-view class="device-popup-list" scroll-y>
+        <view v-if="!deviceRows.length" class="popup-empty">暂无设备，请到设置中添加</view>
+        <button
+          v-for="device in deviceRows"
+          :key="device.id"
+          class="device-row"
+          :class="device.id === activeDeviceId ? 'device-row-active' : ''"
+          :disabled="switchingDevice"
+          @click="switchDevice(device.id)"
+        >
+          <view class="dot" :class="deviceConnectionDotClass(device)"></view>
+          <view class="device-row-copy">
+            <text class="device-row-name">{{ device.name }}</text>
+            <text class="device-row-status">{{ deviceConnectionText(device) }}</text>
+          </view>
+          <text v-if="device.id === activeDeviceId" class="device-current">当前</text>
+        </button>
+      </scroll-view>
     </view>
 
     <view v-if="threadPopupOpen" class="popup-mask" @click="closeThreadPopup"></view>
@@ -58,10 +96,10 @@
     </view>
 
     <scroll-view class="messages" scroll-y :scroll-into-view="scrollTarget" upper-threshold="80" @scrolltoupper="loadOlderHistory">
-      <view v-if="switchingThread" class="switch-loading">
+      <view v-if="switchingThread || switchingDevice" class="switch-loading">
         <view class="switch-loading-spinner"></view>
-        <text class="switch-loading-title">正在载入对话</text>
-        <text class="switch-loading-subtitle">{{ selectedThreadName || '请稍候' }}</text>
+        <text class="switch-loading-title">{{ switchingDevice ? '正在切换设备' : '正在载入对话' }}</text>
+        <text class="switch-loading-subtitle">{{ switchingDevice ? activeDeviceName : (selectedThreadName || '请稍候') }}</text>
       </view>
 
       <view v-if="loadingOlderHistory" class="history-loading">正在加载更早对话...</view>
@@ -102,14 +140,28 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { onBackPress, onHide, onShow, onUnload } from '@dcloudio/uni-app';
 import { createRealtimeSocket, getHealth, getHistory, getStatus, getThreads, sendMessage, stopCodex } from '../../utils/api';
-import { loadConfig, loadSelection, saveSelection } from '../../utils/config';
+import {
+  DEFAULT_CONFIG,
+  getActiveDevice,
+  listDevices,
+  loadDeviceStore,
+  loadSelection,
+  saveDeviceConnectionState,
+  saveDraftGuard,
+  saveSelection,
+  setActiveDevice,
+} from '../../utils/config';
 import { renderMarkdownToHtml } from '../../utils/markdown';
 
-const config = ref(loadConfig());
-const selection = loadSelection();
+const initialStore = loadDeviceStore();
+const initialDevice = getActiveDevice();
+const config = ref(initialDevice ? Object.assign({}, initialDevice) : Object.assign({}, DEFAULT_CONFIG));
+const activeDeviceId = ref(initialDevice ? initialDevice.id : '');
+const deviceRows = ref(initialStore.devices);
+const selection = loadSelection(activeDeviceId.value);
 const selectedProjectName = ref(selection.projectName);
 const selectedThreadId = ref(selection.threadId);
 const threadRows = ref([]);
@@ -133,7 +185,9 @@ const manualProcessOpenState = ref({});
 const loading = ref(false);
 const sending = ref(false);
 const switchingThread = ref(false);
+const switchingDevice = ref(false);
 const threadPopupOpen = ref(false);
+const devicePopupOpen = ref(false);
 const scrollTarget = ref('');
 const AUTO_REFRESH_INTERVAL_MS = 4000;
 const REALTIME_REFRESH_RETRY_LIMIT = 6;
@@ -191,6 +245,10 @@ const projectNames = computed(() => groupedThreads.value.names);
 const threadOptions = computed(() => groupedThreads.value.groups[selectedProjectName.value] || []);
 const selectedThread = computed(() => threadOptions.value.find(row => row.id === selectedThreadId.value) || null);
 const selectedThreadName = computed(() => (selectedThread.value && selectedThread.value.name) || selectedThreadId.value);
+const activeDeviceName = computed(() => {
+  const device = deviceRows.value.find(row => row.id === activeDeviceId.value);
+  return device ? device.name : '未配置设备';
+});
 const projectGroups = computed(() => projectNames.value.map(name => ({
   name,
   threads: groupedThreads.value.groups[name] || [],
@@ -209,12 +267,12 @@ const complete = computed(() => {
   const selectedStatus = selectedThread.value && selectedThread.value.status;
   return !running.value && (currentStatus === 'complete' || selectedStatus === 'complete');
 });
-const canStop = computed(() => running.value && !sending.value && !switchingThread.value && !(pendingWatch.value && pendingWatch.value.threadId === selectedThreadId.value));
+const canStop = computed(() => running.value && !sending.value && !switchingThread.value && !switchingDevice.value && !(pendingWatch.value && pendingWatch.value.threadId === selectedThreadId.value));
 const canSend = computed(() => {
   const status = (selectedRealtimeState.value && selectedRealtimeState.value.status) || (currentThreadStatus.value && currentThreadStatus.value.status) || (selectedThread.value && selectedThread.value.status) || '';
   const active = selectedRealtimeState.value ? selectedRealtimeState.value.active : Boolean(currentThreadStatus.value && currentThreadStatus.value.active) || Boolean(selectedThread.value && selectedThread.value.active);
   const waitingForDesktop = Boolean(pendingWatch.value && pendingWatch.value.threadId === selectedThreadId.value);
-  return Boolean(selectedThreadId.value && !sending.value && !switchingThread.value && !waitingForDesktop && !active && status !== 'running');
+  return Boolean(selectedThreadId.value && !sending.value && !switchingThread.value && !switchingDevice.value && !waitingForDesktop && !active && status !== 'running');
 });
 const serverDotClass = computed(() => serverState.value.online ? 'dot-green' : serverState.value.offline ? 'dot-red' : 'dot-gray');
 const agentDotClass = computed(() => agentState.value.online ? 'dot-green' : 'dot-gray');
@@ -279,7 +337,7 @@ const timelineItems = computed(() => {
  * @returns {boolean} 已配置返回 true。
  */
 function hasConnectionConfig() {
-  return Boolean(config.value && config.value.serverUrl && config.value.token);
+  return Boolean(activeDeviceId.value && config.value && config.value.serverUrl && config.value.token);
 }
 
 /**
@@ -292,7 +350,7 @@ function markConfigMissing() {
   agentState.value = { online: false, offline: false, message: 'Agent 未连接' };
   currentThreadStatus.value = null;
   threadRows.value = [];
-  setNotice('请先在设置中填写服务器地址和 Token。');
+  setNotice(activeDeviceId.value ? '请先在设置中填写服务器地址和 Token。' : '请先在设置中添加设备。');
 }
 
 /**
@@ -413,20 +471,23 @@ function canUpdatePage() {
 /**
  * AI:获取当前页面生命周期令牌，用于阻止旧异步请求回写新页面实例。
  *
- * @returns {number} 生命周期令牌。
+ * @returns {{lifecycle: number, deviceId: string}} 生命周期与设备令牌。
  */
 function currentLifecycleToken() {
-  return lifecycleToken;
+  return { lifecycle: lifecycleToken, deviceId: activeDeviceId.value };
 }
 
 /**
  * AI:判断指定异步任务是否仍属于当前页面实例。
  *
- * @param {number} token 异步任务启动时记录的生命周期令牌。
+ * @param {{lifecycle: number, deviceId: string}} token 异步任务启动时记录的生命周期与设备令牌。
  * @returns {boolean} 仍可安全更新时返回 true。
  */
 function canUpdateTask(token) {
-  return canUpdatePage() && token === lifecycleToken;
+  return canUpdatePage()
+    && token
+    && token.lifecycle === lifecycleToken
+    && token.deviceId === activeDeviceId.value;
 }
 
 /**
@@ -518,7 +579,170 @@ function setNotice(text) {
  * @returns {void}
  */
 function openSettings() {
+  saveDraftGuard(activeDeviceId.value, Boolean(messageText.value.trim()));
   uni.navigateTo({ url: '/pages/settings/settings' });
+}
+
+/**
+ * AI:切换设备选择弹窗；设备管理只允许从设置页进入。
+ *
+ * @returns {void}
+ */
+function toggleDevicePopup() {
+  threadPopupOpen.value = false;
+  devicePopupOpen.value = !devicePopupOpen.value;
+}
+
+/**
+ * AI:关闭设备选择弹窗。
+ *
+ * @returns {void}
+ */
+function closeDevicePopup() {
+  devicePopupOpen.value = false;
+}
+
+/**
+ * AI:读取设备最近一次健康检查的状态点样式。
+ *
+ * @param {object} device 设备配置。
+ * @returns {string} 状态点样式。
+ */
+function deviceConnectionDotClass(device) {
+  const state = device && device.lastConnection;
+  if (!state) return 'dot-gray';
+  return state.online && state.agentOnline ? 'dot-green' : 'dot-red';
+}
+
+/**
+ * AI:设备弹窗只展示最近检测结果，避免把缓存状态误称为实时在线。
+ *
+ * @param {object} device 设备配置。
+ * @returns {string} 最近连接状态。
+ */
+function deviceConnectionText(device) {
+  const state = device && device.lastConnection;
+  if (!state) return '未检测';
+  if (state.online && state.agentOnline) return '最近在线';
+  if (state.online) return '最近 Agent 离线';
+  return '最近无法连接';
+}
+
+/**
+ * AI:重新读取本地设备列表，供设置页返回后刷新首页。
+ *
+ * @returns {object|null} 当前设备。
+ */
+function reloadDeviceStore() {
+  const store = loadDeviceStore();
+  deviceRows.value = store.devices;
+  activeDeviceId.value = store.activeDeviceId;
+  const device = store.devices.find(row => row.id === store.activeDeviceId) || null;
+  config.value = device ? Object.assign({}, device) : Object.assign({}, DEFAULT_CONFIG);
+  return device;
+}
+
+/**
+ * AI:清空旧设备的页面投影，防止切换后短暂展示错误线程和消息。
+ *
+ * @returns {void}
+ */
+function resetDeviceViewState() {
+  selectedProjectName.value = '';
+  selectedThreadId.value = '';
+  threadRows.value = [];
+  messages.value = [];
+  serverState.value = { online: false, offline: false, message: '服务器检测中' };
+  agentState.value = { online: false, offline: false, message: 'Agent 检测中' };
+  syncState.value = { fresh: false, version: 0, lastSyncedAt: '' };
+  appServerState.value = { state: 'unknown', updatedAt: '' };
+  realtimeThreadStates.value = {};
+  currentThreadStatus.value = null;
+  historyNextBefore.value = '';
+  hasOlderHistory.value = false;
+  loadingOlderHistory.value = false;
+  pendingWatch.value = null;
+  pendingLocalSends.value = [];
+  historyReloadedForCompletion.value = false;
+  followBottom.value = false;
+  manualProcessOpenState.value = {};
+  loading.value = false;
+  sending.value = false;
+  switchingThread.value = false;
+  threadPopupOpen.value = false;
+  scrollTarget.value = '';
+  threadListRequest = null;
+  runningHistoryRequest = null;
+  runningHistorySyncAt = 0;
+  runningHistoryThreadId = '';
+  if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
+  commandConfirmTimer = null;
+}
+
+/**
+ * AI:建立当前设备连接并恢复该设备最后选择的对话。
+ *
+ * @returns {Promise<void>} 初始化完成。
+ */
+async function connectActiveDevice() {
+  const selection = loadSelection(activeDeviceId.value);
+  selectedProjectName.value = selection.projectName;
+  selectedThreadId.value = selection.threadId;
+  if (!hasConnectionConfig()) {
+    markConfigMissing();
+    return;
+  }
+  await refreshConnectionStatus();
+  const token = currentLifecycleToken();
+  if (!canUpdateTask(token)) return;
+  await refreshAll({ scrollToBottom: true });
+  if (!canUpdateTask(token)) return;
+  startTimers();
+}
+
+/**
+ * AI:按固定顺序切断旧连接并切换到目标设备，不在失败时回退旧设备。
+ *
+ * @param {string} deviceId 目标设备 ID。
+ * @returns {Promise<void>} 切换完成。
+ */
+async function switchDevice(deviceId) {
+  const id = String(deviceId || '').trim();
+  if (!id || id === activeDeviceId.value) {
+    closeDevicePopup();
+    return;
+  }
+  if (messageText.value.trim()) {
+    setNotice('请先发送或清空草稿');
+    uni.showToast({ title: '请先发送或清空草稿', icon: 'none' });
+    return;
+  }
+  switchingDevice.value = true;
+  closeDevicePopup();
+  try {
+    pageActive = false;
+    lifecycleToken += 1;
+    switchRequestSeq += 1;
+    stopTimers();
+    abortRequestTasks();
+    resetDeviceViewState();
+    const device = setActiveDevice(id);
+    activeDeviceId.value = device.id;
+    config.value = Object.assign({}, device);
+    deviceRows.value = listDevices();
+    saveDraftGuard(device.id, false);
+    pageActive = true;
+    lifecycleToken += 1;
+    await connectActiveDevice();
+  } catch (error) {
+    if (!pageActive) {
+      pageActive = true;
+      lifecycleToken += 1;
+    }
+    setNotice(error.message);
+  } finally {
+    switchingDevice.value = false;
+  }
 }
 
 /**
@@ -527,6 +751,7 @@ function openSettings() {
  * @returns {void}
  */
 function toggleThreadPopup() {
+  devicePopupOpen.value = false;
   threadPopupOpen.value = !threadPopupOpen.value;
 }
 
@@ -744,7 +969,8 @@ async function scrollToBottom() {
  * @returns {void}
  */
 function persistSelection() {
-  saveSelection({
+  if (!activeDeviceId.value) return;
+  saveSelection(activeDeviceId.value, {
     projectName: selectedProjectName.value,
     threadId: selectedThreadId.value,
   });
@@ -780,10 +1006,14 @@ async function refreshConnectionStatus() {
     if (!canUpdateTask(token)) return;
     serverState.value = { online: true, offline: false, message: '服务器已连' };
     applyRelayState(Object.assign({}, data, { agentOnline: Boolean(data.online) }));
+    saveDeviceConnectionState(activeDeviceId.value, { online: true, agentOnline: Boolean(data.online) });
+    deviceRows.value = listDevices();
   } catch (error) {
     if (!canUpdateTask(token)) return;
     serverState.value = { online: false, offline: true, message: '服务器断开' };
     agentState.value = { online: false, offline: true, message: 'Agent 未知' };
+    saveDeviceConnectionState(activeDeviceId.value, { online: false, agentOnline: false });
+    deviceRows.value = listDevices();
     setNotice(error.message);
   }
 }
@@ -1468,12 +1698,15 @@ function handleRealtimeEvent(event) {
  */
 function openRealtimeSocket() {
   if (!canUpdatePage() || !hasConnectionConfig() || realtimeSocket) return;
-  realtimeSocket = createRealtimeSocket(config.value, {
+  const token = currentLifecycleToken();
+  let socket = null;
+  socket = createRealtimeSocket(config.value, {
     open() {
-      if (!canUpdatePage()) return;
+      if (!canUpdateTask(token) || realtimeSocket !== socket) return;
       serverState.value = { online: true, offline: false, message: '服务器已连' };
     },
     message(event) {
+      if (!canUpdateTask(token) || realtimeSocket !== socket) return;
       try {
         handleRealtimeEvent(JSON.parse(event.data || '{}'));
       } catch (error) {
@@ -1481,16 +1714,17 @@ function openRealtimeSocket() {
       }
     },
     close() {
+      if (!canUpdateTask(token) || realtimeSocket !== socket) return;
       realtimeSocket = null;
-      if (!canUpdatePage()) return;
       serverState.value = { online: false, offline: true, message: '服务器实时连接断开' };
       agentState.value = { online: false, offline: true, message: 'Agent 状态未知' };
       scheduleRealtimeReconnect();
     },
     error(event) {
-      if (canUpdatePage()) setNotice(event.errMsg || '服务器实时连接失败');
+      if (canUpdateTask(token) && realtimeSocket === socket) setNotice(event.errMsg || '服务器实时连接失败');
     },
   });
+  realtimeSocket = socket;
 }
 
 /**
@@ -1527,11 +1761,8 @@ function stopTimers() {
 onMounted(async () => {
   activatePage();
   mountedOnce = true;
-  await refreshConnectionStatus();
-  if (!canUpdatePage()) return;
-  await refreshAll({ scrollToBottom: true });
-  if (!canUpdatePage()) return;
-  startTimers();
+  saveDraftGuard(activeDeviceId.value, false);
+  await connectActiveDevice();
 });
 
 onUnmounted(() => {
@@ -1546,23 +1777,38 @@ onUnload(() => {
   deactivatePage();
 });
 
-onShow(() => {
+onShow(async () => {
   activatePage();
   if (!mountedOnce) return;
-  const latest = loadConfig();
-  if (latest.serverUrl !== config.value.serverUrl || latest.token !== config.value.token) {
+  const previousDeviceId = activeDeviceId.value;
+  const previousServerUrl = config.value.serverUrl;
+  const previousToken = config.value.token;
+  const latest = reloadDeviceStore();
+  const connectionChanged = previousDeviceId !== activeDeviceId.value
+    || previousServerUrl !== config.value.serverUrl
+    || previousToken !== config.value.token;
+  if (connectionChanged) {
     stopTimers();
-    config.value = latest;
-    refreshConnectionStatus();
-    refreshAll({ scrollToBottom: true });
+    abortRequestTasks();
+    resetDeviceViewState();
+    await connectActiveDevice();
+    return;
   }
   startTimers();
 });
 
 onBackPress(() => {
+  if (devicePopupOpen.value) {
+    devicePopupOpen.value = false;
+    return true;
+  }
   if (!threadPopupOpen.value) return false;
   threadPopupOpen.value = false;
   return true;
+});
+
+watch(messageText, value => {
+  saveDraftGuard(activeDeviceId.value, Boolean(String(value || '').trim()));
 });
 </script>
 
@@ -1576,6 +1822,60 @@ onBackPress(() => {
   background: #f4f5f7;
   color: #111827;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.device-nav {
+  flex: 0 0 auto;
+  padding-top: var(--status-bar-height);
+  background: #ffffff;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.device-nav-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 58px;
+  align-items: center;
+  gap: 10px;
+  height: 52px;
+  padding: 0 12px;
+}
+
+.device-switcher,
+.device-row {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  border: 0;
+  border-radius: 7px;
+  padding: 0;
+  line-height: 1;
+}
+
+.device-switcher {
+  justify-content: flex-start;
+  min-width: 0;
+  height: 40px;
+  background: transparent;
+  color: #111827;
+}
+
+.device-switcher-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 18px;
+  line-height: 24px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.device-switcher-arrow {
+  flex: 0 0 auto;
+  margin-left: 7px;
+  color: #6b7280;
+  font-size: 18px;
+  line-height: 20px;
 }
 
 .control-panel {
@@ -1755,13 +2055,88 @@ onBackPress(() => {
 .thread-popup {
   position: fixed;
   z-index: 21;
-  top: 100px;
+  top: calc(110px + var(--status-bar-height));
   right: 12px;
   left: 12px;
   background: #f8fafc;
   border: 1px solid #dfe3ea;
   border-radius: 10px;
   overflow: hidden;
+}
+
+.device-popup {
+  position: fixed;
+  z-index: 21;
+  top: calc(62px + var(--status-bar-height));
+  right: 12px;
+  left: 12px;
+  max-height: 68vh;
+  border: 1px solid #dfe3ea;
+  border-radius: 8px;
+  background: #f8fafc;
+  overflow: hidden;
+}
+
+.device-popup-list {
+  max-height: 52vh;
+  padding: 8px;
+}
+
+.device-popup .popup-header {
+  padding: 10px 12px;
+}
+
+.device-row {
+  justify-content: flex-start;
+  width: 100%;
+  min-height: 52px;
+  margin-bottom: 7px;
+  border: 1px solid #e5e7eb;
+  background: #ffffff;
+  padding: 8px 10px;
+  color: #111827;
+}
+
+.device-row-active {
+  border-color: #111827;
+  background: #f3f4f6;
+}
+
+.device-row-copy {
+  min-width: 0;
+  flex: 1;
+  margin-left: 9px;
+}
+
+.device-row-name,
+.device-row-status {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.device-row-name {
+  color: #111827;
+  font-size: 14px;
+  line-height: 18px;
+  font-weight: 700;
+}
+
+.device-row-status {
+  margin-top: 3px;
+  color: #6b7280;
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.device-current {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  color: #166534;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .popup-header {

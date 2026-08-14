@@ -12,6 +12,77 @@ function loadMobileMarkdown() {
   return Function(`${source}\nreturn { renderMarkdownToHtml, stripCodexUiDirectives };`)();
 }
 
+function loadMobileConfig(storage = {}) {
+  const source = fs.readFileSync(path.join(appDir, 'utils', 'config.js'), 'utf8')
+    .replace(/export const /g, 'const ')
+    .replace(/export function /g, 'function ');
+  const uni = {
+    getStorageSync(key) { return storage[key]; },
+    setStorageSync(key, value) { storage[key] = JSON.parse(JSON.stringify(value)); },
+    removeStorageSync(key) { delete storage[key]; },
+  };
+  const api = Function('uni', `${source}\nreturn { loadDeviceStore, listDevices, getActiveDevice, saveDevice, removeDevice, setActiveDevice, loadSelection, saveSelection, saveDeviceConnectionState, saveDraftGuard, loadDraftGuard };`)(uni);
+  return { api, storage };
+}
+
+test('uni-app Android 手机端将旧单设备配置一次性迁移为设备仓库', () => {
+  const runtime = loadMobileConfig({
+    'codexMobile.config': { serverUrl: ' http://relay.example/ ', token: ' token-a ' },
+    'codexMobile.selection': { projectName: 'project-a', threadId: 'thread-a' },
+  });
+
+  const store = runtime.api.loadDeviceStore();
+  assert.equal(store.version, 1);
+  assert.equal(store.devices.length, 1);
+  assert.equal(store.devices[0].name, '我的电脑');
+  assert.equal(store.devices[0].serverUrl, 'http://relay.example');
+  assert.equal(store.devices[0].token, 'token-a');
+  assert.deepEqual(runtime.api.loadSelection(store.devices[0].id), { projectName: 'project-a', threadId: 'thread-a' });
+  assert.equal(runtime.storage['codexMobile.config'], undefined);
+  assert.equal(runtime.storage['codexMobile.selection'], undefined);
+});
+
+test('uni-app Android 手机端设备增删改和对话选择按内部 ID 隔离', () => {
+  const runtime = loadMobileConfig();
+  const first = runtime.api.saveDevice({ name: '办公室', serverUrl: 'http://office/', token: 'office-token' });
+  const second = runtime.api.saveDevice({ name: '家里', serverUrl: 'http://home', token: 'home-token' });
+  runtime.api.saveSelection(first.id, { projectName: 'office-project', threadId: 'office-thread' });
+  runtime.api.saveSelection(second.id, { projectName: 'home-project', threadId: 'home-thread' });
+  runtime.api.saveDeviceConnectionState(second.id, { online: true, agentOnline: true, checkedAt: '2026-08-12T00:00:00.000Z' });
+
+  runtime.api.setActiveDevice(second.id);
+  const renamed = runtime.api.saveDevice({ id: second.id, name: '家中电脑', serverUrl: 'http://home', token: 'home-token' });
+  assert.equal(renamed.lastConnection.online, true);
+  const edited = runtime.api.saveDevice({ id: second.id, name: '家中电脑', serverUrl: 'http://home-new/', token: 'home-token-new' });
+  assert.equal(edited.id, second.id);
+  assert.equal(edited.serverUrl, 'http://home-new');
+  assert.equal(edited.lastConnection, null);
+  assert.deepEqual(runtime.api.loadSelection(first.id), { projectName: 'office-project', threadId: 'office-thread' });
+  assert.deepEqual(runtime.api.loadSelection(second.id), { projectName: 'home-project', threadId: 'home-thread' });
+
+  const activeAfterDelete = runtime.api.removeDevice(second.id);
+  assert.equal(activeAfterDelete.id, first.id);
+  assert.equal(runtime.api.listDevices().length, 1);
+});
+
+test('uni-app Android 手机端设备仓库拒绝损坏新数据且不回退旧配置', () => {
+  const runtime = loadMobileConfig({
+    'codexMobile.devices.v1': { version: 1, devices: 'broken' },
+    'codexMobile.config': { serverUrl: 'http://legacy', token: 'legacy-token' },
+  });
+  assert.throws(() => runtime.api.loadDeviceStore(), /设备配置已损坏/);
+
+  const invalidActive = loadMobileConfig({
+    'codexMobile.devices.v1': {
+      version: 1,
+      activeDeviceId: 'missing-device',
+      devices: [{ id: 'device-a', name: '设备 A', serverUrl: 'http://a', token: 'token-a' }],
+      selections: {},
+    },
+  });
+  assert.throws(() => invalidActive.api.loadDeviceStore(), /当前设备无效/);
+});
+
 function listSourceFiles(dir) {
   const files = [];
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -35,11 +106,14 @@ test('uni-app Android 手机端工程包含必要入口和默认连接配置', (
   assert.equal(fs.existsSync(path.join(appDir, 'package.json')), false);
   assert.equal(fs.existsSync(path.join(appDir, 'node_modules')), false);
   assert.equal(manifest.vueVersion, '3');
+  assert.equal(manifest.versionName, '0.2.0');
+  assert.equal(manifest.versionCode, 200);
   assert.equal(manifest['app-plus'].distribute.android.packagename, 'io.github.codexbridge.mobile');
   assert.equal(manifest['app-plus'].distribute.android.usesCleartextTraffic, true);
   assert.deepEqual(pages.pages.map(page => page.path), ['pages/index/index', 'pages/settings/settings']);
-  assert.match(config, /serverUrl:\s*''/);
-  assert.match(config, /token:\s*''/);
+  assert.match(config, /DEVICE_STORE_KEY = 'codexMobile\.devices\.v1'/);
+  assert.match(config, /export function loadDeviceStore\(\)/);
+  assert.match(config, /export function saveDevice\(input\)/);
   assert.match(index, /function hasConnectionConfig\(\)/);
   assert.match(index, /function markConfigMissing\(\)/);
   assert.match(index, /getThreads/);
@@ -66,12 +140,43 @@ test('uni-app Android 手机端控制区和按钮布局稳定', () => {
   const settings = fs.readFileSync(path.join(appDir, 'pages', 'settings', 'settings.vue'), 'utf8');
 
   assert.match(index, /class="control-panel"/);
+  assert.match(index, /class="device-nav"/);
+  assert.match(index, /class="device-switcher"/);
   assert.match(index, /\.page\s*\{[\s\S]*display:\s*flex;[\s\S]*height:\s*100vh;[\s\S]*overflow:\s*hidden;/);
   assert.match(index, /\.messages\s*\{[\s\S]*flex:\s*1 1 auto;[\s\S]*height:\s*0;/);
   assert.doesNotMatch(index, /\.composer\s*\{[\s\S]*position:\s*fixed;/);
   assert.match(app, /button\s*\{[\s\S]*display:\s*flex;[\s\S]*align-items:\s*center;[\s\S]*justify-content:\s*center;/);
   assert.match(app, /button::after\s*\{[\s\S]*border:\s*0;/);
-  assert.match(settings, /\.primary,\s*\n\.secondary\s*\{[\s\S]*display:\s*flex;[\s\S]*align-items:\s*center;[\s\S]*justify-content:\s*center;/);
+  assert.match(settings, /\.add-button,[\s\S]*\.primary,[\s\S]*\.secondary\s*\{[\s\S]*display:\s*flex;[\s\S]*align-items:\s*center;[\s\S]*justify-content:\s*center;/);
+});
+
+test('uni-app Android 手机端顶部只切换已有设备且草稿阻止切换', () => {
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+  const settings = fs.readFileSync(path.join(appDir, 'pages', 'settings', 'settings.vue'), 'utf8');
+  const pages = JSON.parse(fs.readFileSync(path.join(appDir, 'pages.json'), 'utf8'));
+
+  assert.equal(pages.pages[0].style.navigationStyle, 'custom');
+  assert.match(index, /const devicePopupOpen = ref\(false\)/);
+  assert.match(index, /v-for="device in deviceRows"/);
+  assert.match(index, /async function switchDevice\(deviceId\)/);
+  assert.match(index, /if \(messageText\.value\.trim\(\)\) \{[\s\S]*请先发送或清空草稿[\s\S]*return;/);
+  assert.match(index, /uni\.showToast\(\{ title: '请先发送或清空草稿', icon: 'none' \}\)/);
+  assert.match(index, /try \{[\s\S]*stopTimers\(\);[\s\S]*abortRequestTasks\(\);[\s\S]*resetDeviceViewState\(\);[\s\S]*setActiveDevice\(id\)[\s\S]*finally \{[\s\S]*switchingDevice\.value = false;/);
+  assert.match(index, /onMounted\(async \(\) => \{[\s\S]*saveDraftGuard\(activeDeviceId\.value, false\);/);
+  assert.match(settings, /@click="beginCreate">添加设备/);
+  assert.match(settings, /function confirmRemove\(device\)/);
+  assert.match(settings, /uni\.showModal\(/);
+});
+
+test('uni-app Android 手机端异步任务按生命周期和设备 ID 双重隔离', () => {
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+  const canUpdateTask = index.match(/function canUpdateTask\(token\) \{[\s\S]*?\n\}/)?.[0] || '';
+  const realtime = index.match(/function openRealtimeSocket\(\) \{[\s\S]*?\n\}/)?.[0] || '';
+
+  assert.match(index, /return \{ lifecycle: lifecycleToken, deviceId: activeDeviceId\.value \};/);
+  assert.match(canUpdateTask, /token\.lifecycle === lifecycleToken/);
+  assert.match(canUpdateTask, /token\.deviceId === activeDeviceId\.value/);
+  assert.match(index, /function openRealtimeSocket\(\)[\s\S]*realtimeSocket !== socket/);
 });
 
 test('uni-app Android 手机端紧凑展示服务器、Agent 和对话三种状态', () => {
@@ -477,9 +582,9 @@ test('uni-app Android 手机端切换对话时显示等待 UI 并防止旧请求
 
   assert.match(index, /const switchingThread = ref\(false\)/);
   assert.match(index, /let switchRequestSeq = 0;/);
-  assert.match(index, /v-if="switchingThread" class="switch-loading"/);
+  assert.match(index, /v-if="switchingThread \|\| switchingDevice" class="switch-loading"/);
   assert.match(index, /正在载入对话/);
-  assert.match(index, /:disabled="loading \|\| switchingThread"/);
+  assert.match(index, /:disabled="loading \|\| switchingThread \|\| switchingDevice"/);
   assert.match(index, /:disabled="!canSend"/);
   assert.match(index, /const requestSeq = switchRequestSeq \+ 1;/);
   assert.match(index, /switchingThread\.value = true;/);
@@ -551,7 +656,8 @@ test('uni-app Android 手机端隐藏或销毁后停止轮询并阻止异步回�
   assert.match(index, /function abortRequestTasks\(\)/);
   assert.match(index, /task\.abort\(\)/);
   assert.match(index, /function canUpdateTask\(token\)/);
-  assert.match(index, /token === lifecycleToken/);
+  assert.match(index, /token\.lifecycle === lifecycleToken/);
+  assert.match(index, /token\.deviceId === activeDeviceId\.value/);
   assert.match(index, /function activatePage\(\)/);
   assert.match(index, /function deactivatePage\(\)/);
   assert.match(index, /switchRequestSeq \+= 1;/);
@@ -634,9 +740,12 @@ test('uni-app Android 设置页测试连接离开页面时取消请求', () => {
   assert.match(settings, /function registerRequestTask\(task\)/);
   assert.match(settings, /function unregisterRequestTask\(task\)/);
   assert.match(settings, /function deactivatePage\(\)/);
+  assert.match(settings, /testingDeviceId\.value = '';/);
+  assert.match(settings, /testingForm\.value = false;/);
   assert.match(settings, /task\.abort\(\)/);
   assert.match(settings, /function activatePage\(\)/);
-  assert.match(settings, /getHealth\(config, \{ registerTask: registerRequestTask, unregisterTask: unregisterRequestTask \}\)/);
+  assert.match(settings, /getHealth\(device, \{ registerTask: registerRequestTask, unregisterTask: unregisterRequestTask \}\)/);
+  assert.match(settings, /getHealth\(input, \{ registerTask: registerRequestTask, unregisterTask: unregisterRequestTask \}\)/);
   assert.match(settings, /if \(!pageActive\) return;/);
   assert.match(settings, /onHide\(\(\) => \{[\s\S]*deactivatePage\(\);[\s\S]*\}\);/);
   assert.match(settings, /onShow\(\(\) => \{[\s\S]*activatePage\(\);[\s\S]*\}\);/);

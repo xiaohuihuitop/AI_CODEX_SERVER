@@ -25,11 +25,15 @@ desktop/  Windows 桌面管理器和 Agent
 Token：token_replace_with_random_value
 ```
 
-App 内可以在“连接设置”页修改服务器地址和 token，配置保存在手机本地。
+App 内可以在“设备设置”页管理多台电脑。每台电脑保存设备名称、服务器地址和独立 Token，配置只保存在手机本地。
+
+旧版本保存的单设备配置会在首次启动时迁移为“我的电脑”，并保留最后选择的项目和对话。
 
 ## 首版功能
 
 - 检测服务器和电脑 Agent 在线状态
+- 首页顶部切换已保存设备
+- 设置页新增、编辑、删除和测试设备连接
 - 按文件夹和对话二级选择 Codex 线程
 - 同步当前对话历史
 - 渲染常用 Markdown
@@ -37,6 +41,15 @@ App 内可以在“连接设置”页修改服务器地址和 token，配置保�
 - 发送消息到电脑端 Codex
 - 对话运行中允许停止
 - 手动刷新时保留当前阅读位置
+
+## 多设备切换规则
+
+- 首页顶部弹窗只负责切换已有设备，设备管理统一放在设置页。
+- 一台电脑使用一个 Token，同一个 Token 不同时连接多台 Agent。
+- 每台设备独立保存最后选择的项目和对话。
+- 切换设备时先终止旧设备请求、轮询和实时连接，再读取目标设备数据。
+- 输入框存在未发送草稿时禁止切换，并提示“请先发送或清空草稿”。
+- 切换失败时停留在目标设备的错误状态，不自动回退或尝试其他 Token。
 
 ## 目录结构
 
@@ -59,7 +72,7 @@ app/
 
 在 HBuilderX 中导入 `app` 目录后，直接执行运行到 Android 或 Android App 打包。
 
-当前 `manifest.json` 里的 AppID 是临时占位值 `__UNI__CODEXBRIDGE`。如果 HBuilderX 发行时报 `appid 不存在，请在 manifest.json 中重新获取`，需要在 HBuilderX 的 manifest 可视化页面重新获取真实 DCloud AppID 后再打包。
+当前 `manifest.json` 已配置 DCloud AppID `__UNI__EC972AA`。如复制为新的独立应用，需要在 HBuilderX 的 manifest 可视化页面获取自己的 AppID 后再发行。
 
 ## 当前服务器接口
 

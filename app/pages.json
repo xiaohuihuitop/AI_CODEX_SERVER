@@ -3,15 +3,13 @@
     {
       "path": "pages/index/index",
       "style": {
-        "navigationBarTitleText": "Codex 手机端",
-        "navigationBarBackgroundColor": "#ffffff",
-        "navigationBarTextStyle": "black"
+        "navigationStyle": "custom"
       }
     },
     {
       "path": "pages/settings/settings",
       "style": {
-        "navigationBarTitleText": "连接设置",
+        "navigationBarTitleText": "设备设置",
         "navigationBarBackgroundColor": "#ffffff",
         "navigationBarTextStyle": "black"
       }
