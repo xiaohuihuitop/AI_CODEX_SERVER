@@ -222,9 +222,16 @@ function probePortAvailable(port) {
   });
 }
 
-async function activateCodexApplication(app, args) {
+/**
+ * AI:生成通过 Windows ApplicationActivationManager 激活 Codex Desktop 的 PowerShell 脚本。
+ *
+ * @param {object} app Codex Desktop 应用包信息。
+ * @param {string[]} args 传递给官方客户端的启动参数。
+ * @returns {string} 可直接交给 PowerShell 执行的激活脚本。
+ */
+function buildActivateCodexApplicationScript(app, args) {
   const argumentLine = args.map(quoteWindowsArgument).join(' ');
-  const script = `
+  return `
 $ErrorActionPreference = 'Stop'
 $code = @'
 using System;
@@ -249,9 +256,13 @@ public static class CodexActivationHelper {
 }
 '@
 Add-Type -TypeDefinition $code
-$pid = [CodexActivationHelper]::Activate(${quotePowerShell(app.appUserModelId)}, ${quotePowerShell(argumentLine)})
-[pscustomobject]@{ ProcessId = $pid } | ConvertTo-Json -Compress
+$activatedProcessId = [CodexActivationHelper]::Activate(${quotePowerShell(app.appUserModelId)}, ${quotePowerShell(argumentLine)})
+[pscustomobject]@{ ProcessId = $activatedProcessId } | ConvertTo-Json -Compress
 `;
+}
+
+async function activateCodexApplication(app, args) {
+  const script = buildActivateCodexApplicationScript(app, args);
   const parsed = parsePowerShellJson(await runPowerShell(script, { timeoutMs: 20000 }));
   return { pid: Number(parsed && parsed.ProcessId || 0) };
 }
@@ -366,6 +377,7 @@ class ControlledCodexProcess {
 
 module.exports = {
   DEFAULT_DEBUG_PORT,
+  buildActivateCodexApplicationScript,
   buildProcessTreeSnapshot,
   ControlledCodexProcess,
   activateCodexApplication,

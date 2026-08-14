@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
+  buildActivateCodexApplicationScript,
   buildProcessTreeSnapshot,
   ControlledCodexProcess,
   parsePowerShellJson,
@@ -71,6 +72,17 @@ test('非 ESRCH 的进程终止错误必须报告具体 PID', async () => {
     }),
     error => error.code === 'CODEX_PROCESS_TREE_TERMINATION_FAILED' && /PID 50268/.test(error.message),
   );
+});
+
+test('应用激活脚本不覆盖 PowerShell 只读 PID 自动变量', () => {
+  const script = buildActivateCodexApplicationScript(APP, [
+    '--remote-debugging-port=9230',
+    '--remote-debugging-address=127.0.0.1',
+  ]);
+
+  assert.doesNotMatch(script, /\$pid\s*=/i);
+  assert.match(script, /\$activatedProcessId\s*=\s*\[CodexActivationHelper\]::Activate/);
+  assert.match(script, /ProcessId\s*=\s*\$activatedProcessId/);
 });
 
 test('受控进程从 Appx manifest 结果识别当前 ChatGPT 主进程', async () => {

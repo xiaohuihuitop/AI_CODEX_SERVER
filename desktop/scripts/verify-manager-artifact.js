@@ -92,6 +92,8 @@ function verifyManagerArtifact() {
   if (!/desktopController\.sendMessage\(threadId, text\)/.test(api)) fail('桌面 API 未通过官方界面发送消息');
   if (!/desktopController\.stop\(threadId\)/.test(api)) fail('桌面 API 未通过官方界面停止回合');
   if (!/ApplicationActivationManager/.test(processSource)) fail('未使用 Windows 应用激活接口启动官方 Codex');
+  if (/\$pid\s*=/i.test(processSource)) fail('应用激活脚本覆盖了 PowerShell 只读 PID 自动变量');
+  if (!/\$activatedProcessId\s*=\s*\[CodexActivationHelper\]::Activate/.test(processSource)) fail('应用激活脚本未使用独立变量保存进程 ID');
   if (!/buildProcessTreeSnapshot/.test(processSource) || !/terminateProcessTree/.test(processSource) || !/SIGKILL/.test(processSource)) fail('未按进程树逐 PID 终止官方 Codex');
   if (/taskkill\.exe|PackageDebugSettings|CloseMainWindow|Stop-Process/.test(processSource)) fail('受控重启仍包含不可靠的进程退出方式');
   if (!/waitForPortRelease/.test(processSource) || !/exclusive: true/.test(processSource)) fail('受控重启缺少 CDP 端口释放门禁');

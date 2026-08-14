@@ -72,6 +72,8 @@ test('正式入口只允许受控官方 Codex Desktop 作为会话控制面', ()
   const controllerSource = fs.readFileSync(path.join(desktopDir, 'src', 'codex-desktop-ui-controller.js'), 'utf8');
   assert.match(processSource, /remote-debugging-port/);
   assert.match(processSource, /ApplicationActivationManager/);
+  assert.doesNotMatch(processSource, /\$pid\s*=/i);
+  assert.match(processSource, /\$activatedProcessId\s*=\s*\[CodexActivationHelper\]::Activate/);
   assert.match(processSource, /buildProcessTreeSnapshot/);
   assert.match(processSource, /terminateProcessTree/);
   assert.match(processSource, /SIGKILL/);
