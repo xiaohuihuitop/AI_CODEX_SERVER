@@ -93,8 +93,10 @@ function verifyManagerArtifact() {
   if (!/desktopController\.stop\(threadId\)/.test(api)) fail('桌面 API 未通过官方界面停止回合');
   if (!/ApplicationActivationManager/.test(processSource)) fail('未使用 Windows 应用激活接口启动官方 Codex');
   if (!/remote-debugging-port/.test(processSource)) fail('受控 Codex 启动未配置 CDP 端口');
+  if (/readCodexDraft|CODEX_DRAFT_(?:UNKNOWN|EXISTS)/.test(processSource)) fail('受控重启仍包含不可靠的草稿自动检查');
   if (/processManager\.restart\(/.test(runtimeSource)) fail('Agent 运行时仍会隐式重启官方 Codex');
   if (!/manager:restart-codex/.test(electronMain)) fail('管理器缺少独立 Codex 重启操作');
+  if (!/丢弃未发送草稿/.test(electronMain)) fail('Codex 重启确认框未明确提示草稿风险');
   if (!/restartCodex/.test(electronPreload)) fail('渲染层未暴露独立 Codex 重启操作');
   if (!/重启 Codex 启用 CDP/.test(electronHtml)) fail('管理器缺少独立 Codex 重启按钮');
   if (!/data-app-action-sidebar-thread-id/.test(controllerSource)) fail('官方界面控制未按 threadId 精确定位');

@@ -66,37 +66,37 @@ test('受控启动拒绝非 Codex 进程占用配置端口', async () => {
   );
 });
 
-test('受控启动检测到本地草稿时拒绝关闭 Codex', async () => {
+test('用户确认受控重启后不再执行不可靠的草稿自动检查', async () => {
+  let draftReadCount = 0;
   let stopped = false;
+  let launched = false;
   const process = new ControlledCodexProcess({
     platform: 'win32',
     packageResolver: async () => APP,
-    processResolver: async () => [{ pid: 120, executablePath: APP.executablePath, commandLine: '' }],
+    processResolver: async () => {
+      if (launched) return [{ pid: 220, executablePath: APP.executablePath, commandLine: ' --remote-debugging-port=9230' }];
+      if (stopped) return [];
+      return [{ pid: 120, executablePath: APP.executablePath, commandLine: '' }];
+    },
     portOwnerResolver: async () => null,
-    draftReader: async () => ({ inspected: true, text: '尚未发送' }),
+    draftReader: async () => {
+      draftReadCount += 1;
+      return { inspected: false, text: '' };
+    },
     processStopper: async () => { stopped = true; },
+    launcher: async () => {
+      launched = true;
+      return { pid: 220 };
+    },
+    cdpProbe: async () => ({ ok: true, targetCount: 1, message: '' }),
+    sleep: async () => {},
   });
 
-  await assert.rejects(
-    () => process.restart({ debugPort: 9230 }),
-    error => error.code === 'CODEX_DRAFT_EXISTS',
-  );
-  assert.equal(stopped, false);
-});
+  const result = await process.restart({ debugPort: 9230, waitTimeoutMs: 100 });
 
-test('受控启动无法确认草稿状态时拒绝关闭 Codex', async () => {
-  const process = new ControlledCodexProcess({
-    platform: 'win32',
-    packageResolver: async () => APP,
-    processResolver: async () => [{ pid: 120, executablePath: APP.executablePath, commandLine: '' }],
-    portOwnerResolver: async () => null,
-    draftReader: async () => ({ inspected: false, text: '' }),
-  });
-
-  await assert.rejects(
-    () => process.restart({ debugPort: 9230 }),
-    error => error.code === 'CODEX_DRAFT_UNKNOWN',
-  );
+  assert.equal(result.ok, true);
+  assert.equal(stopped, true);
+  assert.equal(draftReadCount, 0);
 });
 
 test('受控启动只停止目标包进程并通过 AUMID 传递 CDP 参数', async () => {
@@ -112,7 +112,6 @@ test('受控启动只停止目标包进程并通过 AUMID 传递 CDP 参数', as
       return [{ pid: 120, executablePath: APP.executablePath, commandLine: '' }];
     },
     portOwnerResolver: async () => null,
-    draftReader: async () => ({ inspected: true, text: '' }),
     processStopper: async (app, processes) => {
       calls.push(['stop', app.appUserModelId, processes.map(item => item.pid)]);
       stopped = true;

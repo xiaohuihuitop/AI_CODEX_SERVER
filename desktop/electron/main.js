@@ -249,7 +249,7 @@ ipcMain.handle('manager:restart-codex', async () => {
     type: 'warning',
     title: '重启官方 Codex Desktop',
     message: `重启官方 Codex Desktop 以启用 CDP ${normalized.debugPort}？`,
-    detail: '管理器会先检查未发送草稿。存在草稿或无法确认草稿状态时，将拒绝关闭 Codex。',
+    detail: '重启会关闭当前官方 Codex Desktop，并丢弃未发送草稿。请确认草稿已经发送或清空。',
     buttons: ['取消', '重启 Codex'],
     defaultId: 0,
     cancelId: 0,

@@ -89,7 +89,7 @@ npm run start:manager:gui
 设备名称：home-pc
 ```
 
-首次使用先点击“重启 Codex 启用 CDP”，确认草稿检查通过并等待官方 Codex Desktop 重新打开；随后点击“启动功能”启动 Agent、云端连接和会话同步。以后 CDP 已经可用时，“启动功能”只启动 Agent，不会关闭或重启官方 Codex Desktop。
+首次使用先点击“重启 Codex 启用 CDP”，确认未发送草稿风险并等待官方 Codex Desktop 重新打开；随后点击“启动功能”启动 Agent、云端连接和会话同步。以后 CDP 已经可用时，“启动功能”只启动 Agent，不会关闭或重启官方 Codex Desktop。
 
 ### 3. 启动 Android 手机端
 

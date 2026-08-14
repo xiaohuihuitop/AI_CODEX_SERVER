@@ -20,7 +20,7 @@ await runtime.getThreadRuntime(threadId);
 
 - `start()`：只连接已经存在的 CDP。当前官方主进程持有配置端口且 `/json/list` 返回目标页面时直接复用；不得依赖 Appx 主进程命令行是否保留 CDP 参数，也不得关闭或重启官方客户端。
 - 管理器“启动功能”：只启动或重连 Agent、Relay 和会话同步，并调用上述连接逻辑。
-- 管理器“重启 Codex 启用 CDP”：唯一允许重启官方客户端的显式入口；必须由用户确认，并在草稿安全检查通过后执行。
+- 管理器“重启 Codex 启用 CDP”：唯一允许重启官方客户端的显式入口；确认框必须明确提示未发送草稿风险，用户确认后直接执行，不再使用 UI Automation 猜测草稿状态。
 - `sendMessage(threadId, text)`：按 `threadId` 精确选择官方侧栏线程，点击前精确核对编辑器正文，点击后等待目标 JSONL 新 `task_started/turnId` 证据。
 - `stop(threadId)`：按 `threadId` 精确选择线程，点击官方停止按钮，并等待目标 JSONL `turn_aborted` 证据。
 - `getThreadRuntime(threadId)`：只读取当前已选线程的官方运行态；不得为了状态轮询切换电脑界面。
@@ -54,8 +54,6 @@ await runtime.getThreadRuntime(threadId);
 | 配置端口被非目标官方进程占用 | `CDP_PORT_OCCUPIED`；不得终止未知进程或自动换端口 |
 | 官方实例无正确 CDP 参数 | `CDP_NOT_READY`；Agent 保持运行并继续探测，提示用户显式点击“重启 Codex 启用 CDP” |
 | 当前官方实例持有可用 CDP，但命令行未显示参数 | 直接复用，不得重启 |
-| 存在草稿 | `CODEX_DRAFT_EXISTS`；不得关闭官方客户端 |
-| 无法确认草稿 | `CODEX_DRAFT_UNKNOWN`；不得关闭官方客户端 |
 | AUMID 启动后 CDP 未就绪 | `CDP_START_FAILED` |
 | 侧栏无精确 `threadId` | `THREAD_ROW_NOT_FOUND`；不得按标题选择 |
 | 切换后选中 ID 不一致 | `THREAD_SELECTION_FAILED` |
@@ -76,7 +74,7 @@ await runtime.getThreadRuntime(threadId);
 
 ### 6. 必需测试
 
-- `server/test/controlled-codex-process.test.js`：Appx 发现、端口所有权、草稿保护、AUMID 启动和 CDP 参数。
+- `server/test/controlled-codex-process.test.js`：Appx 发现、端口所有权、显式确认后的直接重启、AUMID 启动和 CDP 参数。
 - `server/test/codex-cdp-client.test.js`：持久连接、请求 ID、断线和协议错误。
 - `server/test/codex-desktop-ui-controller.test.js`：精确 threadId、草稿、发送、停止及不切换式状态读取。
 - `server/test/codex-session-evidence.test.js`：目标消息时间边界和停止证据。

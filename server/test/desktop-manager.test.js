@@ -129,7 +129,7 @@ test('桌面管理器统一使用固定目录、固定名称并展示版本', ()
 
   assert.equal(pkg.build.directories.output, 'dist');
   assert.equal(pkg.productName, 'Codex Desktop 管理器');
-  assert.equal(pkg.version, '0.3.3');
+  assert.equal(pkg.version, '0.3.4');
   assert.match(main, /const MANAGER_VERSION = app\.getVersion\(\)/);
   assert.match(main, /Codex Desktop 管理器 v\$\{MANAGER_VERSION\} 已启动/);
   assert.match(html, /id="managerVersion"/);
@@ -304,6 +304,8 @@ test('Electron 重启 Codex 操作与启动 Agent 独立并带用户确认', () 
 
   assert.match(electronMain, /manager:restart-codex/);
   assert.match(electronMain, /dialog\.showMessageBox/);
+  assert.match(electronMain, /丢弃未发送草稿/);
+  assert.doesNotMatch(electronMain, /会先检查未发送草稿/);
   assert.match(electronMain, /controlledCodexProcess\.restart\(\{ debugPort: normalized\.debugPort \}\)/);
   assert.match(preload, /restartCodex/);
   assert.match(renderer, /restartCodexButton/);

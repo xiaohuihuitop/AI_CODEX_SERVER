@@ -110,25 +110,6 @@ async function resolvePortOwner(port) {
   } : null;
 }
 
-async function readCodexDraft() {
-  const script = `
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
-$main = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Path -and $_.Path.EndsWith('\\app\\ChatGPT.exe') } | Select-Object -First 1
-if ($null -eq $main) { [pscustomobject]@{ Inspected = $true; Text = '' } | ConvertTo-Json -Compress; return }
-$root = [System.Windows.Automation.AutomationElement]::FromHandle($main.MainWindowHandle)
-$condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty, 'text')
-$editor = $root.FindFirst([System.Windows.Automation.TreeScope]::Descendants, $condition)
-if ($null -eq $editor) { [pscustomobject]@{ Inspected = $false; Text = '' } | ConvertTo-Json -Compress; return }
-$pattern = $null
-$text = ''
-if ($editor.TryGetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern, [ref]$pattern)) { $text = [string]$pattern.Current.Value }
-[pscustomobject]@{ Inspected = $true; Text = $text } | ConvertTo-Json -Compress
-`;
-  const parsed = parsePowerShellJson(await runPowerShell(script));
-  return { inspected: Boolean(parsed && parsed.Inspected), text: String(parsed && parsed.Text || '') };
-}
-
 async function stopCodexProcesses(_app, processes) {
   const ids = processes.map(item => Number(item.pid)).filter(Number.isInteger);
   if (!ids.length) return;
@@ -208,7 +189,6 @@ class ControlledCodexProcess {
     this.packageResolver = options.packageResolver || resolveCodexDesktopPackage;
     this.processResolver = options.processResolver || resolveCodexProcesses;
     this.portOwnerResolver = options.portOwnerResolver || resolvePortOwner;
-    this.draftReader = options.draftReader || readCodexDraft;
     this.processStopper = options.processStopper || stopCodexProcesses;
     this.launcher = options.launcher || activateCodexApplication;
     this.cdpProbe = options.cdpProbe || probeCdp;
@@ -236,9 +216,6 @@ class ControlledCodexProcess {
       throw processError(`CDP 端口 ${debugPort} 已被其他进程占用：PID ${owner.pid}`, 'CDP_PORT_OCCUPIED');
     }
     if (state.processes.length) {
-      const draft = await this.draftReader(state.app);
-      if (!draft || !draft.inspected) throw processError('无法确认 Codex Desktop 草稿状态，已拒绝重启。', 'CODEX_DRAFT_UNKNOWN');
-      if (String(draft.text || '').trim()) throw processError('Codex Desktop 存在未发送草稿，已拒绝重启。', 'CODEX_DRAFT_EXISTS');
       await this.processStopper(state.app, state.processes);
       await this.waitForExit(state.app, Number(options.exitTimeoutMs) || 10000);
     }
@@ -289,7 +266,6 @@ module.exports = {
   activateCodexApplication,
   parsePowerShellJson,
   probeCdp,
-  readCodexDraft,
   resolveCodexDesktopPackage,
   resolveCodexProcesses,
   resolvePortOwner,
