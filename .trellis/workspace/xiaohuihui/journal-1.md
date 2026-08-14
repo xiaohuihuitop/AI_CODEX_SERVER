@@ -226,3 +226,24 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 10: 修复手机发送超时回填与控制确认
+
+**Date**: 2026-08-15
+**Task**: 修复手机发送超时回填与控制确认
+**Branch**: `master`
+
+### Summary
+
+拆分 Relay 传输受理和 Agent 业务确认，桌面副作用命令改用独立 CDP 会话；修复手机与 Web 将本地临时气泡误判为权威历史的问题。218 项测试、静态检查、管理器产物和浏览器完整发送链路通过。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `dce6794` | (see git log) |
+
+### Status
+
+[OK] **Completed**

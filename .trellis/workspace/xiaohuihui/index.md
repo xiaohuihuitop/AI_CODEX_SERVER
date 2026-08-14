@@ -8,8 +8,8 @@
 
 <!-- @@@auto:current-status -->
 - **Active File**: `journal-1.md`
-- **Total Sessions**: 9
-- **Last Active**: 2026-08-14
+- **Total Sessions**: 10
+- **Last Active**: 2026-08-15
 <!-- @@@/auto:current-status -->
 
 ---
@@ -19,7 +19,7 @@
 <!-- @@@auto:active-documents -->
 | File | Lines | Status |
 |------|-------|--------|
-| `journal-1.md` | ~228 | Active |
+| `journal-1.md` | ~249 | Active |
 <!-- @@@/auto:active-documents -->
 
 ---
@@ -29,6 +29,7 @@
 <!-- @@@auto:session-history -->
 | # | Date | Title | Commits | Branch |
 |---|------|-------|---------|--------|
+| 10 | 2026-08-15 | 修复手机发送超时回填与控制确认 | `dce6794` | `master` |
 | 9 | 2026-08-14 | 修复 Codex 激活成功后的界面误报 | `d2680bd` | `master` |
 | 8 | 2026-08-14 | 修复官方 Codex 进程树重启 | `05f54c2` | `master` |
 | 7 | 2026-08-14 | 拆分 Agent 启动与 Codex CDP 重启 | `d3b315a` | `master` |
