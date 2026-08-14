@@ -6,11 +6,9 @@ test('JSONL 确认器等待目标线程出现发送后的新回合', async () =>
   let reads = 0;
   const evidence = new CodexSessionEvidence({
     reader: {
-      parseStatus: () => {
+      findTurnStartedSince: () => {
         reads += 1;
-        return {
-          turns: reads === 1 ? [] : [{ turnId: 'turn-1', startedAt: '2026-08-12T01:00:01.000Z' }],
-        };
+        return reads === 1 ? null : { turnId: 'turn-1', observedAt: '2026-08-12T01:00:01.000Z' };
       },
     },
     sleep: async () => {},
@@ -25,7 +23,7 @@ test('JSONL 确认器等待目标线程出现发送后的新回合', async () =>
 
 test('JSONL 确认器不接受控制开始时间之前的旧回合', async () => {
   const evidence = new CodexSessionEvidence({
-    reader: { parseStatus: () => ({ turns: [{ turnId: 'old', startedAt: '2026-08-12T00:59:00.000Z' }] }) },
+    reader: { findTurnStartedSince: () => null },
     sleep: async () => {},
     timeoutMs: 5,
   });
@@ -39,15 +37,16 @@ test('JSONL 确认器等待目标线程从运行转为停止', async () => {
   let reads = 0;
   const evidence = new CodexSessionEvidence({
     reader: {
-      parseStatus: () => {
+      findTurnAbortedSince: () => {
         reads += 1;
-        return reads === 1
-          ? { status: 'running', turns: [{ status: 'running' }] }
-          : { status: 'complete', turns: [{ status: 'interrupted' }] };
+        return reads === 1 ? null : { status: 'interrupted', observedAt: '2026-08-12T01:00:01.000Z' };
       },
     },
     sleep: async () => {},
     timeoutMs: 100,
   });
-  assert.deepEqual(await evidence.waitForStopped('thread-1'), { status: 'interrupted' });
+  assert.deepEqual(await evidence.waitForStopped('thread-1'), {
+    status: 'interrupted',
+    observedAt: '2026-08-12T01:00:01.000Z',
+  });
 });

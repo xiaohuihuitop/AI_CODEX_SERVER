@@ -8,10 +8,11 @@ class DesktopAgentApi {
   /**
    * AI:创建面向受控官方 Codex Desktop 的控制 API。
    *
-   * @param {{reader?: object, desktopController?: object, listThreads?: Function, now?: Function}} options 本机线程、官方客户端控制器与目录依赖。
+   * @param {{reader?: object, queryReader?: object, desktopController?: object, listThreads?: Function, now?: Function}} options 本机线程、异步查询读取器、官方客户端控制器与目录依赖。
    */
   constructor(options = {}) {
     this.reader = options.reader || {};
+    this.queryReader = options.queryReader || this.reader;
     this.desktopController = options.desktopController;
     this.listThreadsProvider = options.listThreads;
     this.now = options.now || (() => Date.now());
@@ -70,13 +71,13 @@ class DesktopAgentApi {
    * @param {{threadId?: string, limit?: number|string, before?: number|string}} payload 历史分页参数。
    * @returns {object} 本机历史页。
    */
-  history(payload) {
+  async history(payload) {
     const threadId = String(payload.threadId || '').trim();
     if (!threadId) throw requestError('缺少对话标识。', 'THREAD_ID_REQUIRED', 400);
-    if (typeof this.reader.parseHistory !== 'function') {
+    if (typeof this.queryReader.parseHistory !== 'function') {
       throw requestError('本机历史读取器不可用。', 'HISTORY_READER_UNAVAILABLE', 503);
     }
-    return this.reader.parseHistory(threadId, payload.limit, payload.before);
+    return await this.queryReader.parseHistory(threadId, payload.limit, payload.before);
   }
 
   /**
@@ -88,10 +89,10 @@ class DesktopAgentApi {
   async status(payload) {
     const threadId = String(payload.threadId || '').trim();
     if (!threadId) throw requestError('缺少对话标识。', 'THREAD_ID_REQUIRED', 400);
-    if (typeof this.reader.parseStatus !== 'function') {
+    if (typeof this.queryReader.parseStatus !== 'function') {
       throw requestError('本机状态读取器不可用。', 'STATUS_READER_UNAVAILABLE', 503);
     }
-    const status = this.reader.parseStatus({ threadId, since: String(payload.since || '') });
+    const status = await this.queryReader.parseStatus({ threadId, since: String(payload.since || '') });
     if (!this.desktopController || typeof this.desktopController.getThreadRuntime !== 'function') {
       throw requestError('官方 Codex Desktop 控制器不可用。', 'CODEX_DESKTOP_CONTROL_UNAVAILABLE', 503);
     }

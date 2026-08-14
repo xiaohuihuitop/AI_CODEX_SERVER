@@ -339,6 +339,135 @@ function readTailJsonlLines(file, size, lineLimit) {
 }
 
 /**
+ * AI:从文件尾部反向读取完整回合，避免后台快照重复解析整份大型会话。
+ *
+ * @param {string} file JSONL 文件路径。
+ * @param {number} turnLimit 需要覆盖的最近回合数量。
+ * @returns {object[]} 按原始时间顺序排列的 JSONL 记录。
+ */
+function visitJsonlBackwards(file, visitor) {
+  const chunkSize = 256 * 1024;
+  let fd = null;
+  try {
+    const size = fs.statSync(file).size;
+    fd = fs.openSync(file, 'r');
+    let position = size;
+    let leadingFragment = Buffer.alloc(0);
+
+    while (position > 0) {
+      const start = Math.max(0, position - chunkSize);
+      const buffer = Buffer.alloc(position - start);
+      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, start);
+      const combined = Buffer.concat([buffer.subarray(0, bytesRead), leadingFragment]);
+      const parts = [];
+      let lineStart = 0;
+      for (let index = 0; index < combined.length; index += 1) {
+        if (combined[index] !== 0x0A) continue;
+        parts.push(combined.subarray(lineStart, index));
+        lineStart = index + 1;
+      }
+      parts.push(combined.subarray(lineStart));
+      leadingFragment = start > 0 ? Buffer.from(parts.shift() || Buffer.alloc(0)) : Buffer.alloc(0);
+      const items = parts
+        .filter(part => part.length)
+        .map(part => safeJson(part.toString('utf8')))
+        .filter(Boolean);
+      if (visitor(items) === false) return;
+      position = start;
+    }
+  } catch {
+    return;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
+/**
+ * AI:从文件尾部反向读取完整回合，避免后台快照重复解析整份大型会话。
+ *
+ * @param {string} file JSONL 文件路径。
+ * @param {number} turnLimit 需要覆盖的最近回合数量。
+ * @returns {object[]} 按原始时间顺序排列的 JSONL 记录。
+ */
+function readRecentTurnItems(file, turnLimit) {
+  const requiredTurns = Math.max(1, Number(turnLimit) || 1) + 1;
+  let turnCount = 0;
+  let userMessageCount = 0;
+  const chunks = [];
+  visitJsonlBackwards(file, items => {
+    chunks.unshift(items);
+    for (const item of items) {
+      const payload = item.payload || {};
+      if (item.type === 'event_msg' && payload.type === 'task_started') turnCount += 1;
+      if (item.type === 'event_msg' && payload.type === 'user_message') userMessageCount += 1;
+    }
+    return turnCount < requiredTurns || userMessageCount < requiredTurns;
+  });
+  return chunks.flat();
+}
+
+/**
+ * AI:从会话尾部查找最近事件，到达调用方给出的时间边界后立即停止。
+ *
+ * @param {string} file JSONL 文件路径。
+ * @param {(item: object) => boolean} matches 目标事件判断。
+ * @param {number} minimumTime 最早允许的事件时间戳。
+ * @returns {object|null} 最近匹配事件。
+ */
+function findRecentJsonlItem(file, matches, minimumTime = Number.NEGATIVE_INFINITY) {
+  let found = null;
+  visitJsonlBackwards(file, items => {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      const timestamp = Date.parse(String(item.timestamp || ''));
+      if (Number.isFinite(minimumTime) && Number.isFinite(timestamp) && timestamp < minimumTime) return false;
+      if (matches(item)) {
+        found = item;
+        return false;
+      }
+    }
+    return true;
+  });
+  return found;
+}
+
+/**
+ * AI:从已解析记录投影用户消息和最终回复，供完整分页与紧凑快照复用。
+ *
+ * @param {object[]} items JSONL 记录。
+ * @returns {Array<object>} 历史消息。
+ */
+function historyMessagesFromItems(items) {
+  const messages = [];
+  let currentTurnId = '';
+  for (const item of items || []) {
+    const payload = item.payload || {};
+    if (item.type === 'event_msg' && payload.type === 'user_message') {
+      const text = stripCodexUiDirectives(payload.message);
+      if (text) messages.push({ role: 'user', label: '你', text, timestamp: item.timestamp || '', turnId: currentTurnId });
+    }
+    if (item.type === 'event_msg' && payload.type === 'task_started') {
+      currentTurnId = String(payload.turn_id || payload.turnId || currentTurnId || '').trim();
+      const previousMessage = messages[messages.length - 1];
+      if (previousMessage && previousMessage.role === 'user' && !previousMessage.turnId) previousMessage.turnId = currentTurnId;
+    }
+    if (item.type === 'response_item' && payload.type === 'message' && payload.role === 'assistant' && payload.phase === 'final_answer') {
+      const text = messageText(payload.content);
+      if (text) messages.push({ role: 'assistant', label: 'Codex', text, timestamp: item.timestamp || '', turnId: currentTurnId });
+    }
+    if (item.type === 'event_msg' && payload.type === 'task_complete') {
+      currentTurnId = String(payload.turn_id || payload.turnId || currentTurnId || '').trim();
+      const text = stripCodexUiDirectives(payload.last_agent_message);
+      const last = messages[messages.length - 1];
+      if (text && !(last && last.role === 'assistant' && last.text === text)) {
+        messages.push({ role: 'assistant', label: 'Codex', text, timestamp: item.timestamp || '', turnId: currentTurnId });
+      }
+    }
+  }
+  return messages;
+}
+
+/**
  * 生成项目名和线程名的匹配键。
  *
  * @param {string} projectName Codex Desktop 项目名。
@@ -663,7 +792,33 @@ class CodexSessionReader {
    */
   discoverCatalogThreadSessions(threads, options = {}) {
     const values = Array.isArray(threads) ? threads : [];
-    const localById = new Map(this.discoverThreadSessions(Math.max(1000, values.length)).map(target => [target.threadId, target]));
+    const wantedIds = new Set(values.map(thread => String(thread && thread.id || '').trim()).filter(Boolean));
+    const indexedById = this.readIndex();
+    const localById = new Map();
+    for (const file of this.sessionFiles()) {
+      const threadId = threadIdFromSessionFile(file);
+      if (!wantedIds.has(threadId)) continue;
+      const stat = fs.statSync(file);
+      const previous = localById.get(threadId);
+      if (previous && previous.mtimeMs >= stat.mtimeMs) continue;
+      const cachedMeta = this.sessionMetaCache.get(file);
+      const meta = cachedMeta && cachedMeta.size === stat.size && cachedMeta.mtimeMs === stat.mtimeMs
+        ? cachedMeta.meta
+        : readSessionMeta(file);
+      this.sessionMetaCache.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, meta });
+      const indexed = indexedById.get(threadId) || { name: '', updatedAt: '' };
+      const cwd = String((meta.payload && meta.payload.cwd) || '').trim();
+      localById.set(threadId, {
+        threadId,
+        threadName: String(indexed.name || '').trim(),
+        projectName: projectNameFromCwd(cwd),
+        cwd,
+        file,
+        updatedAt: indexed.updatedAt || new Date(stat.mtimeMs).toISOString(),
+        sessionFile: path.basename(file),
+        mtimeMs: stat.mtimeMs,
+      });
+    }
     return values.map(thread => {
       const threadId = String(thread && thread.id || '').trim();
       const local = localById.get(threadId);
@@ -672,7 +827,7 @@ class CodexSessionReader {
       const catalogName = String(thread.name || thread.title || '').trim();
       const cwd = String(thread.cwd || '').trim() || local.cwd;
       return Object.assign({}, local, {
-        threadName: options.preferLocalName ? local.threadName || catalogName : catalogName || local.threadName,
+        threadName: (options.preferLocalName ? local.threadName || catalogName : catalogName || local.threadName) || '未命名线程',
         cwd,
         projectName: projectNameFromCwd(cwd),
         updatedAt: Number.isFinite(updatedAt) && updatedAt > 0
@@ -690,6 +845,25 @@ class CodexSessionReader {
    */
   discoverDesktopThreadSessions(threads) {
     return this.discoverCatalogThreadSessions(threads, { preferLocalName: true });
+  }
+
+  /**
+   * AI:生成最近完整回合的紧凑快照，读取量不随会话总文件大小增长。
+   *
+   * @param {object} target 会话同步目标。
+   * @param {number} messageLimit 最大消息回合数。
+   * @returns {{messages: Array<object>, status: object}} 紧凑会话快照。
+   */
+  createRecentSnapshot(target, messageLimit) {
+    const items = readRecentTurnItems(target.file, Math.max(messageLimit, 10));
+    const page = paginateMessagesByTurn(historyMessagesFromItems(items), messageLimit);
+    return {
+      messages: page.messages,
+      status: applyDesktopRuntimeStatus(
+        this.parseStatusItems({ threadId: target.threadId, file: target.file, items }),
+        target.desktopRuntime,
+      ),
+    };
   }
 
   /**
@@ -724,7 +898,7 @@ class CodexSessionReader {
       const desktopState = String((target.desktopRuntime && target.desktopRuntime.state) || 'unknown');
       const stateChanged = String((previous && previous.desktopState) || 'unknown') !== desktopState;
       const changed = reset || previousSize < stat.size || stateChanged;
-      if (snapshotMessageLimit && changed) {
+      if (snapshotMessageLimit && (reset || stateChanged)) {
         const remainingBytes = Math.max(0, syncByteLimit - syncedBytes);
         if (!remainingBytes) {
           if (reset) {
@@ -741,13 +915,7 @@ class CodexSessionReader {
           }
           continue;
         }
-        const snapshot = {
-          messages: this.parseHistory(target.threadId, snapshotMessageLimit).messages,
-          status: applyDesktopRuntimeStatus(
-            this.parseStatus({ threadId: target.threadId }),
-            target.desktopRuntime,
-          ),
-        };
+        const snapshot = this.createRecentSnapshot(target, snapshotMessageLimit);
         const snapshotBytes = Buffer.byteLength(JSON.stringify(snapshot), 'utf8');
         if (snapshotBytes <= remainingBytes) {
           const nextOffset = { size: stat.size, desktopState };
@@ -852,32 +1020,7 @@ class CodexSessionReader {
         nextBefore: '',
       };
     }
-    const messages = [];
-    let currentTurnId = '';
-    for (const item of readJsonl(file)) {
-      const payload = item.payload || {};
-      if (item.type === 'event_msg' && payload.type === 'user_message') {
-        const text = stripCodexUiDirectives(payload.message);
-        if (text) messages.push({ role: 'user', label: '你', text, timestamp: item.timestamp || '', turnId: currentTurnId });
-      }
-      if (item.type === 'event_msg' && payload.type === 'task_started') {
-        currentTurnId = String(payload.turn_id || payload.turnId || currentTurnId || '').trim();
-        const previousMessage = messages[messages.length - 1];
-        if (previousMessage && previousMessage.role === 'user' && !previousMessage.turnId) previousMessage.turnId = currentTurnId;
-      }
-      if (item.type === 'response_item' && payload.type === 'message' && payload.role === 'assistant' && payload.phase === 'final_answer') {
-        const text = messageText(payload.content);
-        if (text) messages.push({ role: 'assistant', label: 'Codex', text, timestamp: item.timestamp || '', turnId: currentTurnId });
-      }
-      if (item.type === 'event_msg' && payload.type === 'task_complete') {
-        currentTurnId = String(payload.turn_id || payload.turnId || currentTurnId || '').trim();
-        const text = stripCodexUiDirectives(payload.last_agent_message);
-        const last = messages[messages.length - 1];
-        if (text && !(last && last.role === 'assistant' && last.text === text)) {
-          messages.push({ role: 'assistant', label: 'Codex', text, timestamp: item.timestamp || '', turnId: currentTurnId });
-        }
-      }
-    }
+    const messages = historyMessagesFromItems(readJsonl(file));
     const page = paginateMessagesByTurn(messages, limit, before);
     return {
       ok: true,
@@ -889,6 +1032,45 @@ class CodexSessionReader {
       nextBefore: page.nextBefore,
       invalidCursor: Boolean(page.invalidCursor),
     };
+  }
+
+  /**
+   * AI:只从会话尾部确认指定时间后的新回合，供发送落盘证据轮询使用。
+   *
+   * @param {string} threadId 线程标识。
+   * @param {string} since 最早接受时间。
+   * @returns {{turnId: string, observedAt: string}|null} 新回合证据。
+   */
+  findTurnStartedSince(threadId, since = '') {
+    const file = this.findFileByThreadId(threadId);
+    if (!file) return null;
+    const minimumTime = Date.parse(String(since || ''));
+    const item = findRecentJsonlItem(file, candidate => {
+      const payload = candidate.payload || {};
+      return candidate.type === 'event_msg' && payload.type === 'task_started';
+    }, minimumTime);
+    if (!item) return null;
+    const payload = item.payload || {};
+    const turnId = String(payload.turn_id || payload.turnId || '').trim();
+    return turnId ? { turnId, observedAt: String(item.timestamp || '') } : null;
+  }
+
+  /**
+   * AI:只从会话尾部确认指定时间后的手动停止事件。
+   *
+   * @param {string} threadId 线程标识。
+   * @param {string} since 最早接受时间。
+   * @returns {{status: string, observedAt: string}|null} 停止证据。
+   */
+  findTurnAbortedSince(threadId, since = '') {
+    const file = this.findFileByThreadId(threadId);
+    if (!file) return null;
+    const minimumTime = Date.parse(String(since || ''));
+    const item = findRecentJsonlItem(file, candidate => {
+      const payload = candidate.payload || {};
+      return candidate.type === 'event_msg' && payload.type === 'turn_aborted';
+    }, minimumTime);
+    return item ? { status: 'interrupted', observedAt: String(item.timestamp || '') } : null;
   }
 
   /**
@@ -923,6 +1105,16 @@ class CodexSessionReader {
    * @returns {object} 状态结果。
    */
   parseStatus(options = {}) {
+    return this.parseStatusItems(options);
+  }
+
+  /**
+   * AI:从指定 JSONL 记录投影线程状态，供完整查询与最近回合快照复用。
+   *
+   * @param {{threadId?: string, since?: string, file?: string, items?: object[]}} options 状态解析参数。
+   * @returns {object} 状态结果。
+   */
+  parseStatusItems(options = {}) {
     const threadId = options.threadId || '';
     const sinceMs = Date.parse(options.since || '');
     const file = options.file || (threadId
@@ -1003,7 +1195,8 @@ class CodexSessionReader {
       turn.interruptionReason = enriched.reason || '用户停止';
     }
     };
-    for (const item of readJsonl(file)) {
+    const items = Array.isArray(options.items) ? options.items : readJsonl(file);
+    for (const item of items) {
       const payload = item.payload || {};
       const visible = included(item);
       if (item.type === 'turn_context') {

@@ -5,6 +5,7 @@ const { createCodexDesktopThreadCatalog } = require('./src/codex-desktop-thread-
 const { ControlledCodexRuntime } = require('./src/controlled-codex-runtime');
 const { reconcileDesktopCatalog } = require('./src/desktop-catalog-reconcile');
 const { CodexSessionReader } = require('./src/codex-session-reader');
+const { CodexSessionReaderWorkerClient } = require('./src/codex-session-reader-worker-client');
 const { AGENT_STATUS_HEARTBEAT_MS, writeAgentStatus } = require('./src/desktop-agent-status');
 const { advanceControlSyncState, inspectControlSyncEvidence, selectSyncBatch } = require('./src/desktop-sync-batch');
 
@@ -20,6 +21,7 @@ const deviceName = process.env.CODEX_DEVICE_NAME || require('node:os').hostname(
 const agentStatusPath = String(process.env.CODEX_AGENT_STATUS_PATH || '').trim();
 const debugPort = Math.max(1024, Math.min(65535, Number(process.env.CODEX_DEBUG_PORT) || 9230));
 const reader = new CodexSessionReader();
+const queryReader = new CodexSessionReaderWorkerClient();
 const controlledCodex = new ControlledCodexRuntime({ debugPort, reader });
 const desktopCatalog = createCodexDesktopThreadCatalog();
 const syncOffsets = new Map();
@@ -136,6 +138,7 @@ function nextSyncBatch(targets) {
  */
 const api = createDesktopAgentApi({
   reader,
+  queryReader,
   desktopController: controlledCodex,
   onControlProgress: logControlProgress,
   listThreads: async () => {
@@ -270,9 +273,9 @@ async function syncProvider() {
   const catalogMetadata = pendingCatalogMetadata && !hasPendingControlTarget ? createCatalogMetadata(knownThreadTargets) : [];
   const batch = catalogMetadata.length ? [] : nextSyncBatch(knownThreadTargets);
   const synchronizedControl = pendingControlSync;
-  const snapshot = reader.readKnownThreadSync(batch, syncOffsets, {
+  const snapshot = await queryReader.readKnownThreadSync(batch, syncOffsets, {
     initialLineLimit: Number(process.env.CODEX_AGENT_INITIAL_SYNC_LINES || 1000),
-    snapshotMessageLimit: Number(process.env.CODEX_AGENT_SNAPSHOT_MESSAGES || 50),
+    snapshotMessageLimit: Number(process.env.CODEX_AGENT_SNAPSHOT_MESSAGES || 5),
     syncByteLimit: Number(process.env.CODEX_AGENT_SYNC_BYTE_LIMIT || 512 * 1024),
   });
   let confirmedControlTurnIds = [];
@@ -443,6 +446,7 @@ function shutdown() {
   reportControlledStatus('stopped', 'Agent 正在停止', true);
   if (ws) ws.close();
   controlledCodex.stopRuntime();
+  void queryReader.close();
 }
 
 process.once('SIGINT', () => {

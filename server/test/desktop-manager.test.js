@@ -129,7 +129,7 @@ test('桌面管理器统一使用固定目录、固定名称并展示版本', ()
 
   assert.equal(pkg.build.directories.output, 'dist');
   assert.equal(pkg.productName, 'Codex Desktop 管理器');
-  assert.equal(pkg.version, '0.3.9');
+  assert.equal(pkg.version, '0.3.10');
   assert.match(main, /const MANAGER_VERSION = app\.getVersion\(\)/);
   assert.match(main, /Codex Desktop 管理器 v\$\{MANAGER_VERSION\} 已启动/);
   assert.match(html, /id="managerVersion"/);

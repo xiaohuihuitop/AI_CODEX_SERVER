@@ -18,29 +18,26 @@ class CodexSessionEvidence {
   }
 
   async waitForTurnStarted(threadId, since = '') {
-    const minimumTime = Date.parse(String(since || ''));
+    if (typeof this.reader.findTurnStartedSince !== 'function') {
+      throw evidenceError('会话读取器缺少新回合证据接口。', 'TURN_EVIDENCE_READER_UNAVAILABLE');
+    }
     const deadline = Date.now() + this.timeoutMs;
     while (Date.now() <= deadline) {
-      const status = this.reader.parseStatus({ threadId });
-      const matched = [...(status.turns || [])].reverse().find(turn => {
-        if (!String(turn && turn.turnId || '').trim()) return false;
-        const timestamp = Date.parse(String(turn.startedAt || ''));
-        return !Number.isFinite(minimumTime) || (Number.isFinite(timestamp) && timestamp >= minimumTime);
-      });
-      if (matched) {
-        return { turnId: String(matched.turnId || ''), observedAt: String(matched.startedAt || new Date().toISOString()) };
-      }
+      const matched = this.reader.findTurnStartedSince(threadId, since);
+      if (matched) return matched;
       await this.sleep(this.pollIntervalMs);
     }
     throw evidenceError(`等待目标线程开始新回合超时：${threadId}`, 'TURN_START_CONFIRM_TIMEOUT');
   }
 
-  async waitForStopped(threadId) {
+  async waitForStopped(threadId, since = '') {
+    if (typeof this.reader.findTurnAbortedSince !== 'function') {
+      throw evidenceError('会话读取器缺少停止证据接口。', 'STOP_EVIDENCE_READER_UNAVAILABLE');
+    }
     const deadline = Date.now() + this.timeoutMs;
     while (Date.now() <= deadline) {
-      const status = this.reader.parseStatus({ threadId });
-      const latest = Array.isArray(status.turns) ? status.turns.at(-1) : null;
-      if (status.status !== 'running' && latest && latest.status === 'interrupted') return { status: 'interrupted' };
+      const matched = this.reader.findTurnAbortedSince(threadId, since);
+      if (matched) return matched;
       await this.sleep(this.pollIntervalMs);
     }
     throw evidenceError(`等待目标线程停止记录超时：${threadId}`, 'STOP_CONFIRM_TIMEOUT');

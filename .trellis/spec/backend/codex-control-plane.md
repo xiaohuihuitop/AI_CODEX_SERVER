@@ -35,6 +35,12 @@ await runtime.getThreadRuntime(threadId);
 | 历史/最终状态 | JSONL -> Agent -> Relay | 用 UI 文本替代历史事实 |
 | 当前线程实时状态 | 官方编辑器发送/停止按钮 | 查询非当前线程时切换电脑界面 |
 | 线程存在性 | Desktop SQLite 侧栏目录 | 扫描所有 JSONL 后把归档线程重新上传 |
+| 会话文件解析 | 专用 Worker 线程 | 在 CDP、Agent WebSocket 所在主线程解析大型 JSONL |
+
+Desktop 会话可长期增长到数百 MB。目录映射只能读取文件名、索引、`session_meta` 头部和文件
+元数据；后台快照、完整历史和状态解析必须在专用 Worker 中执行，禁止阻塞 CDP 与 Agent
+WebSocket 所在事件循环。发送和停止的落盘确认只允许从文件尾部查找控制开始时间后的目标事件，
+不得为确认一次控制动作重放完整历史。
 
 环境变量：
 
@@ -82,11 +88,14 @@ await runtime.getThreadRuntime(threadId);
 - `server/test/codex-cdp-client.test.js`：持久连接、请求 ID、断线、协议错误，以及半开连接请求超时后的整体失效。
 - `server/test/codex-desktop-ui-controller.test.js`：精确 threadId、草稿、发送、停止及不切换式状态读取。
 - `server/test/codex-session-evidence.test.js`：目标消息时间边界和停止证据。
+- `server/test/codex-session-reader-worker.test.js`：Worker 历史、状态、同步快照与游标回写。
 - `server/test/controlled-codex-runtime.test.js`：连接决策和唯一控制器委托；必须覆盖命令行参数不可见但 CDP 可用时复用、CDP 未就绪和重复探测时重启调用次数始终为零，以及空闲半开连接由健康探测识别并自动重连。
 - `server/test/control-plane-contract.test.js`：禁止独立 App Server 控制模块重新进入正式源码。
 - `desktop/scripts/verify-manager-artifact.js`：对实际 `app.asar` 执行相同控制面约束。
 - Windows 生命周期门禁：必须先用同一产物算法终止一个真实 Electron 两层进程树并确认零残留，再由用户对官方 Codex 执行一次显式重启，核对主 PID 已更换、CDP 端口可访问；只看到窗口消失或命令返回成功不得判定通过。
 - 真实 E2E：在 `codex_temp` 线程从 Web 连续发送至少 3 轮；逐轮核对官方 UI、JSONL、Web 回复和完成状态。另执行 1 轮 Web 停止及 1 轮官方 Desktop 手动停止。
+- 大文件性能门禁：使用真实或等价的数百 MB 会话执行后台快照时，主线程 100ms 探针的最大附加延迟
+  不得超过 100ms，且同期间 CDP `/json/list` 必须正常返回；只验证解析最终完成不算通过。
 
 ### 7. 错误与正确做法
 
@@ -146,6 +155,8 @@ advanceControlSyncState(state, evidence, now);
 
 - 正常：手机发送后自动出现用户消息、过程和最终回复，无需手动刷新。
 - 基准：目录稳定时只做轻量成员检查及当前批次增量读取。
+- 基准：首轮最近 5 轮快照在专用 Worker 解析；建立偏移后仅上传新增 JSONL 行，不得为每次文件
+  追加重新解析最近历史。
 - 异常：归档线程的迟到增量到达 Relay；缓存不得重建该线程。
 
 ### 6. 必需测试

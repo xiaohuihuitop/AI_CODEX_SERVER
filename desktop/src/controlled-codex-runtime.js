@@ -30,7 +30,7 @@ class ControlledCodexRuntime extends EventEmitter {
     this.controller = options.controller || new CodexDesktopUiController({
       cdp: this.cdp,
       sessionConfirmer: (threadId, since) => this.evidence.waitForTurnStarted(threadId, since),
-      sessionStopConfirmer: threadId => this.evidence.waitForStopped(threadId),
+      sessionStopConfirmer: (threadId, since) => this.evidence.waitForStopped(threadId, since),
     });
     this.state = 'starting';
     this.message = '正在连接受控 Codex Desktop';

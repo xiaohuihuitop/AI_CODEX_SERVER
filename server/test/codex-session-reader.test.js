@@ -339,6 +339,25 @@ test('Desktop 线程目录能映射其他目录不可见的本地 JSONL', () => 
   assert.equal(targets[0].projectName, 'desktop');
 });
 
+test('Desktop 线程目录映射不扫描会话正文', () => {
+  class BodyScanReader extends CodexSessionReader {
+    discoverThreadSessions() {
+      throw new Error('Desktop 目录映射不应扫描全部会话正文');
+    }
+  }
+
+  const reader = new BodyScanReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const targets = reader.discoverDesktopThreadSessions([
+    { id: 'ffffffff-aaaa-bbbb-cccc-dddddddddddd', name: 'Desktop 状态标题', cwd: 'C:\\repo\\desktop', updatedAt: 1780910000 },
+  ]);
+
+  assert.deepEqual(targets.map(target => target.threadId), ['ffffffff-aaaa-bbbb-cccc-dddddddddddd']);
+  assert.equal(targets[0].threadName, '运行中线程');
+});
+
 test('首轮同步受字节预算限制时仍上传全部线程元数据', () => {
   const offsets = new Map();
   const reader = new CodexSessionReader({
@@ -402,6 +421,34 @@ test('紧凑会话快照在首轮同步时保留最近消息和当前状态', ()
   assert.equal(sync.sessions[0].snapshot.status.status, 'complete');
   assert.equal(offsets.get(targets[0].threadId).size > 0, true);
   assert.deepEqual(sync.openThreadIds, [targets[0].threadId]);
+});
+
+test('紧凑会话快照不调用完整历史和状态解析', () => {
+  class BoundedSnapshotReader extends CodexSessionReader {
+    parseHistory() {
+      throw new Error('后台快照不应完整解析历史');
+    }
+
+    parseStatus() {
+      throw new Error('后台快照不应完整解析状态');
+    }
+  }
+
+  const offsets = new Map();
+  const reader = new BoundedSnapshotReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+  const targets = reader.discoverOpenThreadSessions([
+    { projectName: 'demo', threadName: '测试线程' },
+  ]);
+  const sync = reader.readKnownThreadSync(targets, offsets, {
+    snapshotMessageLimit: 10,
+    syncByteLimit: 64 * 1024,
+  });
+
+  assert.deepEqual(sync.sessions[0].snapshot.messages.map(message => message.text), ['你好 Codex', '你好，我在 Windows 上。']);
+  assert.equal(sync.sessions[0].snapshot.status.status, 'complete');
 });
 
 test('桌面已空闲时结束缺少 JSONL 终止事件的运行状态', () => {
@@ -505,6 +552,25 @@ test('解析线程历史', () => {
   assert.equal(history.messages[0].text, '你好 Codex');
   assert.equal(history.messages[1].text, '你好，我在 Windows 上。');
   assert.equal(history.messages[1].turnId, 'turn-1');
+});
+
+test('发送证据只从会话尾部读取控制开始后的新回合', () => {
+  const reader = new CodexSessionReader({
+    sessionsDir: path.join(fixtureRoot, 'sessions'),
+    sessionIndexFile: path.join(fixtureRoot, 'session_index.jsonl'),
+  });
+
+  assert.deepEqual(reader.findTurnStartedSince(
+    'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    '2026-06-08T10:00:02.500Z',
+  ), {
+    turnId: 'turn-1',
+    observedAt: '2026-06-08T10:00:03.000Z',
+  });
+  assert.equal(reader.findTurnStartedSince(
+    'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    '2026-06-08T10:00:03.500Z',
+  ), null);
 });
 
 test('解析线程历史使用 turnId 稳定游标且新增回合不改变更早页', () => {

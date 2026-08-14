@@ -138,6 +138,7 @@ class CodexDesktopUiController {
   }
 
   async stop(threadId) {
+    const controlStartedAt = new Date().toISOString();
     await this.threadSelector(threadId);
     const composer = await this.composerReader();
     if (!composer || !composer.found) throw controlError('Codex Desktop 编辑器不可用。', 'COMPOSER_NOT_FOUND');
@@ -146,7 +147,7 @@ class CodexDesktopUiController {
     if (typeof this.sessionStopConfirmer !== 'function') {
       throw controlError('缺少 JSONL 停止确认器。', 'SESSION_CONFIRMATION_UNAVAILABLE');
     }
-    const evidence = await this.sessionStopConfirmer(threadId);
+    const evidence = await this.sessionStopConfirmer(threadId, controlStartedAt);
     return { ok: true, threadId, status: String(evidence && evidence.status || '') };
   }
 
