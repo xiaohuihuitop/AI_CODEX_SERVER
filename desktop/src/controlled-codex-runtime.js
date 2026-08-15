@@ -3,6 +3,7 @@ const { CodexCdpClient } = require('./codex-cdp-client');
 const { CodexDesktopUiController } = require('./codex-desktop-ui-controller');
 const { CodexSessionEvidence } = require('./codex-session-evidence');
 const { ControlledCodexProcess, probeCdp, resolvePortOwner } = require('./controlled-codex-process');
+const { resolveCodexDesktopProfile } = require('./codex-desktop-compatibility');
 
 /**
  * AI:组合受控进程、持久 CDP、官方界面控制和 JSONL 证据链。
@@ -19,6 +20,8 @@ class ControlledCodexRuntime extends EventEmitter {
     this.portOwnerResolver = options.portOwnerResolver || resolvePortOwner;
     this.cdpProbe = options.cdpProbe || probeCdp;
     this.reader = options.reader;
+    this.profileResolver = options.profileResolver || resolveCodexDesktopProfile;
+    this.profile = null;
     this.reconnectIntervalMs = Math.max(100, Number(options.reconnectIntervalMs) || 2000);
     this.healthCheckIntervalMs = Math.max(10, Number(options.healthCheckIntervalMs) || 15000);
     this.reconnectTimer = null;
@@ -121,6 +124,7 @@ class ControlledCodexRuntime extends EventEmitter {
     this.reconnecting = true;
     try {
       await this.cdp.connect();
+      if (typeof this.controller.probeCompatibility === 'function') await this.controller.probeCompatibility();
       if (typeof this.cdp.isConnected === 'function' && !this.cdp.isConnected()) {
         throw Object.assign(new Error('Codex Desktop CDP 重连后仍未建立连接。'), { code: 'CDP_RECONNECT_FAILED' });
       }
@@ -146,6 +150,9 @@ class ControlledCodexRuntime extends EventEmitter {
   async start() {
     const inspected = await this.processManager.inspect();
     this.version = inspected.app.version;
+    this.profile = this.profileResolver(this.version);
+    this.cdp.profile = this.profile;
+    this.controller.profile = this.profile;
     const owner = await this.portOwnerResolver(this.debugPort);
     const current = inspected.mainProcess;
     const currentOwnsPort = owner && current && Number(owner.pid) === Number(current.pid);
@@ -162,6 +169,7 @@ class ControlledCodexRuntime extends EventEmitter {
       });
     }
     await this.cdp.connect();
+    if (typeof this.controller.probeCompatibility === 'function') await this.controller.probeCompatibility();
     this.state = 'ready';
     this.message = `受控 Codex Desktop 已连接：CDP ${this.debugPort}`;
     this.scheduleHeartbeat();
@@ -196,9 +204,10 @@ class ControlledCodexRuntime extends EventEmitter {
    * @returns {{connect: Function, close: Function, controller: CodexDesktopUiController}} 命令会话。
    */
   createCommandController() {
-    const cdp = new CodexCdpClient({ debugPort: this.debugPort });
+    const cdp = new CodexCdpClient({ debugPort: this.debugPort, profile: this.profile });
     const controller = new CodexDesktopUiController({
       cdp,
+      profile: this.profile,
       sessionConfirmer: (threadId, since) => this.evidence.waitForTurnStarted(threadId, since),
       sessionStopConfirmer: (threadId, since) => this.evidence.waitForStopped(threadId, since),
     });

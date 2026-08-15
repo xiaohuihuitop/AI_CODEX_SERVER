@@ -18,6 +18,21 @@ function createCdp(overrides = {}) {
   }, overrides);
 }
 
+test('界面控制器启动时验证已知 DOM 控制契约', async () => {
+  const compatible = new CodexDesktopUiController({
+    cdp: createCdp({ evaluate: async () => ({ threadRows: 2, editor: true, action: true }) }),
+  });
+  const incompatible = new CodexDesktopUiController({
+    cdp: createCdp({ evaluate: async () => ({ threadRows: 2, editor: true, action: false }) }),
+  });
+
+  assert.equal((await compatible.probeCompatibility()).profileId, 'codex-desktop-26.707.3748');
+  await assert.rejects(
+    () => incompatible.probeCompatibility(),
+    error => error.code === 'CODEX_DESKTOP_DOM_INCOMPATIBLE',
+  );
+});
+
 test('界面控制器按 threadId 精确选择侧栏线程并核对选中结果', async () => {
   const cdp = createCdp({
     evaluate: async expression => {

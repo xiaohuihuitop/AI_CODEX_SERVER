@@ -1,5 +1,6 @@
 const { EventEmitter } = require('node:events');
 const WebSocket = require('ws');
+const { CODEX_DESKTOP_PROFILES, selectPrimaryCodexTarget } = require('./codex-desktop-compatibility');
 
 function cdpError(message, code) {
   return Object.assign(new Error(message), { code });
@@ -18,6 +19,8 @@ class CodexCdpClient extends EventEmitter {
     this.fetchImpl = options.fetchImpl || fetch;
     this.webSocketFactory = options.webSocketFactory || (url => new WebSocket(url));
     this.requestTimeoutMs = Math.max(10, Number(options.requestTimeoutMs) || 10000);
+    this.profile = options.profile || CODEX_DESKTOP_PROFILES[0];
+    this.targetSelector = options.targetSelector || selectPrimaryCodexTarget;
     this.socket = null;
     this.connecting = null;
     this.nextRequestId = 0;
@@ -48,9 +51,7 @@ class CodexCdpClient extends EventEmitter {
       throw cdpError('Codex Desktop CDP 目标列表不可用。', 'CDP_UNAVAILABLE');
     }
     const targets = await response.json();
-    const target = Array.isArray(targets)
-      ? targets.find(item => item && item.url === 'app://-/index.html' && item.webSocketDebuggerUrl)
-      : null;
+    const target = this.targetSelector(targets, this.debugPort, this.profile);
     if (!target) throw cdpError('未找到 Codex Desktop 页面调试目标。', 'CDP_TARGET_NOT_FOUND');
 
     const socket = this.webSocketFactory(target.webSocketDebuggerUrl);

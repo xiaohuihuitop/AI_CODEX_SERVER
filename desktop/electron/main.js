@@ -31,13 +31,17 @@ function escapeRegExp(value) {
 }
 
 function createAgentController() {
-  if (!app.isPackaged) return createDesktopAgentProcess({ cwd: PROJECT_ROOT });
+  const diagnosticPath = path.join(app.getPath('userData'), 'diagnostics', 'desktop-agent.jsonl');
+  if (!app.isPackaged) return createDesktopAgentProcess({
+    cwd: PROJECT_ROOT,
+    childEnv: { CODEX_DIAGNOSTIC_LOG_PATH: diagnosticPath },
+  });
   const exeName = path.basename(process.execPath);
   return createDesktopAgentProcess({
     cwd: path.dirname(process.execPath),
     nodePath: process.execPath,
     childArgs: ['--codex-manager-agent-child'],
-    childEnv: { CODEX_MANAGER_AGENT_CHILD: '1' },
+    childEnv: { CODEX_MANAGER_AGENT_CHILD: '1', CODEX_DIAGNOSTIC_LOG_PATH: diagnosticPath },
     processMatchText: '--codex-manager-agent-child',
     processNamePattern: `^${escapeRegExp(exeName)}$`,
   });

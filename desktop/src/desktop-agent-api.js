@@ -102,7 +102,7 @@ class DesktopAgentApi {
       runtime = await this.desktopController.getThreadRuntime(threadId);
       this.reportControlProgress('status.reconcile.completed', { threadId, runtimeState: runtime.state });
     } catch (error) {
-      this.reportControlProgress('status.reconcile.failed', { threadId, error: error.message || String(error) });
+      this.reportControlProgress('status.reconcile.failed', { threadId, errorCode: error.code || '', error: error.message || String(error) });
       throw requestError(`无法校验官方客户端运行状态：${error.message || String(error)}`, 'CODEX_DESKTOP_STATUS_FAILED', 503);
     }
     return applyDesktopRuntimeStatus(status, runtime);
@@ -158,7 +158,7 @@ class DesktopAgentApi {
       this.reportControlProgress('send.desktop.started', { threadId, clientUserMessageId });
       started = await this.desktopController.sendMessage(threadId, text);
     } catch (error) {
-      this.reportControlProgress('send.desktop.failed', { threadId, clientUserMessageId, error: error.message || String(error) });
+      this.reportControlProgress('send.desktop.failed', { threadId, clientUserMessageId, errorCode: error.code || '', error: error.message || String(error) });
       throw requestError(`无法通过官方客户端发送消息：${error.message || String(error)}`, 'CODEX_DESKTOP_SEND_FAILED', 503);
     }
     const turnId = String(started && started.turnId || '').trim();
@@ -197,7 +197,7 @@ class DesktopAgentApi {
       }
       await this.desktopController.stop(threadId);
     } catch (error) {
-      this.reportControlProgress('stop.failed', { threadId, error: error.message || String(error) });
+      this.reportControlProgress('stop.failed', { threadId, errorCode: error.code || '', error: error.message || String(error) });
       throw requestError(`无法停止 Codex Desktop 回复：${error.message || String(error)}`, 'CODEX_DESKTOP_CONTROL_FAILED', 503);
     }
     this.reportControlProgress('stop.completed', { threadId });

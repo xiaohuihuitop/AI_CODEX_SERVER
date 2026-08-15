@@ -1,6 +1,7 @@
 const { execFile } = require('node:child_process');
 const net = require('node:net');
 const path = require('node:path');
+const { CODEX_DESKTOP_PROFILES, selectPrimaryCodexTarget } = require('./codex-desktop-compatibility');
 
 const DEFAULT_DEBUG_PORT = 9229;
 const DEFAULT_WAIT_TIMEOUT_MS = 20000;
@@ -272,7 +273,7 @@ async function probeCdp(port) {
     const response = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2500) });
     const targets = await response.json();
     return {
-      ok: Array.isArray(targets) && targets.some(target => target && target.url === 'app://-/index.html'),
+      ok: Boolean(selectPrimaryCodexTarget(targets, port, CODEX_DESKTOP_PROFILES[0])),
       targetCount: Array.isArray(targets) ? targets.length : 0,
       message: '',
     };

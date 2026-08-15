@@ -31,10 +31,10 @@ test('CDP 客户端复用单一 WebSocket 并按请求 ID 关联响应', async (
     debugPort: 9230,
     fetchImpl: async url => {
       assert.equal(url, 'http://127.0.0.1:9230/json/list');
-      return { ok: true, json: async () => [{ type: 'page', url: 'app://-/index.html', webSocketDebuggerUrl: 'ws://target' }] };
+      return { ok: true, json: async () => [{ type: 'page', url: 'app://-/index.html', webSocketDebuggerUrl: 'ws://127.0.0.1:9230/devtools/page/main' }] };
     },
     webSocketFactory: url => {
-      assert.equal(url, 'ws://target');
+      assert.equal(url, 'ws://127.0.0.1:9230/devtools/page/main');
       queueMicrotask(() => socket.open());
       return socket;
     },
@@ -57,7 +57,7 @@ test('CDP 客户端复用单一 WebSocket 并按请求 ID 关联响应', async (
 test('CDP 客户端将协议错误和断线传递给等待请求', async () => {
   const socket = new FakeSocket();
   const client = new CodexCdpClient({
-    fetchImpl: async () => ({ ok: true, json: async () => [{ url: 'app://-/index.html', webSocketDebuggerUrl: 'ws://target' }] }),
+    fetchImpl: async () => ({ ok: true, json: async () => [{ url: 'app://-/index.html', webSocketDebuggerUrl: 'ws://127.0.0.1:9229/devtools/page/main' }] }),
     webSocketFactory: () => {
       queueMicrotask(() => socket.open());
       return socket;
@@ -79,7 +79,7 @@ test('CDP 客户端将协议错误和断线传递给等待请求', async () => {
 test('CDP evaluate 返回页面表达式的按值结果', async () => {
   const socket = new FakeSocket();
   const client = new CodexCdpClient({
-    fetchImpl: async () => ({ ok: true, json: async () => [{ url: 'app://-/index.html', webSocketDebuggerUrl: 'ws://target' }] }),
+    fetchImpl: async () => ({ ok: true, json: async () => [{ url: 'app://-/index.html', webSocketDebuggerUrl: 'ws://127.0.0.1:9229/devtools/page/main' }] }),
     webSocketFactory: () => {
       queueMicrotask(() => socket.open());
       return socket;
@@ -102,7 +102,7 @@ test('CDP 请求超时会废弃半开连接并拒绝全部等待请求', async (
   const socket = new FakeSocket();
   const client = new CodexCdpClient({
     requestTimeoutMs: 20,
-    fetchImpl: async () => ({ ok: true, json: async () => [{ url: 'app://-/index.html', webSocketDebuggerUrl: 'ws://target' }] }),
+    fetchImpl: async () => ({ ok: true, json: async () => [{ url: 'app://-/index.html', webSocketDebuggerUrl: 'ws://127.0.0.1:9229/devtools/page/main' }] }),
     webSocketFactory: () => {
       queueMicrotask(() => socket.open());
       return socket;

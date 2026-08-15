@@ -8,6 +8,7 @@ const { CodexSessionReader } = require('./src/codex-session-reader');
 const { CodexSessionReaderWorkerClient } = require('./src/codex-session-reader-worker-client');
 const { AGENT_STATUS_HEARTBEAT_MS, writeAgentStatus } = require('./src/desktop-agent-status');
 const { advanceControlSyncState, inspectControlSyncEvidence, selectSyncBatch } = require('./src/desktop-sync-batch');
+const { createStructuredDiagnosticLog } = require('./src/structured-diagnostics');
 
 const serverUrl = process.env.CODEX_CLOUD_URL || '';
 const token = process.env.CODEX_DEVICE_TOKEN || '';
@@ -20,6 +21,7 @@ if (!serverUrl || !token) {
 const deviceName = process.env.CODEX_DEVICE_NAME || require('node:os').hostname();
 const agentStatusPath = String(process.env.CODEX_AGENT_STATUS_PATH || '').trim();
 const debugPort = Math.max(1024, Math.min(65535, Number(process.env.CODEX_DEBUG_PORT) || 9230));
+const diagnostics = createStructuredDiagnosticLog(process.env.CODEX_DIAGNOSTIC_LOG_PATH);
 const reader = new CodexSessionReader();
 const queryReader = new CodexSessionReaderWorkerClient();
 const controlledCodex = new ControlledCodexRuntime({ debugPort, reader });
@@ -191,6 +193,14 @@ function describeControlThread(threadId) {
  * @returns {void}
  */
 function logControlProgress(event) {
+  diagnostics.record(event.phase || 'control.unknown', {
+    commandId: String(event.clientUserMessageId || ''),
+    threadId: String(event.threadId || ''),
+    turnId: String(event.turnId || ''),
+    textLength: Number(event.textLength) || 0,
+    errorCode: String(event.errorCode || ''),
+    error: String(event.error || ''),
+  });
   const thread = describeControlThread(event.threadId);
   const request = event.clientUserMessageId ? `，请求 ${event.clientUserMessageId}` : '';
   if (event.phase === 'send.received') {
@@ -338,6 +348,7 @@ function createAgentConnection() {
 
 function attachAgentListeners(client) {
   client.on('open', () => {
+    diagnostics.record('relay.connected', { deviceName, debugPort, codexVersion: controlledCodexVersion });
     syncOffsets.clear();
     knownCatalogThreadIds = [];
     lastCatalogCheckAt = 0;
@@ -352,6 +363,12 @@ function attachAgentListeners(client) {
   });
 
   client.on('control-complete', ({ action, payload, result }) => {
+    diagnostics.record('control.completed', {
+      action,
+      commandId: String(payload && payload.clientUserMessageId || ''),
+      threadId: String(payload && payload.threadId || ''),
+      turnId: String(result && result.watch && result.watch.turnId || ''),
+    });
     pendingControlSync = {
       threadId: String(payload && payload.threadId || '').trim(),
       turnId: action === 'send' ? String(result && result.watch && result.watch.turnId || '').trim() : '',
@@ -361,9 +378,17 @@ function attachAgentListeners(client) {
     console.log(`控制命令已确认：${action}，持续优先同步目标对话直到读取到新记录`);
   });
   client.on('control-failed', ({ action, payload, error }) => {
+    diagnostics.record('control.failed', {
+      action,
+      commandId: String(payload && payload.clientUserMessageId || ''),
+      threadId: String(payload && payload.threadId || ''),
+      errorCode: String(error && error.code || ''),
+      error: String(error && error.message || ''),
+    });
     console.error(`手机控制命令失败：${action}，${describeControlThread(payload && payload.threadId)}，${error.code || 'UNKNOWN'}：${error.message || '未知错误'}`);
   });
   client.on('close', (code, reason) => {
+    diagnostics.record('relay.disconnected', { code, reason: reason.toString() });
     console.log(`Desktop agent disconnected: ${code} ${reason.toString()}`);
   });
   client.on('error', error => {
@@ -393,11 +418,13 @@ function attachAgentListeners(client) {
 }
 
 controlledCodex.on('unavailable', error => {
+  diagnostics.record('cdp.unavailable', { debugPort, errorCode: String(error && error.code || ''), error: String(error && error.message || '') });
   recordControlledError(error);
   if (ws) ws.sendEventState();
 });
 
 controlledCodex.on('reconnected', result => {
+  diagnostics.record('cdp.reconnected', { debugPort: result.debugPort, codexVersion: result.version || controlledCodexVersion });
   controlledCodexVersion = String(result.version || controlledCodexVersion || '');
   reportControlledStatus('ready', `受控 Codex Desktop 已恢复连接：CDP ${result.debugPort}`, true);
   console.log(`CDP 连接已恢复：端口 ${result.debugPort}，Codex v${controlledCodexVersion || '未知'}`);
@@ -421,6 +448,7 @@ async function startControlledCodex() {
   controlledStartupInFlight = true;
   try {
     const result = await controlledCodex.start();
+    diagnostics.record('cdp.ready', { debugPort: result.debugPort, controlledPid: result.pid || null, codexVersion: result.version || '' });
     controlledCodexVersion = String(result.version || controlledCodexVersion || '');
     reportControlledStatus('ready', `受控 Codex Desktop 已连接：CDP ${result.debugPort}`, true);
     console.log(`已连接现有受控实例：PID ${result.pid || '未知'}，CDP ${result.debugPort}，Codex v${controlledCodexVersion || '未知'}`);
@@ -429,6 +457,7 @@ async function startControlledCodex() {
       attachAgentListeners(ws);
     }
   } catch (error) {
+    diagnostics.record('cdp.start_failed', { debugPort, errorCode: String(error && error.code || ''), error: String(error && error.message || '') });
     recordControlledError(error);
     console.error(`受控 Codex 初始化失败，将在 ${Math.ceil(controlledStartupRetryMs / 1000)} 秒后重试`);
     scheduleControlledStartupRetry();

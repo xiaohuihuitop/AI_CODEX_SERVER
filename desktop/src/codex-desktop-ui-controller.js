@@ -1,3 +1,5 @@
+const { CODEX_DESKTOP_PROFILES } = require('./codex-desktop-compatibility');
+
 function controlError(message, code) {
   return Object.assign(new Error(message), { code });
 }
@@ -19,11 +21,43 @@ class CodexDesktopUiController {
   constructor(options = {}) {
     if (!options.cdp) throw new Error('CodexDesktopUiController 缺少 CDP 客户端。');
     this.cdp = options.cdp;
+    this.profile = options.profile || CODEX_DESKTOP_PROFILES[0];
     this.threadSelector = options.threadSelector || (threadId => this.selectThread(threadId));
     this.composerReader = options.composerReader || (() => this.readComposer());
     this.sessionConfirmer = options.sessionConfirmer;
     this.sessionStopConfirmer = options.sessionStopConfirmer;
     this.sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+  }
+
+  /**
+   * AI:验证当前官方页面仍满足已知版本的线程与编辑器控制契约。
+   *
+   * @returns {Promise<object>} 兼容配置和页面探针结果。
+   */
+  async probeCompatibility() {
+    const selectors = this.profile.selectors;
+    const result = await this.cdp.evaluate(`(() => {
+      const visible = element => {
+        if (!element) return false;
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+      const rows = [...document.querySelectorAll(${JSON.stringify(selectors.threadRow)})];
+      const editor = [...document.querySelectorAll(${JSON.stringify(selectors.composer)})].find(visible);
+      const buttons = [...document.querySelectorAll('button')].filter(visible);
+      const labels = ${JSON.stringify(selectors.sendLabels)};
+      const action = buttons.find(button => {
+        const label = String(button.getAttribute('aria-label') || '').trim();
+        return label === ${JSON.stringify(selectors.stopLabel)}
+          || labels.includes(label)
+          || String(button.className || '').includes(${JSON.stringify(selectors.sendButtonClass)});
+      });
+      return { threadRows: rows.length, editor: !!editor, action: !!action };
+    })()`);
+    if (!result || result.threadRows < 1 || !result.editor || !result.action) {
+      throw controlError(`Codex Desktop 页面结构与兼容配置 ${this.profile.id} 不一致。`, 'CODEX_DESKTOP_DOM_INCOMPATIBLE');
+    }
+    return { ok: true, profileId: this.profile.id, ...result };
   }
 
   async click(rect) {
@@ -38,10 +72,11 @@ class CodexDesktopUiController {
     if (!id) throw controlError('缺少目标 threadId。', 'THREAD_ID_REQUIRED');
     await this.cdp.connect();
     const localId = `local:${id}`;
+    const selectors = this.profile.selectors;
     const inspected = await this.cdp.evaluate(`(() => {
       const wanted = ${JSON.stringify(localId)};
       const inspect = () => {
-        const row = [...document.querySelectorAll('[data-app-action-sidebar-thread-id]')]
+        const row = [...document.querySelectorAll(${JSON.stringify(selectors.threadRow)})]
           .find(element => element.getAttribute('data-app-action-sidebar-thread-id') === wanted);
         if (!row) return { found: false, selected: false };
         row.scrollIntoView({ block: 'center' });
@@ -61,7 +96,7 @@ class CodexDesktopUiController {
       await this.sleep(500);
     }
     const selected = await this.cdp.evaluate(`(() => {
-      const row = document.querySelector('[data-app-action-sidebar-thread-id][aria-current="page"]');
+      const row = document.querySelector(${JSON.stringify(selectors.selectedThreadRow)});
       return {
         found: !!row,
         selected: !!row,
@@ -75,6 +110,7 @@ class CodexDesktopUiController {
   }
 
   async readComposer() {
+    const selectors = this.profile.selectors;
     return this.cdp.evaluate(`(() => {
       const visible = element => {
         if (!element) return false;
@@ -86,12 +122,13 @@ class CodexDesktopUiController {
         const rect = element.getBoundingClientRect();
         return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
       };
-      const editor = [...document.querySelectorAll('[contenteditable="true"]')].find(visible);
+      const editor = [...document.querySelectorAll(${JSON.stringify(selectors.composer)})].find(visible);
       const buttons = [...document.querySelectorAll('button')].filter(visible);
-      const stopButton = buttons.find(button => button.getAttribute('aria-label') === '停止');
+      const stopButton = buttons.find(button => button.getAttribute('aria-label') === ${JSON.stringify(selectors.stopLabel)});
+      const sendLabels = ${JSON.stringify(selectors.sendLabels)};
       const sendButton = buttons.find(button => {
         const label = String(button.getAttribute('aria-label') || '').trim();
-        return label === '发送' || label === '发送消息' || String(button.className || '').includes('size-token-button-composer');
+        return sendLabels.includes(label) || String(button.className || '').includes(${JSON.stringify(selectors.sendButtonClass)});
       });
       const actionButton = stopButton || sendButton;
       return {
@@ -152,8 +189,9 @@ class CodexDesktopUiController {
   }
 
   async getThreadRuntime(threadId) {
+    const selectors = this.profile.selectors;
     const current = await this.cdp.evaluate(`(() => {
-      const row = document.querySelector('[data-app-action-sidebar-thread-id][aria-current="page"]');
+      const row = document.querySelector(${JSON.stringify(selectors.selectedThreadRow)});
       return { threadId: row ? row.getAttribute('data-app-action-sidebar-thread-id') : '' };
     })()`);
     if (!current || current.threadId !== `local:${threadId}`) return { state: 'unknown', threadId };
