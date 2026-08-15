@@ -712,12 +712,22 @@ test('uni-app Android 请求支持页面销毁时取消', () => {
   assert.match(api, /export function sendMessage[\s\S]*registerTask: options\.registerTask,[\s\S]*unregisterTask: options\.unregisterTask,/);
   assert.match(api, /export function stopCodex[\s\S]*registerTask: options\.registerTask,[\s\S]*unregisterTask: options\.unregisterTask,/);
   assert.match(api, /export function createRealtimeSocket/);
+  assert.match(api, /export function getControlResult/);
   assert.match(api, /x-mobile-typer-token/);
   assert.match(api, /\/mobile/);
   assert.match(api, /const REQUEST_TIMEOUT_MS = 15000;/);
   assert.match(api, /timeout: timeoutMs,/);
   assert.match(api, /请求超时，请检查电脑 Agent 或服务器连接。/);
   assert.match(api, /if \(task && typeof task\.abort === 'function'\) task\.abort\(\);/);
+});
+
+test('uni-app Android 在实时回执丢失后从 Relay 恢复同一发送结果', () => {
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+
+  assert.match(index, /async function recoverPendingControlResult/);
+  assert.match(index, /getControlResult\(config\.value, watch\.clientUserMessageId/);
+  assert.match(index, /void recoverPendingControlResult\(\);/);
+  assert.match(index, /if \(data\.controlResult\) applyControlResult\(data\.controlResult\);/);
 });
 
 test('uni-app Android 实时连接强制使用 SocketTask 回调模式', () => {

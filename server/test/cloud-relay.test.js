@@ -3,7 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
 const { WebSocket } = require('ws');
-const { createCloudRelayServer } = require('../src/cloud-relay');
+const { acceptSendCommand, createCloudRelayServer } = require('../src/cloud-relay');
 const { createCloudSessionCache } = require('../src/session-cache');
 const { closeRelayServer } = require('../test-utils/relay-server');
 
@@ -457,6 +457,139 @@ test('云端 relay 立即受理发送并通过手机实时通道回传最终控�
   mobile.close();
   agent.close();
   await closeRelayServer(server);
+});
+
+test('云端 relay 持久保留发送结果并对重复命令只转发一次', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['recover-send-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+  });
+  const port = await listen(server);
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=recover-send-token`);
+  await new Promise(resolve => agent.once('open', resolve));
+  let sendCount = 0;
+  agent.on('message', data => {
+    const message = JSON.parse(data.toString());
+    if (message.action !== 'send') return;
+    sendCount += 1;
+    agent.send(JSON.stringify({
+      id: message.id,
+      ok: true,
+      result: { ok: true, watch: { threadId: 'thread-1', turnId: 'turn-recovered' } },
+    }));
+  });
+  agent.send(JSON.stringify({
+    type: 'session-sync',
+    payload: {
+      openThreadIds: ['thread-1'],
+      sessions: [{ threadId: 'thread-1', threadName: '恢复发送线程', metadataOnly: true }],
+    },
+  }));
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  const send = () => fetch(`http://127.0.0.1:${port}/send?token=recover-send-token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: '只发送一次', threadId: 'thread-1', clientUserMessageId: 'recover-message-1' }),
+  });
+  const first = await readJson(await send());
+  const deadline = Date.now() + 1000;
+  let recovered = null;
+  while (!recovered?.controlResult && Date.now() < deadline) {
+    const response = await fetch(`http://127.0.0.1:${port}/codex/control-result?token=recover-send-token&clientUserMessageId=recover-message-1`);
+    recovered = await readJson(response);
+    if (!recovered.controlResult) await new Promise(resolve => setTimeout(resolve, 10));
+  }
+  const duplicate = await readJson(await send());
+  const mobileEvents = [];
+  const mobile = new WebSocket(`ws://127.0.0.1:${port}/mobile?token=recover-send-token`);
+  mobile.on('message', data => mobileEvents.push(JSON.parse(data.toString())));
+  await new Promise(resolve => mobile.once('open', resolve));
+  const replayDeadline = Date.now() + 500;
+  while (!mobileEvents.some(event => event.type === 'control-result') && Date.now() < replayDeadline) {
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+
+  assert.equal(first.status, 'accepted');
+  assert.equal(recovered.controlResult.ok, true);
+  assert.equal(recovered.controlResult.result.watch.turnId, 'turn-recovered');
+  assert.equal(duplicate.status, 'completed');
+  assert.equal(sendCount, 1);
+  assert.equal(mobileEvents.find(event => event.type === 'control-result').clientUserMessageId, 'recover-message-1');
+
+  mobile.close();
+  agent.close();
+  await closeRelayServer(server);
+});
+
+test('云端 relay 拒绝用同一客户端消息标识发送不同内容', async () => {
+  const server = createCloudRelayServer({ tokens: ['conflict-send-token'], publicDir, requestTimeoutMs: 1500 });
+  const port = await listen(server);
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=conflict-send-token`);
+  await new Promise(resolve => agent.once('open', resolve));
+  agent.on('message', data => {
+    const message = JSON.parse(data.toString());
+    if (message.action === 'send') agent.send(JSON.stringify({ id: message.id, ok: true, result: { ok: true } }));
+  });
+  agent.send(JSON.stringify({ type: 'session-sync', payload: {
+    openThreadIds: ['thread-1'],
+    sessions: [{ threadId: 'thread-1', threadName: '冲突线程', metadataOnly: true }],
+  } }));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  const request = text => fetch(`http://127.0.0.1:${port}/send?token=conflict-send-token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text, threadId: 'thread-1', clientUserMessageId: 'same-message-id' }),
+  });
+  await request('第一条');
+  const conflictResponse = await request('第二条');
+  const conflict = await readJson(conflictResponse);
+
+  assert.equal(conflictResponse.status, 409);
+  assert.equal(conflict.code, 'CLIENT_USER_MESSAGE_ID_CONFLICT');
+
+  agent.close();
+  await closeRelayServer(server);
+});
+
+test('云端 relay 每台设备最多保留 500 条控制结果', async () => {
+  const state = createCloudRelayServer({ tokens: ['bounded-token'], publicDir }).relayState;
+  const commands = new Map();
+  for (let index = 0; index < 500; index += 1) {
+    commands.set(`bounded-${index}`, {
+      action: 'send',
+      status: 'completed',
+      threadId: 'thread-1',
+      clientUserMessageId: `bounded-${index}`,
+      fingerprint: `fingerprint-${index}`,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  }
+  state.controlCommands.set('bounded-device', commands);
+  const agent = {
+    OPEN: 1,
+    readyState: 1,
+    send(data) {
+      const message = JSON.parse(data);
+      const pending = state.pending.get(message.id);
+      clearTimeout(pending.timer);
+      state.pending.delete(message.id);
+      pending.resolve({ ok: true, watch: { threadId: 'thread-1', turnId: 'bounded-turn' } });
+    },
+  };
+  state.agents.set('bounded-device', agent);
+
+  acceptSendCommand(state, 'bounded-device', {
+    threadId: 'thread-1',
+    text: '新消息',
+    clientUserMessageId: 'bounded-500',
+  }, 60000);
+
+  assert.equal(state.controlCommands.get('bounded-device').size, 500);
+  assert.equal(state.controlCommands.get('bounded-device').has('bounded-0'), false);
+  await new Promise(resolve => setImmediate(resolve));
 });
 
 test('云端 relay 拒绝缺少客户端消息标识的发送请求', async () => {

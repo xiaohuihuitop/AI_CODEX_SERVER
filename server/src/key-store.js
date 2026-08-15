@@ -22,12 +22,17 @@ function publicKey(key) {
   };
 }
 
+function resolvedKey(key) {
+  if (!key || key.disabledAt) return null;
+  return { id: key.id, note: key.note };
+}
+
 /**
  * AI:创建持久化设备 Key 仓库，支持自定义 Key 和备注。
  *
  * @param {string} filePath Key 数据文件路径。
  * @param {string[]} bootstrapTokens 仅用于首次迁移的旧环境变量 Key。
- * @returns {{has: (token: string) => boolean, matches: (id: string, token: string) => boolean, list: () => object[], create: (note: string, token: string) => object, disable: (id: string) => boolean, remove: (id: string) => boolean}}
+ * @returns {{has: (token: string) => boolean, resolve: (token: string) => {id: string, note: string}|null, matches: (id: string, token: string) => boolean, list: () => object[], create: (note: string, token: string) => object, disable: (id: string) => boolean, remove: (id: string) => boolean}}
  */
 function createKeyStore(filePath, bootstrapTokens = []) {
   const absolutePath = path.resolve(filePath);
@@ -63,6 +68,10 @@ function createKeyStore(filePath, bootstrapTokens = []) {
     has(token) {
       const hash = tokenHash(token);
       return keys.some(key => !key.disabledAt && key.tokenHash === hash);
+    },
+    resolve(token) {
+      const hash = tokenHash(token);
+      return resolvedKey(keys.find(key => !key.disabledAt && key.tokenHash === hash));
     },
     matches(id, token) {
       const key = keys.find(item => item.id === id);

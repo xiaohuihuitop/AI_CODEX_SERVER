@@ -64,6 +64,7 @@ test('Key 管理后台创建、禁用和持久化设备 Key', async () => {
 
     const health = await json(`${origin}/codex/health?token=${encodeURIComponent(created.body.token)}`);
     assert.equal(health.response.status, 200);
+    assert.equal(health.body.deviceId, created.body.key.id);
 
     const disabled = await json(`${origin}/admin/api/keys/${created.body.key.id}/disable`, {
       method: 'POST', headers: { cookie },

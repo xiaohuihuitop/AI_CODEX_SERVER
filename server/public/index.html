@@ -1393,6 +1393,7 @@
       realtimeSocket = socket;
       socket.addEventListener('open', () => {
         updateConnectionStatus({ online: agentOnline, message: '服务器实时连接已建立' });
+        void recoverPendingControlResult();
       });
       socket.addEventListener('message', event => {
         try {
@@ -1492,11 +1493,36 @@
      */
     function waitForControlResult(watch) {
       if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
-      commandConfirmTimer = setTimeout(() => {
+      commandConfirmTimer = setTimeout(async () => {
+        if (!pendingWatch || pendingWatch.clientUserMessageId !== watch.clientUserMessageId) return;
+        if (await recoverPendingControlResult(pendingWatch)) return;
         if (!pendingWatch || pendingWatch.clientUserMessageId !== watch.clientUserMessageId) return;
         pendingWatch = Object.assign({}, pendingWatch, { unconfirmed: true });
         notice('电脑尚未返回发送结果，请核对电脑端后再继续发送。');
       }, 32000);
+    }
+
+    /**
+     * AI:向 Relay 查询同一发送命令的最终结果，避免实时事件丢失后要求手动刷新。
+     *
+     * @param {object} watch 待恢复命令。
+     * @returns {Promise<boolean>} 已应用最终结果时返回 true。
+     */
+    async function recoverPendingControlResult(watch = pendingWatch) {
+      if (!watch || !watch.clientUserMessageId) return false;
+      try {
+        const res = await api(`/codex/control-result?clientUserMessageId=${encodeURIComponent(watch.clientUserMessageId)}`);
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          if (data.code !== 'CONTROL_COMMAND_NOT_FOUND') notice(data.message || '发送结果查询失败');
+          return false;
+        }
+        if (!pendingWatch || pendingWatch.clientUserMessageId !== watch.clientUserMessageId) return false;
+        return Boolean(data.controlResult && applyControlResult(data.controlResult));
+      } catch (error) {
+        notice(error.message);
+        return false;
+      }
     }
 
     /**
@@ -1621,6 +1647,7 @@
           pendingWatch = Object.assign({}, pendingWatch, data.watch || {}, {
             acceptedSyncVersion: Number(data.acceptedSyncVersion) || syncState.version,
           });
+          if (data.controlResult) applyControlResult(data.controlResult);
         }
       } catch (error) {
         markPendingLocalSendFailed(clientUserMessageId, error.message);

@@ -195,6 +195,22 @@ export function sendMessage(config, payload, options = {}) {
 }
 
 /**
+ * AI:读取 Relay 保存的发送结果，供实时连接重建后恢复同一条命令。
+ *
+ * @param {{serverUrl: string, token: string}} config 连接配置。
+ * @param {string} clientUserMessageId 客户端消息标识。
+ * @param {object} options 请求选项。
+ * @returns {Promise<object>} 命令状态和可选最终结果。
+ */
+export function getControlResult(config, clientUserMessageId, options = {}) {
+  return requestJson(
+    config,
+    `/codex/control-result?clientUserMessageId=${encodeURIComponent(clientUserMessageId || '')}`,
+    options,
+  );
+}
+
+/**
  * AI:停止当前 Codex 回复任务。
  *
  * @param {{serverUrl: string, token: string}} config 连接配置。

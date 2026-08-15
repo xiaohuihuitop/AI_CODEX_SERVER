@@ -13,6 +13,8 @@ const ALLOWED_ACTIONS = new Set(['threads', 'history', 'status', 'send', 'stop']
 const PUBLIC_ASSET_EXTENSIONS = new Set(['.css', '.ico', '.js', '.json', '.png', '.svg', '.webmanifest']);
 const ADMIN_SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const ADMIN_PASSWORD = 'xiaohuihui';
+const CONTROL_COMMAND_TTL_MS = 30 * 60 * 1000;
+const MAX_CONTROL_COMMANDS_PER_DEVICE = 500;
 
 function tokenFromRequest(req) {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -27,6 +29,7 @@ function createRelayState() {
     eventStreams: new Map(),
     cache: createCloudSessionCache(),
     pending: new Map(),
+    controlCommands: new Map(),
     nextId: 0,
   };
 }
@@ -61,7 +64,15 @@ function secureEqual(left, right) {
 
 function legacyKeyStore(tokens) {
   const allowed = new Set(tokens || []);
-  return { has: token => allowed.has(token), matches: () => false, list: () => [], create: () => { throw new Error('不支持 Key 管理。'); }, disable: () => false, remove: () => false };
+  const resolve = token => allowed.has(token)
+    ? { id: `legacy-${crypto.createHash('sha256').update(String(token)).digest('hex').slice(0, 24)}`, note: '' }
+    : null;
+  return { has: token => Boolean(resolve(token)), resolve, matches: () => false, list: () => [], create: () => { throw new Error('不支持 Key 管理。'); }, disable: () => false, remove: () => false };
+}
+
+function resolveDevice(keyStore, token) {
+  if (typeof keyStore.resolve === 'function') return keyStore.resolve(token);
+  return keyStore.has(token) ? { id: `legacy-${crypto.createHash('sha256').update(String(token)).digest('hex').slice(0, 24)}`, note: '' } : null;
 }
 
 function syncHealthFor(state, token) {
@@ -81,6 +92,7 @@ function relayStateForToken(state, token) {
   const health = syncHealthFor(state, token);
   const events = eventStreamFor(state, token);
   return {
+    deviceId: token,
     agentOnline: isAgentOnline(state, token),
     syncVersion: health.version,
     lastSyncedAt: health.lastSyncedAt,
@@ -239,6 +251,9 @@ function attachMobileClient(state, ws, token) {
     ...relayStateForToken(state, token),
     updatedAt: state.cache.threads(token).updatedAt,
   }));
+  for (const command of controlCommandsFor(state, token).values()) {
+    if (command.status === 'completed') ws.send(JSON.stringify(controlResultEvent(state, token, command)));
+  }
 }
 
 function isAgentOnline(state, token) {
@@ -280,10 +295,7 @@ function disconnectToken(state, token) {
 }
 
 function disconnectKey(state, keyStore, keyId) {
-  const tokens = new Set([...state.agents.keys(), ...state.mobileClients.keys()]);
-  for (const token of tokens) {
-    if (keyStore.matches(keyId, token)) disconnectToken(state, token);
-  }
+  disconnectToken(state, keyId);
 }
 
 function attachAgent(state, ws, token, syncStaleMs) {
@@ -414,6 +426,69 @@ function isPublicAssetRequest(req) {
   return PUBLIC_ASSET_EXTENSIONS.has(ext);
 }
 
+function controlCommandsFor(state, deviceId) {
+  if (!state.controlCommands.has(deviceId)) state.controlCommands.set(deviceId, new Map());
+  const commands = state.controlCommands.get(deviceId);
+  const expiredBefore = Date.now() - CONTROL_COMMAND_TTL_MS;
+  for (const [id, command] of commands.entries()) {
+    if (Date.parse(command.updatedAt || command.createdAt || '') < expiredBefore) commands.delete(id);
+  }
+  while (commands.size > MAX_CONTROL_COMMANDS_PER_DEVICE) commands.delete(commands.keys().next().value);
+  return commands;
+}
+
+function trimControlCommands(commands) {
+  while (commands.size > MAX_CONTROL_COMMANDS_PER_DEVICE) commands.delete(commands.keys().next().value);
+}
+
+function controlCommandFingerprint(payload) {
+  return crypto.createHash('sha256')
+    .update(`${String(payload.threadId || '')}\n${String(payload.text || '')}`)
+    .digest('hex');
+}
+
+function controlResultEvent(state, deviceId, command) {
+  return Object.assign({
+    type: 'control-result',
+    action: command.action,
+    ok: command.ok,
+    status: command.status,
+    threadId: command.threadId,
+    clientUserMessageId: command.clientUserMessageId,
+    acceptedSyncVersion: command.acceptedSyncVersion,
+    result: command.result || undefined,
+    error: command.error || undefined,
+    completedAt: command.completedAt || '',
+  }, relayStateForToken(state, deviceId));
+}
+
+function recordRelayControl(event, deviceId, command, details = {}) {
+  console.log(JSON.stringify({
+    timestamp: new Date().toISOString(),
+    component: 'relay',
+    event,
+    deviceId,
+    commandId: command.clientUserMessageId,
+    threadId: command.threadId,
+    ...details,
+  }));
+}
+
+function publicControlCommand(state, deviceId, command) {
+  return {
+    ok: true,
+    accepted: true,
+    deviceId,
+    status: command.status,
+    watch: {
+      threadId: command.threadId,
+      clientUserMessageId: command.clientUserMessageId,
+    },
+    acceptedSyncVersion: command.acceptedSyncVersion,
+    controlResult: command.status === 'completed' ? controlResultEvent(state, deviceId, command) : null,
+  };
+}
+
 /**
  * AI:异步执行手机发送命令，并通过手机实时通道回传唯一的最终控制结果。
  *
@@ -424,6 +499,18 @@ function isPublicAssetRequest(req) {
  * @returns {object} 可立即返回给手机的受理结果。
  */
 function acceptSendCommand(state, token, payload, timeoutMs) {
+  const commands = controlCommandsFor(state, token);
+  const fingerprint = controlCommandFingerprint(payload);
+  const existing = commands.get(payload.clientUserMessageId);
+  if (existing) {
+    if (existing.fingerprint !== fingerprint) {
+      throw Object.assign(new Error('客户端消息标识已用于另一条发送内容。'), {
+        status: 409,
+        code: 'CLIENT_USER_MESSAGE_ID_CONFLICT',
+      });
+    }
+    return publicControlCommand(state, token, existing);
+  }
   const ws = state.agents.get(token);
   if (!ws || ws.readyState !== ws.OPEN) {
     throw Object.assign(new Error('对应 token 的电脑 Agent 不在线。'), {
@@ -432,40 +519,43 @@ function acceptSendCommand(state, token, payload, timeoutMs) {
     });
   }
   const acceptedSyncVersion = syncHealthFor(state, token).version;
-  forwardToAgent(state, token, 'send', payload, timeoutMs).then(result => {
-    broadcastToMobileClients(state, token, Object.assign({
-      type: 'control-result',
-      action: 'send',
-      ok: true,
-      threadId: payload.threadId,
-      clientUserMessageId: payload.clientUserMessageId,
-      acceptedSyncVersion,
-      result,
-    }, relayStateForToken(state, token)));
-  }).catch(error => {
-    broadcastToMobileClients(state, token, Object.assign({
-      type: 'control-result',
-      action: 'send',
-      ok: false,
-      threadId: payload.threadId,
-      clientUserMessageId: payload.clientUserMessageId,
-      acceptedSyncVersion,
-      error: {
-        code: error.code || 'AGENT_REQUEST_FAILED',
-        message: error.message || '电脑 Agent 发送失败。',
-        status: error.status || 500,
-      },
-    }, relayStateForToken(state, token)));
-  });
-  return {
-    ok: true,
-    accepted: true,
-    watch: {
-      threadId: payload.threadId,
-      clientUserMessageId: payload.clientUserMessageId,
-    },
+  const now = new Date().toISOString();
+  const command = {
+    action: 'send',
+    status: 'accepted',
+    ok: null,
+    threadId: payload.threadId,
+    clientUserMessageId: payload.clientUserMessageId,
+    fingerprint,
     acceptedSyncVersion,
+    createdAt: now,
+    updatedAt: now,
   };
+  commands.set(payload.clientUserMessageId, command);
+  trimControlCommands(commands);
+  recordRelayControl('control.accepted', token, command);
+  forwardToAgent(state, token, 'send', payload, timeoutMs).then(result => {
+    command.status = 'completed';
+    command.ok = true;
+    command.result = result;
+    command.completedAt = new Date().toISOString();
+    command.updatedAt = command.completedAt;
+    recordRelayControl('control.completed', token, command, { ok: true, turnId: String(result && result.watch && result.watch.turnId || '') });
+    broadcastToMobileClients(state, token, controlResultEvent(state, token, command));
+  }).catch(error => {
+    command.status = 'completed';
+    command.ok = false;
+    command.error = {
+      code: error.code || 'AGENT_REQUEST_FAILED',
+      message: error.message || '电脑 Agent 发送失败。',
+      status: error.status || 500,
+    };
+    command.completedAt = new Date().toISOString();
+    command.updatedAt = command.completedAt;
+    recordRelayControl('control.completed', token, command, { ok: false, errorCode: command.error.code });
+    broadcastToMobileClients(state, token, controlResultEvent(state, token, command));
+  });
+  return publicControlCommand(state, token, command);
 }
 
 /**
@@ -600,55 +690,63 @@ function createCloudRelayServer(options = {}) {
     }
     if (isPublicAssetRequest(req)) return serveStatic(req, res, publicDir);
     const token = tokenFromRequest(req);
-    if (!keyStore.has(token)) {
+    const device = resolveDevice(keyStore, token);
+    if (!device) {
       return sendJson(res, 401, { ok: false, code: 'UNAUTHORIZED', message: '访问令牌不正确。' });
     }
+    const deviceId = device.id;
     try {
       if (req.method === 'GET' && req.url.startsWith('/codex/health')) {
         return sendJson(res, 200, {
           ok: true,
           service: 'codex-cloud-relay',
-          online: isAgentOnline(state, token),
-          ...relayStateForToken(state, token),
-          updatedAt: state.cache.threads(token).updatedAt,
+          online: isAgentOnline(state, deviceId),
+          ...relayStateForToken(state, deviceId),
+          updatedAt: state.cache.threads(deviceId).updatedAt,
         });
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/config')) {
         return sendJson(res, 200, { ok: true, service: 'codex-cloud-relay', localOnly: false });
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/threads')) {
-        return sendJson(res, 200, Object.assign(state.cache.threads(token), relayStateForToken(state, token)));
+        return sendJson(res, 200, Object.assign(state.cache.threads(deviceId), relayStateForToken(state, deviceId)));
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/history')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const threadId = url.searchParams.get('thread') || '';
-        if (state.cache.hasOpenThread(token, threadId) && isAgentOnline(state, token)) {
-          const direct = await forwardToAgent(state, token, 'history', {
+        if (state.cache.hasOpenThread(deviceId, threadId) && isAgentOnline(state, deviceId)) {
+          const direct = await forwardToAgent(state, deviceId, 'history', {
             threadId,
             limit: url.searchParams.get('limit') || 120,
             before: url.searchParams.get('before') || '',
           }, requestTimeoutMs);
-          return sendJson(res, 200, Object.assign({}, direct, { cached: false }, relayStateForToken(state, token)));
+          return sendJson(res, 200, Object.assign({}, direct, { cached: false }, relayStateForToken(state, deviceId)));
         }
-        return sendJson(res, 200, Object.assign(state.cache.history(token, threadId, url.searchParams.get('limit') || 120, url.searchParams.get('before') || ''), relayStateForToken(state, token)));
+        return sendJson(res, 200, Object.assign(state.cache.history(deviceId, threadId, url.searchParams.get('limit') || 120, url.searchParams.get('before') || ''), relayStateForToken(state, deviceId)));
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/status')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const threadId = url.searchParams.get('thread') || '';
-        if (state.cache.hasOpenThread(token, threadId) && isAgentOnline(state, token)) {
-          const direct = await forwardToAgent(state, token, 'status', {
+        if (state.cache.hasOpenThread(deviceId, threadId) && isAgentOnline(state, deviceId)) {
+          const direct = await forwardToAgent(state, deviceId, 'status', {
             threadId,
             since: url.searchParams.get('since') || '',
           }, requestTimeoutMs);
-          return sendJson(res, 200, Object.assign({}, direct, { cached: false }, relayStateForToken(state, token)));
+          return sendJson(res, 200, Object.assign({}, direct, { cached: false }, relayStateForToken(state, deviceId)));
         }
-        return sendJson(res, 200, Object.assign(state.cache.status(token, threadId, url.searchParams.get('since') || ''), relayStateForToken(state, token)));
+        return sendJson(res, 200, Object.assign(state.cache.status(deviceId, threadId, url.searchParams.get('since') || ''), relayStateForToken(state, deviceId)));
+      }
+      if (req.method === 'GET' && req.url.startsWith('/codex/control-result')) {
+        const commandId = requireClientUserMessageId(url.searchParams.get('clientUserMessageId'));
+        const command = controlCommandsFor(state, deviceId).get(commandId);
+        if (!command) return sendJson(res, 404, { ok: false, code: 'CONTROL_COMMAND_NOT_FOUND', message: '发送记录不存在或已过期。' });
+        return sendJson(res, 200, publicControlCommand(state, deviceId, command));
       }
       if (req.method === 'POST' && req.url.startsWith('/send')) {
         const payload = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');
-        const threadId = requireOpenThread(state, token, payload.threadId);
+        const threadId = requireOpenThread(state, deviceId, payload.threadId);
         const clientUserMessageId = requireClientUserMessageId(payload.clientUserMessageId);
-        const accepted = acceptSendCommand(state, token, {
+        const accepted = acceptSendCommand(state, deviceId, {
           text: typeof payload.text === 'string' ? payload.text : '',
           threadId,
           clientUserMessageId,
@@ -657,11 +755,11 @@ function createCloudRelayServer(options = {}) {
       }
       if (req.method === 'POST' && req.url.startsWith('/codex/stop')) {
         const payload = JSON.parse(await readBody(req, MAX_BODY_BYTES) || '{}');
-        const threadId = requireOpenThread(state, token, payload.threadId);
-        const result = await forwardToAgent(state, token, 'stop', {
+        const threadId = requireOpenThread(state, deviceId, payload.threadId);
+        const result = await forwardToAgent(state, deviceId, 'stop', {
           threadId,
         }, requestTimeoutMs);
-        return sendJson(res, 200, Object.assign({}, result, { acceptedSyncVersion: syncHealthFor(state, token).version }));
+        return sendJson(res, 200, Object.assign({}, result, { acceptedSyncVersion: syncHealthFor(state, deviceId).version }));
       }
       if (req.method === 'GET' || req.method === 'HEAD') return serveStatic(req, res, publicDir);
       return sendJson(res, 405, { ok: false, code: 'METHOD_NOT_ALLOWED', message: '不支持的请求方法。' });
@@ -678,12 +776,13 @@ function createCloudRelayServer(options = {}) {
     }
     const token = tokenFromRequest(req);
     wss.handleUpgrade(req, socket, head, ws => {
-      if (!keyStore.has(token)) {
+      const device = resolveDevice(keyStore, token);
+      if (!device) {
         rejectAgent(ws, 1008, 'UNAUTHORIZED');
         return;
       }
-      if (url.pathname === '/agent') attachAgent(state, ws, token, syncStaleMs);
-      else attachMobileClient(state, ws, token);
+      if (url.pathname === '/agent') attachAgent(state, ws, device.id, syncStaleMs);
+      else attachMobileClient(state, ws, device.id);
     });
   });
   server.relayState = state;
@@ -705,4 +804,5 @@ module.exports = {
   requireClientUserMessageId,
   rejectPendingForToken,
   relayStateForToken,
+  resolveDevice,
 };

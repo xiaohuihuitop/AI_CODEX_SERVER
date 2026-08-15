@@ -142,7 +142,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { onBackPress, onHide, onShow, onUnload } from '@dcloudio/uni-app';
-import { createRealtimeSocket, getHealth, getHistory, getStatus, getThreads, sendMessage, stopCodex } from '../../utils/api';
+import { createRealtimeSocket, getControlResult, getHealth, getHistory, getStatus, getThreads, sendMessage, stopCodex } from '../../utils/api';
 import {
   DEFAULT_CONFIG,
   getActiveDevice,
@@ -1163,12 +1163,37 @@ function waitForCommandConfirmation(watch) {
  */
 function waitForControlResult(watch) {
   if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
-  commandConfirmTimer = setTimeout(() => {
+  commandConfirmTimer = setTimeout(async () => {
     const current = pendingWatch.value;
     if (!current || current.clientUserMessageId !== watch.clientUserMessageId) return;
+    if (await recoverPendingControlResult(current)) return;
+    if (!pendingWatch.value || pendingWatch.value.clientUserMessageId !== watch.clientUserMessageId) return;
     pendingWatch.value = Object.assign({}, current, { unconfirmed: true });
     setNotice('电脑尚未返回发送结果，请核对电脑端后再继续发送。');
   }, 32000);
+}
+
+/**
+ * AI:从 Relay 命令记录恢复可能丢失的实时发送结果，不重复执行发送。
+ *
+ * @param {object} watch 待恢复命令。
+ * @returns {Promise<boolean>} 已取得最终结果并应用时返回 true。
+ */
+async function recoverPendingControlResult(watch = pendingWatch.value) {
+  if (!watch || !watch.clientUserMessageId || !hasConnectionConfig()) return false;
+  const token = currentLifecycleToken();
+  try {
+    const data = await getControlResult(config.value, watch.clientUserMessageId, {
+      registerTask: registerRequestTask,
+      unregisterTask: unregisterRequestTask,
+    });
+    if (!canUpdateTask(token) || !pendingWatch.value
+      || pendingWatch.value.clientUserMessageId !== watch.clientUserMessageId) return false;
+    return Boolean(data.controlResult && applyControlResult(data.controlResult));
+  } catch (error) {
+    if (error.code !== 'CONTROL_COMMAND_NOT_FOUND' && canUpdateTask(token)) setNotice(error.message);
+    return false;
+  }
 }
 
 /**
@@ -1574,6 +1599,7 @@ async function send() {
       pendingWatch.value = Object.assign({}, pendingWatch.value, data.watch || {}, {
         acceptedSyncVersion: Number(data.acceptedSyncVersion) || syncState.value.version,
       });
+      if (data.controlResult) applyControlResult(data.controlResult);
     }
   } catch (error) {
     if (!canUpdateTask(token)) return;
@@ -1842,6 +1868,7 @@ function openRealtimeSocket() {
     open() {
       if (!canUpdateTask(token) || realtimeSocket !== socket) return;
       serverState.value = { online: true, offline: false, message: '服务器已连' };
+      void recoverPendingControlResult();
     },
     message(event) {
       if (!canUpdateTask(token) || realtimeSocket !== socket) return;
