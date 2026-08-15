@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('codexManager', {
   pauseFeature: () => ipcRenderer.invoke('manager:pause-feature'),
   restartAgent: () => ipcRenderer.invoke('manager:restart-agent'),
   restartCodex: () => ipcRenderer.invoke('manager:restart-codex'),
+  inspectCodexCompatibility: () => ipcRenderer.invoke('manager:inspect-codex-compatibility'),
   clearLogs: () => ipcRenderer.invoke('manager:clear-logs'),
   openMobile: () => ipcRenderer.invoke('manager:open-mobile'),
 });

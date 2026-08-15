@@ -16,6 +16,7 @@ await runtime.start();
 await runtime.sendMessage(threadId, text);
 await runtime.stop(threadId);
 await runtime.getThreadRuntime(threadId);
+await inspectCodexDesktopCompatibility({ debugPort });
 ```
 
 - `start()`：只连接已经存在的 CDP。当前官方主进程持有配置端口且 `/json/list` 返回目标页面时直接复用；不得依赖 Appx 主进程命令行是否保留 CDP 参数，也不得关闭或重启官方客户端。
@@ -24,6 +25,7 @@ await runtime.getThreadRuntime(threadId);
 - `sendMessage(threadId, text)`：为该命令创建独立 CDP 控制会话，按 `threadId` 精确选择官方侧栏线程，点击前精确核对编辑器正文，点击后等待目标 JSONL 新 `task_started/turnId` 证据；命令结束后关闭该控制会话。
 - `stop(threadId)`：为该命令创建独立 CDP 控制会话，按 `threadId` 精确选择线程，点击官方停止按钮，并等待目标 JSONL `turn_aborted` 证据；命令结束后关闭该控制会话。
 - `getThreadRuntime(threadId)`：只读取当前已选线程的官方运行态；不得为了状态轮询切换电脑界面。
+- `inspectCodexDesktopCompatibility({ debugPort })`：管理器使用当前最新已验证档案执行只读 CDP 和 DOM 检测，返回官方版本、PID、档案 ID、侧栏线程数、编辑器及动作按钮结果；未知版本即使页面结构匹配也只能返回 `needs-review`，不得改变正式控制门禁。
 - 长连接 CDP 只负责就绪探测和无副作用状态读取，不得承载发送、停止等有副作用命令；命令失败不得自动重放。
 
 ### 3. 契约
@@ -56,6 +58,8 @@ Relay 路由不变量：Token 只用于入口鉴权。鉴权成功后必须解�
 
 兼容性不变量：CDP 连接前必须由显式版本档案验证官方版本范围，并且只允许一个匹配配置端口的 `app://-/index.html` 主页面。连接后必须验证线程行、可见编辑器和动作按钮；任何一项不满足都返回明确不兼容错误，不猜测备用目标或选择器。
 
+兼容性检测报告字段固定包含 `checkedAt`、`debugPort`、`version`、`pid`、`profileId`、`versionSupported`、`cdpConnected`、`threadRows`、`editor`、`action`、`pageCompatible`、`compatible`、`status`、`stage`、`errorCode` 和 `message`。检测只允许 `Runtime.evaluate` 读取页面，不得点击、输入、切换线程或修改兼容档案。
+
 ### 4. 校验与错误矩阵
 
 | 条件 | 必须行为 |
@@ -67,6 +71,8 @@ Relay 路由不变量：Token 只用于入口鉴权。鉴权成功后必须解�
 | 旧实例退出后 CDP 端口仍不可绑定 | `CDP_PORT_RELEASE_TIMEOUT`；不得继续启动新实例或自动换端口 |
 | 官方实例无正确 CDP 参数 | `CDP_NOT_READY`；Agent 保持运行并继续探测，提示用户显式点击“重启 Codex 启用 CDP” |
 | 当前官方实例持有可用 CDP，但命令行未显示参数 | 直接复用，不得重启 |
+| 未知官方版本但页面与当前档案匹配 | 检测报告返回 `status=needs-review`、`compatible=false`；正式控制继续拒绝 |
+| 兼容性检测无法连接 CDP | 报告保留 `stage=cdp`、具体 `errorCode` 和错误信息；不得重启 Codex 或切换控制通道 |
 | AUMID 启动后 CDP 未就绪 | `CDP_START_FAILED` |
 | 侧栏无精确 `threadId` | `THREAD_ROW_NOT_FOUND`；不得按标题选择 |
 | 切换后选中 ID 不一致 | `THREAD_SELECTION_FAILED` |
@@ -84,6 +90,7 @@ Relay 路由不变量：Token 只用于入口鉴权。鉴权成功后必须解�
 - 初始化异常：Agent 保持运行并定时重试连接，不因一次失败退出；所有自动重试均不得关闭或重启官方客户端。
 - 短暂异常：CDP WebSocket 收到 `1006` 等断线事件，或任一 CDP 请求超时时，Agent 立即写入不可控状态并使当前连接整体失效，再按固定间隔重连同一端口；重连成功后写回 ready 心跳并通知 relay。`readyState=OPEN` 只代表本地套接字未收到关闭帧，不能作为页面可响应的证据。
 - 空闲探测：运行时处于 `ready` 时每 15 秒执行一次无副作用的 `Runtime.evaluate`。探测失败只重建同一 CDP 连接；发送、停止和点击等有副作用的业务命令失败后不得自动重放，避免重复提交。
+- 兼容检测：未知新版页面仍含基准档案要求的线程、编辑器和动作按钮时，管理器显示“页面结构匹配，版本尚待验证”并允许复制报告，但 Agent 仍保持未就绪。
 - 异常：两个项目存在同名线程。只能选择属性中精确匹配的 `threadId`；找不到时显式失败。
 - 异常：端口已被其他进程监听。管理器显示占用 PID，用户修改配置或处理占用后重试，不做隐式恢复。
 
@@ -114,11 +121,20 @@ await appServer.startTurn(threadId, text);
 
 这会制造两个进程内状态源：手机可能收到回复，但官方 Desktop 不显示；停止和完成状态也会分叉。
 
+```js
+// 错误：页面看起来没变就自动允许未知官方版本执行控制。
+if (report.pageCompatible) allowControl();
+```
+
 #### 正确
 
 ```js
 const result = await controlledCodex.sendMessage(threadId, text);
 if (!result.turnId) throw new Error('目标 JSONL 未确认官方发送');
+
+// 正确：检测报告只收集证据，正式控制仍要求显式版本档案。
+const report = await inspectCodexDesktopCompatibility({ debugPort });
+if (!report.versionSupported) return { status: 'needs-review', compatible: false };
 ```
 
 控制动作、官方 UI、JSONL 和 Relay 必须形成同一条可验证证据链。
@@ -177,6 +193,8 @@ advanceControlSyncState(state, evidence, now);
 - `server/test/desktop-agent.test.js`：轻量目录、目标优先同步及两阶段确认。
 - `server/test/mobile-app.test.js`：五轮分页、消息去重、自动刷新和终态覆盖。
 - `server/test/codex-desktop-compatibility.test.js`：版本范围、唯一主页面、端口匹配和未知版本拒绝。
+- `server/test/codex-desktop-compatibility-report.test.js`：未知版本只读检测、正式控制不放行、CDP 失败阶段和错误码保留。
+- `server/test/desktop-manager.test.js`：兼容性检测 IPC、检测按钮、结果展示和复制入口完整。
 - `server/test/structured-diagnostics.test.js`：结构化字段、敏感正文排除和 500 条上限。
 - 真实 E2E：确认回复与停止都能在 Web 自动出现，状态不需要手动刷新。
 

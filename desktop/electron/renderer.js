@@ -14,10 +14,14 @@ const elements = {
   configForm: document.getElementById('configForm'),
   restartAgentButton: document.getElementById('restartAgentButton'),
   restartCodexButton: document.getElementById('restartCodexButton'),
+  inspectCompatibilityButton: document.getElementById('inspectCompatibilityButton'),
   stopButton: document.getElementById('stopButton'),
   refreshButton: document.getElementById('refreshButton'),
   openMobileButton: document.getElementById('openMobileButton'),
   copyMobileButton: document.getElementById('copyMobileButton'),
+  compatibilityPanel: document.getElementById('compatibilityPanel'),
+  compatibilityResult: document.getElementById('compatibilityResult'),
+  copyCompatibilityButton: document.getElementById('copyCompatibilityButton'),
   portStatus: document.getElementById('portStatus'),
   mobileUrl: document.getElementById('mobileUrl'),
   agentEnv: document.getElementById('agentEnv'),
@@ -52,14 +56,40 @@ function setBusy(value) {
   [
     elements.restartAgentButton,
     elements.restartCodexButton,
+    elements.inspectCompatibilityButton,
     elements.stopButton,
     elements.refreshButton,
     elements.openMobileButton,
     elements.copyMobileButton,
+    elements.copyCompatibilityButton,
     elements.clearLogsButton,
   ].forEach(button => {
     button.disabled = value;
   });
+}
+
+function formatCompatibilityReport(report) {
+  const conclusions = {
+    compatible: '兼容，可以控制',
+    'needs-review': '页面结构匹配，版本尚待验证',
+    incompatible: '页面结构不兼容',
+    failed: '检测失败',
+  };
+  const yesNo = value => value ? '通过' : '未通过';
+  const lines = [
+    `检测时间：${report.checkedAt || '未知'}`,
+    `官方 Codex：v${report.version || '未知'}（PID ${report.pid || '未知'}）`,
+    `CDP 端口：${report.debugPort || '未知'}`,
+    `对比档案：${report.profileId || '未知'}`,
+    `版本档案：${report.versionSupported ? '已收录' : '未收录'}`,
+    `CDP 连接：${yesNo(report.cdpConnected)}`,
+    `侧栏线程：${Number(report.threadRows || 0)} 条`,
+    `消息编辑器：${yesNo(report.editor)}`,
+    `发送/停止按钮：${yesNo(report.action)}`,
+    `检测结论：${conclusions[report.status] || '未知'}`,
+  ];
+  if (report.errorCode) lines.push(`错误：${report.errorCode} / ${report.message || '未知错误'}`);
+  return lines.join('\n');
 }
 
 function setCard(card, ok) {
@@ -161,6 +191,23 @@ elements.restartCodexButton.addEventListener('click', () => {
   runAction(() => window.codexManager.restartCodex());
 });
 
+elements.inspectCompatibilityButton.addEventListener('click', async () => {
+  if (state.busy) return;
+  setBusy(true);
+  elements.compatibilityPanel.hidden = false;
+  elements.compatibilityResult.textContent = '正在检测兼容性...';
+  try {
+    const report = await window.codexManager.inspectCodexCompatibility();
+    elements.compatibilityResult.textContent = formatCompatibilityReport(report);
+    elements.saveState.textContent = '兼容性检测完成';
+  } catch (error) {
+    elements.compatibilityResult.textContent = error.message || '兼容性检测失败';
+    elements.saveState.textContent = '兼容性检测失败';
+  } finally {
+    setBusy(false);
+  }
+});
+
 elements.stopButton.addEventListener('click', () => {
   runAction(() => window.codexManager.pauseFeature());
 });
@@ -175,6 +222,13 @@ elements.copyMobileButton.addEventListener('click', async () => {
   if (!state.current?.mobileUrl) return;
   await navigator.clipboard.writeText(state.current.mobileUrl);
   elements.saveState.textContent = '手机访问地址已复制';
+});
+
+elements.copyCompatibilityButton.addEventListener('click', async () => {
+  const report = elements.compatibilityResult.textContent.trim();
+  if (!report) return;
+  await navigator.clipboard.writeText(report);
+  elements.saveState.textContent = '兼容性检测结果已复制';
 });
 
 elements.clearLogsButton.addEventListener('click', () => {

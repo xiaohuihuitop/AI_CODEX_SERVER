@@ -129,7 +129,7 @@ test('桌面管理器统一使用固定目录、固定名称并展示版本', ()
 
   assert.equal(pkg.build.directories.output, 'dist');
   assert.equal(pkg.productName, 'Codex Desktop 管理器');
-  assert.equal(pkg.version, '0.3.12');
+  assert.equal(pkg.version, '0.3.13');
   assert.match(main, /const MANAGER_VERSION = app\.getVersion\(\)/);
   assert.match(main, /Codex Desktop 管理器 v\$\{MANAGER_VERSION\} 已启动/);
   assert.match(html, /id="managerVersion"/);
@@ -311,6 +311,21 @@ test('Electron 重启 Codex 操作与启动 Agent 独立并带用户确认', () 
   assert.match(renderer, /restartCodexButton/);
   assert.match(renderer, /window\.codexManager\.restartCodex\(\)/);
   assert.match(html, /id="restartCodexButton"/);
+});
+
+test('Electron 管理器提供只读兼容性检测和结果复制入口', () => {
+  const electronMain = fs.readFileSync(path.join(__dirname, '..', '..', 'desktop', 'electron', 'main.js'), 'utf8');
+  const preload = fs.readFileSync(path.join(__dirname, '..', '..', 'desktop', 'electron', 'preload.js'), 'utf8');
+  const renderer = fs.readFileSync(path.join(__dirname, '..', '..', 'desktop', 'electron', 'renderer.js'), 'utf8');
+  const html = fs.readFileSync(path.join(__dirname, '..', '..', 'desktop', 'electron', 'renderer.html'), 'utf8');
+
+  assert.match(electronMain, /manager:inspect-codex-compatibility/);
+  assert.match(preload, /inspectCodexCompatibility/);
+  assert.match(renderer, /inspectCompatibilityButton/);
+  assert.match(renderer, /copyCompatibilityButton/);
+  assert.match(html, /id="inspectCompatibilityButton"/);
+  assert.match(html, /id="compatibilityResult"/);
+  assert.match(html, /id="copyCompatibilityButton"/);
 });
 
 test('桌面 Agent 管理器可以识别并接管已有 Agent 进程', () => {

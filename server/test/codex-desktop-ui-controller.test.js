@@ -33,6 +33,20 @@ test('界面控制器启动时验证已知 DOM 控制契约', async () => {
   );
 });
 
+test('界面控制器只读检查返回逐项页面结构结果', async () => {
+  const controller = new CodexDesktopUiController({
+    cdp: createCdp({ evaluate: async () => ({ threadRows: 3, editor: true, action: false }) }),
+  });
+
+  assert.deepEqual(await controller.inspectCompatibility(), {
+    profileId: 'codex-desktop-26.707.3748',
+    threadRows: 3,
+    editor: true,
+    action: false,
+    compatible: false,
+  });
+});
+
 test('界面控制器按 threadId 精确选择侧栏线程并核对选中结果', async () => {
   const cdp = createCdp({
     evaluate: async expression => {

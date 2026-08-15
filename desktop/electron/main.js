@@ -19,6 +19,7 @@ const {
 } = require('../src/desktop-manager-server');
 const { appendLog, createDesktopAgentProcess } = require('../src/desktop-agent-process');
 const { ControlledCodexProcess } = require('../src/controlled-codex-process');
+const { inspectCodexDesktopCompatibility } = require('../src/codex-desktop-compatibility-report');
 const { resolveControlledCodexStatus } = require('../src/controlled-codex-status');
 
 const PROJECT_ROOT = path.join(__dirname, '..');
@@ -290,6 +291,21 @@ ipcMain.handle('manager:restart-codex', async () => {
   if (restartError) throw restartError;
   if (agentError) throw agentError;
   return getState();
+});
+
+ipcMain.handle('manager:inspect-codex-compatibility', async () => {
+  const normalized = normalizeManagerConfig(config);
+  const report = await inspectCodexDesktopCompatibility({
+    debugPort: normalized.debugPort,
+    processManager: controlledCodexProcess,
+  });
+  const conclusion = report.compatible
+    ? '兼容'
+    : report.status === 'needs-review'
+      ? '版本待验证'
+      : report.status === 'failed' ? `检测失败（${report.errorCode}）` : '不兼容';
+  appendManagerLog(`兼容性检测完成：Codex v${report.version || '未知'}，${conclusion}`);
+  return report;
 });
 
 ipcMain.handle('manager:clear-logs', () => {

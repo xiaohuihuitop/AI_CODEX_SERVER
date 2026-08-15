@@ -30,11 +30,11 @@ class CodexDesktopUiController {
   }
 
   /**
-   * AI:验证当前官方页面仍满足已知版本的线程与编辑器控制契约。
+   * AI:只读检查当前官方页面与指定兼容档案的逐项匹配结果。
    *
-   * @returns {Promise<object>} 兼容配置和页面探针结果。
+   * @returns {Promise<object>} 页面结构检查结果。
    */
-  async probeCompatibility() {
+  async inspectCompatibility() {
     const selectors = this.profile.selectors;
     const result = await this.cdp.evaluate(`(() => {
       const visible = element => {
@@ -54,10 +54,29 @@ class CodexDesktopUiController {
       });
       return { threadRows: rows.length, editor: !!editor, action: !!action };
     })()`);
-    if (!result || result.threadRows < 1 || !result.editor || !result.action) {
+    const inspected = {
+      profileId: this.profile.id,
+      threadRows: Number(result && result.threadRows || 0),
+      editor: Boolean(result && result.editor),
+      action: Boolean(result && result.action),
+    };
+    return {
+      ...inspected,
+      compatible: inspected.threadRows > 0 && inspected.editor && inspected.action,
+    };
+  }
+
+  /**
+   * AI:验证当前官方页面仍满足已知版本的线程与编辑器控制契约。
+   *
+   * @returns {Promise<object>} 兼容配置和页面探针结果。
+   */
+  async probeCompatibility() {
+    const result = await this.inspectCompatibility();
+    if (!result.compatible) {
       throw controlError(`Codex Desktop 页面结构与兼容配置 ${this.profile.id} 不一致。`, 'CODEX_DESKTOP_DOM_INCOMPATIBLE');
     }
-    return { ok: true, profileId: this.profile.id, ...result };
+    return { ok: true, ...result };
   }
 
   async click(rect) {
