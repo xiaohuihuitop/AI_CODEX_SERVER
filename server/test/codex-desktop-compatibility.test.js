@@ -7,8 +7,13 @@ const {
 
 test('官方客户端兼容配置只接受已验证版本族', () => {
   assert.equal(resolveCodexDesktopProfile('26.707.3748.0').id, 'codex-desktop-26.707.3748');
+  assert.equal(resolveCodexDesktopProfile('26.810.7004.0').id, 'codex-desktop-26.810.7004');
   assert.throws(
     () => resolveCodexDesktopProfile('26.800.1.0'),
+    error => error.code === 'CODEX_DESKTOP_VERSION_UNSUPPORTED',
+  );
+  assert.throws(
+    () => resolveCodexDesktopProfile('26.810.7005.0'),
     error => error.code === 'CODEX_DESKTOP_VERSION_UNSUPPORTED',
   );
 });

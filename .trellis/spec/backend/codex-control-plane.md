@@ -58,6 +58,8 @@ Relay 路由不变量：Token 只用于入口鉴权。鉴权成功后必须解�
 
 兼容性不变量：CDP 连接前必须由显式版本档案验证官方版本范围，并且只允许一个匹配配置端口、URL 精确等于 `app://-/index.html` 的主页面。带 `initialRoute` 等查询参数的快捷窗口、头像浮层及其他辅助页面不得计入主页面候选；出现多个精确主页面仍必须拒绝。连接后必须验证线程行、可见编辑器和动作按钮；任何一项不满足都返回明确不兼容错误，不猜测备用目标或选择器。
 
+已验证档案：`26.707.3748.x` 与 `26.810.7004.x`。两个档案当前共享同一组语义选择器，但必须保留独立档案 ID 和精确版本范围；不得因单个版本检测通过而放行整个 `26.810.x` 系列。
+
 兼容性检测报告字段固定包含 `checkedAt`、`debugPort`、`version`、`pid`、`profileId`、`versionSupported`、`cdpConnected`、`threadRows`、`editor`、`action`、`pageCompatible`、`compatible`、`status`、`stage`、`errorCode` 和 `message`。检测只允许 `Runtime.evaluate` 读取页面，不得点击、输入、切换线程或修改兼容档案。
 
 ### 4. 校验与错误矩阵

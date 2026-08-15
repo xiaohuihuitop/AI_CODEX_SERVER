@@ -33,8 +33,28 @@ test('未知官方版本可以只读检测但不会被标记为可控制', async
   assert.equal(result.pageCompatible, true);
   assert.equal(result.compatible, false);
   assert.equal(result.status, 'needs-review');
-  assert.equal(result.profileId, 'codex-desktop-26.707.3748');
+  assert.equal(result.profileId, 'codex-desktop-26.810.7004');
   assert.deepEqual(cdp.calls, ['connect', 'close']);
+});
+
+test('已验证新版档案通过相同页面契约后允许正式控制', async () => {
+  const cdp = createCdp({ threadRows: 24, editor: true, action: true });
+  const result = await inspectCodexDesktopCompatibility({
+    debugPort: 9230,
+    processManager: {
+      inspect: async () => ({
+        app: { version: '26.810.7004.0' },
+        mainProcess: { pid: 25396 },
+      }),
+    },
+    cdpFactory: () => cdp,
+  });
+
+  assert.equal(result.profileId, 'codex-desktop-26.810.7004');
+  assert.equal(result.versionSupported, true);
+  assert.equal(result.pageCompatible, true);
+  assert.equal(result.compatible, true);
+  assert.equal(result.status, 'compatible');
 });
 
 test('兼容性检测保留 CDP 失败阶段和错误码', async () => {

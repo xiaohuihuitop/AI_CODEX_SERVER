@@ -1,17 +1,24 @@
 const { URL } = require('node:url');
 
+const CODEX_DESKTOP_SELECTORS = Object.freeze({
+  threadRow: '[data-app-action-sidebar-thread-id]',
+  selectedThreadRow: '[data-app-action-sidebar-thread-id][aria-current="page"]',
+  composer: '[contenteditable="true"]',
+  stopLabel: '停止',
+  sendLabels: Object.freeze(['发送', '发送消息']),
+  sendButtonClass: 'size-token-button-composer',
+});
+
 const CODEX_DESKTOP_PROFILES = Object.freeze([{
   id: 'codex-desktop-26.707.3748',
   versionPattern: /^26\.707\.3748\.\d+$/,
   targetUrl: 'app://-/index.html',
-  selectors: Object.freeze({
-    threadRow: '[data-app-action-sidebar-thread-id]',
-    selectedThreadRow: '[data-app-action-sidebar-thread-id][aria-current="page"]',
-    composer: '[contenteditable="true"]',
-    stopLabel: '停止',
-    sendLabels: Object.freeze(['发送', '发送消息']),
-    sendButtonClass: 'size-token-button-composer',
-  }),
+  selectors: CODEX_DESKTOP_SELECTORS,
+}, {
+  id: 'codex-desktop-26.810.7004',
+  versionPattern: /^26\.810\.7004\.\d+$/,
+  targetUrl: 'app://-/index.html',
+  selectors: CODEX_DESKTOP_SELECTORS,
 }]);
 
 /**
