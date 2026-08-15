@@ -28,7 +28,7 @@
 ## 4. 文档与规范
 
 - [x] 更新 `app/docs/移动端App说明.md` 和 `app/README.md` 的多设备配置说明。
-- [x] 将设备切换事务与 Token 隔离约束写入前端项目规范。
+- [x] 将设备切换事务与“Token 鉴权、Key ID 路由”隔离约束写入前端项目规范。
 
 ## 5. 验证
 
@@ -37,11 +37,11 @@
 - [x] 执行 `git diff --check`。
 - [x] 使用临时 H5 验证副本配置两个 Token，验证顶部切换、草稿拦截、设备管理和移动视口布局；副本已清理。
 - [ ] 使用 HBuilderX Android 调试基座验证自定义导航栏、弹窗、设置页和双设备切换。
-- [x] 确认服务器生产代码无变更；若协议保持不变，明确记录服务器无需更新。
+- [x] 手机 API 形态保持不变；服务器内部路由已从 Token 调整为稳定 Key ID，部署时需要更新服务器。
 
 ## 本轮验证记录
 
-- `server/npm test`：197 项全部通过。
+- `server/npm test`：最新 227 项全部通过。
 - `server/npm run check`：通过。
 - `git diff --check`：通过。
 - HBuilderX 4.87 Android App 资源编译与导出：通过，版本 `0.2.0 (200)`。

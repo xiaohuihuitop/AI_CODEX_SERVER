@@ -52,6 +52,10 @@ WebSocket 所在事件循环。发送和停止的落盘确认只允许从文件�
 
 严禁 fallback：CDP、线程定位或 JSONL 确认失败时必须返回明确错误，不得改用独立 App Server、自动换端口、按标题猜线程或伪造完成状态。
 
+Relay 路由不变量：Token 只用于入口鉴权。鉴权成功后必须解析为稳定 Key ID，Agent、会话缓存、移动连接和控制结果均以 Key ID 为内部主键；不得把可修改的 Token 字符串作为跨层设备身份。
+
+兼容性不变量：CDP 连接前必须由显式版本档案验证官方版本范围，并且只允许一个匹配配置端口的 `app://-/index.html` 主页面。连接后必须验证线程行、可见编辑器和动作按钮；任何一项不满足都返回明确不兼容错误，不猜测备用目标或选择器。
+
 ### 4. 校验与错误矩阵
 
 | 条件 | 必须行为 |
@@ -139,6 +143,8 @@ advanceControlSyncState(state, evidence, now);
 - `sessions` 可分批或仅含元数据，不能决定线程是否仍存在。
 - 手机发送分两阶段：编辑器正文精确核对且目标 JSONL 出现新回合后确认受理；同一回合最终回复/终态同步后才解除优先同步。
 - 手机 `/send` 使用传输与业务两阶段确认：Relay 校验 Agent 在线并将命令写入 Agent WebSocket 后立即返回 `202 accepted`；Agent 形成目标 JSONL 新回合或明确失败后，Relay 必须通过 `/mobile` 实时通道发送带同一 `clientUserMessageId` 的 `control-result`。客户端不得让 HTTP 请求等待整个 CDP 控制过程，也不得因 HTTP 超时把已提交文本恢复到输入框。
+- Relay 必须为 `clientUserMessageId` 保存有界结果记录。相同 ID 与相同内容重复请求只返回既有状态，不再次发送给 Agent；相同 ID 与不同内容返回冲突。移动端重连或确认超时后只查询该记录，不重新提交发送。
+- 控制结果记录至少包含状态、命令 ID、线程 ID、回合 ID 和错误码；不得包含消息正文。当前实现保留 30 分钟、每台设备最多 500 条，Relay 进程重启后不承诺保留。
 - 手机首次读取最近 5 轮，向上分页继续读取 5 轮，使用稳定 `turn:<turnId>` 游标。
 - Relay 与客户端不得用无关线程的版本增长或固定等待时长推断完成。
 
@@ -152,6 +158,9 @@ advanceControlSyncState(state, evidence, now);
 | 目标新回合已开始但未结束 | 确认受理并继续优先同步 |
 | 目标回合终止 | 上传最终状态并立即清除移动端运行覆盖 |
 | Agent 心跳过期 | 移动端显示离线，不继续累计等待时长 |
+| 同一 `clientUserMessageId` 重复发送相同内容 | 返回既有受理或终态，不再次转发 |
+| 同一 `clientUserMessageId` 对应不同内容 | `CLIENT_USER_MESSAGE_ID_CONFLICT` |
+| 实时确认丢失但结果记录存在 | 客户端查询并应用结果，不重发消息 |
 
 ### 5. 正常 / 基准 / 异常案例
 
@@ -164,8 +173,11 @@ advanceControlSyncState(state, evidence, now);
 ### 6. 必需测试
 
 - `server/test/cloud-relay.test.js`：权威清理、迟到增量、Key 隔离、在线穿透和实时终态。
+- `server/test/cloud-relay.test.js`：还必须覆盖控制结果查询、重复命令不重发和命令 ID 内容冲突。
 - `server/test/desktop-agent.test.js`：轻量目录、目标优先同步及两阶段确认。
 - `server/test/mobile-app.test.js`：五轮分页、消息去重、自动刷新和终态覆盖。
+- `server/test/codex-desktop-compatibility.test.js`：版本范围、唯一主页面、端口匹配和未知版本拒绝。
+- `server/test/structured-diagnostics.test.js`：结构化字段、敏感正文排除和 500 条上限。
 - 真实 E2E：确认回复与停止都能在 Web 自动出现，状态不需要手动刷新。
 
 ### 7. 错误与正确做法
