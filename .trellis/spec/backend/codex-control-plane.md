@@ -56,7 +56,7 @@ WebSocket 所在事件循环。发送和停止的落盘确认只允许从文件�
 
 Relay 路由不变量：Token 只用于入口鉴权。鉴权成功后必须解析为稳定 Key ID，Agent、会话缓存、移动连接和控制结果均以 Key ID 为内部主键；不得把可修改的 Token 字符串作为跨层设备身份。
 
-兼容性不变量：CDP 连接前必须由显式版本档案验证官方版本范围，并且只允许一个匹配配置端口的 `app://-/index.html` 主页面。连接后必须验证线程行、可见编辑器和动作按钮；任何一项不满足都返回明确不兼容错误，不猜测备用目标或选择器。
+兼容性不变量：CDP 连接前必须由显式版本档案验证官方版本范围，并且只允许一个匹配配置端口、URL 精确等于 `app://-/index.html` 的主页面。带 `initialRoute` 等查询参数的快捷窗口、头像浮层及其他辅助页面不得计入主页面候选；出现多个精确主页面仍必须拒绝。连接后必须验证线程行、可见编辑器和动作按钮；任何一项不满足都返回明确不兼容错误，不猜测备用目标或选择器。
 
 兼容性检测报告字段固定包含 `checkedAt`、`debugPort`、`version`、`pid`、`profileId`、`versionSupported`、`cdpConnected`、`threadRows`、`editor`、`action`、`pageCompatible`、`compatible`、`status`、`stage`、`errorCode` 和 `message`。检测只允许 `Runtime.evaluate` 读取页面，不得点击、输入、切换线程或修改兼容档案。
 
@@ -192,7 +192,7 @@ advanceControlSyncState(state, evidence, now);
 - `server/test/cloud-relay.test.js`：还必须覆盖控制结果查询、重复命令不重发和命令 ID 内容冲突。
 - `server/test/desktop-agent.test.js`：轻量目录、目标优先同步及两阶段确认。
 - `server/test/mobile-app.test.js`：五轮分页、消息去重、自动刷新和终态覆盖。
-- `server/test/codex-desktop-compatibility.test.js`：版本范围、唯一主页面、端口匹配和未知版本拒绝。
+- `server/test/codex-desktop-compatibility.test.js`：版本范围、唯一主页面、端口匹配、未知版本拒绝，以及真实 `initialRoute=%2Favatar-overlay` 辅助页面与主页面并存时的目标选择。
 - `server/test/codex-desktop-compatibility-report.test.js`：未知版本只读检测、正式控制不放行、CDP 失败阶段和错误码保留。
 - `server/test/desktop-manager.test.js`：兼容性检测 IPC、检测按钮、结果展示和复制入口完整。
 - `server/test/structured-diagnostics.test.js`：结构化字段、敏感正文排除和 500 条上限。

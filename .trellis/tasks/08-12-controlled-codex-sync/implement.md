@@ -73,6 +73,7 @@ npm run build:manager:win
 - 当前官方 Codex Desktop `26.707.3748.0`：只读 CDP 探针通过，唯一主页面、线程行、可见编辑器和动作按钮均匹配兼容档案。
 - 自动化测试：`npm test` 通过，232/232。
 - 静态检查：`npm run check` 与 `git diff --check` 通过。
-- Windows 管理器：固定目录构建成功，`app.asar` 控制平面扫描通过；产物名称为 `Codex Desktop 管理器.exe`，版本为 `0.3.13`。
+- Windows 管理器：固定目录构建成功，`app.asar` 控制平面扫描通过；产物名称为 `Codex Desktop 管理器.exe`，版本为 `0.3.14`。
 - 兼容性检测：真实打包产物点击检测后读取当前官方 Codex `26.707.3748.0`、CDP `9235`、19 条侧栏线程、编辑器和动作按钮，结论为兼容；未知版本自动化测试只返回 `needs-review`，不会放行控制。
 - Android 真机仍需用户使用 HBuilderX 调试基座验证本轮自动恢复行为；未以 Web 验证替代真机结论。
+- 官方 Codex `26.810.7004.0` 会同时暴露精确主页面与 `initialRoute=%2Favatar-overlay` 辅助页面；目标选择现只接受 URL 精确等于 `app://-/index.html` 的唯一主页面。真实双目标 fixture 已加入回归测试，避免辅助页面再次造成 `CDP_TARGET_NOT_FOUND`。

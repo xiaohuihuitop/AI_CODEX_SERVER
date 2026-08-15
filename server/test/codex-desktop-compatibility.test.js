@@ -22,3 +22,23 @@ test('CDP 目标选择排除快捷窗口、错误端口和多个主页面', () =
   assert.equal(selectPrimaryCodexTarget([quick, otherPort, primary], 9230, profile), primary);
   assert.equal(selectPrimaryCodexTarget([primary, { ...primary, webSocketDebuggerUrl: 'ws://127.0.0.1:9230/devtools/page/second' }], 9230, profile), null);
 });
+
+test('CDP 目标选择排除新版头像浮层并保留唯一主页面', () => {
+  const profile = resolveCodexDesktopProfile('26.707.3748.0');
+  const primary = {
+    id: '9A0B3E6D16F8FC5A879B44323BD73B71',
+    title: 'Codex',
+    type: 'page',
+    url: 'app://-/index.html',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:9230/devtools/page/9A0B3E6D16F8FC5A879B44323BD73B71',
+  };
+  const avatarOverlay = {
+    id: 'F58F1AF634BF36262D978E3C5BC9C746',
+    title: 'Codex',
+    type: 'page',
+    url: 'app://-/index.html?initialRoute=%2Favatar-overlay',
+    webSocketDebuggerUrl: 'ws://127.0.0.1:9230/devtools/page/F58F1AF634BF36262D978E3C5BC9C746',
+  };
+
+  assert.equal(selectPrimaryCodexTarget([primary, avatarOverlay], 9230, profile), primary);
+});

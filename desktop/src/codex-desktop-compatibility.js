@@ -53,8 +53,7 @@ function selectPrimaryCodexTarget(targets, debugPort, profile = CODEX_DESKTOP_PR
   const matches = targets.filter(target => {
     if (!target || !target.webSocketDebuggerUrl) return false;
     const targetUrl = String(target.url || '');
-    if (targetUrl !== profile.targetUrl && !targetUrl.startsWith(`${profile.targetUrl}?`)) return false;
-    if (/initialRoute=.*quick-chat/i.test(targetUrl)) return false;
+    if (targetUrl !== profile.targetUrl) return false;
     return isExpectedDebuggerUrl(target.webSocketDebuggerUrl, debugPort);
   });
   return matches.length === 1 ? matches[0] : null;
