@@ -1,6 +1,6 @@
 const { EventEmitter } = require('node:events');
 const WebSocket = require('ws');
-const { CODEX_DESKTOP_PROFILES, selectPrimaryCodexTarget } = require('./codex-desktop-compatibility');
+const { CODEX_DESKTOP_PROFILE, selectPrimaryCodexTarget } = require('./codex-desktop-compatibility');
 
 function cdpError(message, code) {
   return Object.assign(new Error(message), { code });
@@ -19,7 +19,7 @@ class CodexCdpClient extends EventEmitter {
     this.fetchImpl = options.fetchImpl || fetch;
     this.webSocketFactory = options.webSocketFactory || (url => new WebSocket(url));
     this.requestTimeoutMs = Math.max(10, Number(options.requestTimeoutMs) || 10000);
-    this.profile = options.profile || CODEX_DESKTOP_PROFILES[0];
+    this.profile = options.profile || CODEX_DESKTOP_PROFILE;
     this.targetSelector = options.targetSelector || selectPrimaryCodexTarget;
     this.socket = null;
     this.connecting = null;

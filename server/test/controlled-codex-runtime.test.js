@@ -82,23 +82,23 @@ test('受控运行时发现 CDP 未就绪时明确失败且不重启官方客户
   assert.equal(restartCount, 0);
 });
 
-test('受控运行时拒绝未经验证的官方客户端版本', async () => {
+test('受控运行时不按官方客户端版本号阻断结构兼容的页面', async () => {
+  const cdp = createCdp();
   const runtime = new ControlledCodexRuntime({
     debugPort: 9230,
     reader: {},
-    cdp: createCdp(),
+    cdp,
     processManager: {
       inspect: async () => ({ app: { version: '26.800.1.0' }, mainProcess: { pid: 10 } }),
     },
-    controller: {},
+    controller: { probeCompatibility: async () => ({ compatible: true }) },
     portOwnerResolver: async () => ({ pid: 10 }),
     cdpProbe: async () => ({ ok: true }),
   });
 
-  await assert.rejects(
-    () => runtime.start(),
-    error => error.code === 'CODEX_DESKTOP_VERSION_UNSUPPORTED',
-  );
+  assert.deepEqual(await runtime.start(), { debugPort: 9230, pid: 10, version: '26.800.1.0' });
+  assert.equal(runtime.state, 'ready');
+  runtime.stopRuntime();
 });
 
 test('受控运行时重复探测 CDP 时始终不会关闭官方客户端', async () => {

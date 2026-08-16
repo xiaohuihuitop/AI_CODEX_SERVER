@@ -301,9 +301,7 @@ ipcMain.handle('manager:inspect-codex-compatibility', async () => {
   });
   const conclusion = report.compatible
     ? '兼容'
-    : report.status === 'needs-review'
-      ? '版本待验证'
-      : report.status === 'failed' ? `检测失败（${report.errorCode}）` : '不兼容';
+    : report.status === 'failed' ? `检测失败（${report.errorCode}）` : '不兼容';
   appendManagerLog(`兼容性检测完成：Codex v${report.version || '未知'}，${conclusion}`);
   return report;
 });

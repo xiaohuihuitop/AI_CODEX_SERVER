@@ -9,32 +9,11 @@ const CODEX_DESKTOP_SELECTORS = Object.freeze({
   sendButtonClass: 'size-token-button-composer',
 });
 
-const CODEX_DESKTOP_PROFILES = Object.freeze([{
-  id: 'codex-desktop-26.707.3748',
-  versionPattern: /^26\.707\.3748\.\d+$/,
+const CODEX_DESKTOP_PROFILE = Object.freeze({
+  id: 'codex-desktop-structural-v1',
   targetUrl: 'app://-/index.html',
   selectors: CODEX_DESKTOP_SELECTORS,
-}, {
-  id: 'codex-desktop-26.810.7004',
-  versionPattern: /^26\.810\.7004\.\d+$/,
-  targetUrl: 'app://-/index.html',
-  selectors: CODEX_DESKTOP_SELECTORS,
-}]);
-
-/**
- * AI:按官方客户端安装版本选择唯一兼容配置，未知版本必须停止控制。
- *
- * @param {string} version 官方 Codex Desktop 安装版本。
- * @returns {object} 已验证的兼容配置。
- */
-function resolveCodexDesktopProfile(version) {
-  const normalized = String(version || '').trim();
-  const profile = CODEX_DESKTOP_PROFILES.find(item => item.versionPattern.test(normalized));
-  if (profile) return profile;
-  throw Object.assign(new Error(`当前 Codex Desktop v${normalized || '未知'} 尚未通过控制兼容性验证。`), {
-    code: 'CODEX_DESKTOP_VERSION_UNSUPPORTED',
-  });
-}
+});
 
 function isExpectedDebuggerUrl(value, debugPort) {
   try {
@@ -55,7 +34,7 @@ function isExpectedDebuggerUrl(value, debugPort) {
  * @param {object} profile 兼容配置。
  * @returns {object|null} 唯一主页面目标。
  */
-function selectPrimaryCodexTarget(targets, debugPort, profile = CODEX_DESKTOP_PROFILES[0]) {
+function selectPrimaryCodexTarget(targets, debugPort, profile = CODEX_DESKTOP_PROFILE) {
   if (!Array.isArray(targets)) return null;
   const matches = targets.filter(target => {
     if (!target || !target.webSocketDebuggerUrl) return false;
@@ -67,7 +46,6 @@ function selectPrimaryCodexTarget(targets, debugPort, profile = CODEX_DESKTOP_PR
 }
 
 module.exports = {
-  CODEX_DESKTOP_PROFILES,
-  resolveCodexDesktopProfile,
+  CODEX_DESKTOP_PROFILE,
   selectPrimaryCodexTarget,
 };

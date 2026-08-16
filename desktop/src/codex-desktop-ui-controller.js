@@ -1,4 +1,4 @@
-const { CODEX_DESKTOP_PROFILES } = require('./codex-desktop-compatibility');
+const { CODEX_DESKTOP_PROFILE } = require('./codex-desktop-compatibility');
 
 function controlError(message, code) {
   return Object.assign(new Error(message), { code });
@@ -21,7 +21,7 @@ class CodexDesktopUiController {
   constructor(options = {}) {
     if (!options.cdp) throw new Error('CodexDesktopUiController 缺少 CDP 客户端。');
     this.cdp = options.cdp;
-    this.profile = options.profile || CODEX_DESKTOP_PROFILES[0];
+    this.profile = options.profile || CODEX_DESKTOP_PROFILE;
     this.threadSelector = options.threadSelector || (threadId => this.selectThread(threadId));
     this.composerReader = options.composerReader || (() => this.readComposer());
     this.sessionConfirmer = options.sessionConfirmer;
@@ -30,7 +30,7 @@ class CodexDesktopUiController {
   }
 
   /**
-   * AI:只读检查当前官方页面与指定兼容档案的逐项匹配结果。
+   * AI:只读检查当前官方页面与控制结构契约的逐项匹配结果。
    *
    * @returns {Promise<object>} 页面结构检查结果。
    */
@@ -67,7 +67,7 @@ class CodexDesktopUiController {
   }
 
   /**
-   * AI:验证当前官方页面仍满足已知版本的线程与编辑器控制契约。
+   * AI:验证当前官方页面仍满足线程与编辑器控制契约。
    *
    * @returns {Promise<object>} 兼容配置和页面探针结果。
    */

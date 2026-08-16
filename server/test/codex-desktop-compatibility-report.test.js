@@ -14,7 +14,7 @@ function createCdp(result) {
   };
 }
 
-test('未知官方版本可以只读检测但不会被标记为可控制', async () => {
+test('任意官方版本通过页面结构检测后均可控制', async () => {
   const cdp = createCdp({ threadRows: 4, editor: true, action: true });
   const result = await inspectCodexDesktopCompatibility({
     debugPort: 9230,
@@ -29,15 +29,14 @@ test('未知官方版本可以只读检测但不会被标记为可控制', async
   });
 
   assert.equal(result.version, '26.810.4967.0');
-  assert.equal(result.versionSupported, false);
   assert.equal(result.pageCompatible, true);
-  assert.equal(result.compatible, false);
-  assert.equal(result.status, 'needs-review');
-  assert.equal(result.profileId, 'codex-desktop-26.810.7004');
+  assert.equal(result.compatible, true);
+  assert.equal(result.status, 'compatible');
+  assert.equal(result.contractId, 'codex-desktop-structural-v1');
   assert.deepEqual(cdp.calls, ['connect', 'close']);
 });
 
-test('已验证新版档案通过相同页面契约后允许正式控制', async () => {
+test('官方版本保留在报告中但不参与控制结论', async () => {
   const cdp = createCdp({ threadRows: 24, editor: true, action: true });
   const result = await inspectCodexDesktopCompatibility({
     debugPort: 9230,
@@ -50,8 +49,8 @@ test('已验证新版档案通过相同页面契约后允许正式控制', async
     cdpFactory: () => cdp,
   });
 
-  assert.equal(result.profileId, 'codex-desktop-26.810.7004');
-  assert.equal(result.versionSupported, true);
+  assert.equal(result.version, '26.810.7004.0');
+  assert.equal(result.contractId, 'codex-desktop-structural-v1');
   assert.equal(result.pageCompatible, true);
   assert.equal(result.compatible, true);
   assert.equal(result.status, 'compatible');
@@ -100,18 +99,17 @@ test('应用包检测失败仍返回字段完整的可复制报告', async () =>
     'cdpConnected',
     'checkedAt',
     'compatible',
+    'contractId',
     'debugPort',
     'editor',
     'errorCode',
     'message',
     'pageCompatible',
     'pid',
-    'profileId',
     'stage',
     'status',
     'threadRows',
     'version',
-    'versionSupported',
   ]);
   assert.equal(result.stage, 'package');
   assert.equal(result.errorCode, 'CODEX_PACKAGE_NOT_FOUND');

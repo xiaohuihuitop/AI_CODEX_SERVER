@@ -1,8 +1,5 @@
 const { CodexCdpClient } = require('./codex-cdp-client');
-const {
-  CODEX_DESKTOP_PROFILES,
-  resolveCodexDesktopProfile,
-} = require('./codex-desktop-compatibility');
+const { CODEX_DESKTOP_PROFILE } = require('./codex-desktop-compatibility');
 const { CodexDesktopUiController } = require('./codex-desktop-ui-controller');
 const { ControlledCodexProcess } = require('./controlled-codex-process');
 
@@ -12,8 +9,7 @@ function failureReport(base, stage, error) {
     debugPort: null,
     version: '',
     pid: null,
-    profileId: '',
-    versionSupported: false,
+    contractId: CODEX_DESKTOP_PROFILE.id,
     cdpConnected: false,
     threadRows: 0,
     editor: false,
@@ -29,7 +25,7 @@ function failureReport(base, stage, error) {
 }
 
 /**
- * AI:对当前官方 Codex Desktop 执行无副作用兼容性检测，未知版本只生成报告而不放行控制。
+ * AI:对当前官方 Codex Desktop 执行无副作用的控制结构检测。
  *
  * @param {object} options 检测端口、系统依赖和时钟。
  * @returns {Promise<object>} 可供管理器展示和复制的兼容性报告。
@@ -47,21 +43,13 @@ async function inspectCodexDesktopCompatibility(options = {}) {
   }
 
   const version = String(inspected && inspected.app && inspected.app.version || '');
-  let profile = CODEX_DESKTOP_PROFILES[CODEX_DESKTOP_PROFILES.length - 1];
-  let versionSupported = false;
-  try {
-    profile = resolveCodexDesktopProfile(version);
-    versionSupported = true;
-  } catch (error) {
-    if (!error || error.code !== 'CODEX_DESKTOP_VERSION_UNSUPPORTED') throw error;
-  }
+  const profile = CODEX_DESKTOP_PROFILE;
   const base = {
     checkedAt,
     debugPort,
     version,
     pid: Number(inspected && inspected.mainProcess && inspected.mainProcess.pid || 0) || null,
-    profileId: profile.id,
-    versionSupported,
+    contractId: profile.id,
   };
   const cdpFactory = options.cdpFactory || (clientOptions => new CodexCdpClient(clientOptions));
   const cdp = cdpFactory({ debugPort, profile });
@@ -74,10 +62,8 @@ async function inspectCodexDesktopCompatibility(options = {}) {
       ...base,
       cdpConnected: true,
       pageCompatible,
-      compatible: versionSupported && pageCompatible,
-      status: versionSupported && pageCompatible
-        ? 'compatible'
-        : pageCompatible ? 'needs-review' : 'incompatible',
+      compatible: pageCompatible,
+      status: pageCompatible ? 'compatible' : 'incompatible',
       stage: 'complete',
       threadRows: page.threadRows,
       editor: page.editor,

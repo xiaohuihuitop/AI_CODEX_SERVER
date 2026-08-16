@@ -26,7 +26,7 @@ test('界面控制器启动时验证已知 DOM 控制契约', async () => {
     cdp: createCdp({ evaluate: async () => ({ threadRows: 2, editor: true, action: false }) }),
   });
 
-  assert.equal((await compatible.probeCompatibility()).profileId, 'codex-desktop-26.707.3748');
+  assert.equal((await compatible.probeCompatibility()).profileId, 'codex-desktop-structural-v1');
   await assert.rejects(
     () => incompatible.probeCompatibility(),
     error => error.code === 'CODEX_DESKTOP_DOM_INCOMPATIBLE',
@@ -39,7 +39,7 @@ test('界面控制器只读检查返回逐项页面结构结果', async () => {
   });
 
   assert.deepEqual(await controller.inspectCompatibility(), {
-    profileId: 'codex-desktop-26.707.3748',
+    profileId: 'codex-desktop-structural-v1',
     threadRows: 3,
     editor: true,
     action: false,

@@ -71,7 +71,6 @@ function setBusy(value) {
 function formatCompatibilityReport(report) {
   const conclusions = {
     compatible: '兼容，可以控制',
-    'needs-review': '页面结构匹配，版本尚待验证',
     incompatible: '页面结构不兼容',
     failed: '检测失败',
   };
@@ -80,8 +79,7 @@ function formatCompatibilityReport(report) {
     `检测时间：${report.checkedAt || '未知'}`,
     `官方 Codex：v${report.version || '未知'}（PID ${report.pid || '未知'}）`,
     `CDP 端口：${report.debugPort || '未知'}`,
-    `对比档案：${report.profileId || '未知'}`,
-    `版本档案：${report.versionSupported ? '已收录' : '未收录'}`,
+    `控制契约：${report.contractId || '未知'}`,
     `CDP 连接：${yesNo(report.cdpConnected)}`,
     `侧栏线程：${Number(report.threadRows || 0)} 条`,
     `消息编辑器：${yesNo(report.editor)}`,
