@@ -22,6 +22,7 @@ await inspectCodexDesktopCompatibility({ debugPort });
 - `start()`：只连接已经存在的 CDP。当前官方主进程持有配置端口且 `/json/list` 返回目标页面时直接复用；不得依赖 Appx 主进程命令行是否保留 CDP 参数，也不得关闭或重启官方客户端。
 - 管理器“启动功能”：只启动或重连 Agent、Relay 和会话同步，并调用上述连接逻辑。
 - 管理器“重启 Codex 启用 CDP”：唯一允许重启官方客户端的显式入口；确认框必须明确提示未发送草稿风险，用户确认后直接执行，不再使用 UI Automation 猜测草稿状态。
+- `ControlledCodexProcess.restart({ debugPort })`：官方客户端未运行且端口可独占绑定时直接通过 AUMID 激活；已有可用 CDP 时先发送 `Browser.close` 并确认主进程退出；已有官方进程但 CDP 不可用时才终止已核对的官方进程树。任何关闭方式完成后，都必须确认主进程消失且端口可独占绑定，再允许激活新实例。
 - `sendMessage(threadId, text)`：为该命令创建独立 CDP 控制会话，按 `threadId` 精确选择官方侧栏线程，点击前精确核对编辑器正文，点击后等待目标 JSONL 新 `task_started/turnId` 证据；命令结束后关闭该控制会话。
 - `stop(threadId)`：为该命令创建独立 CDP 控制会话，按 `threadId` 精确选择线程，点击官方停止按钮，并等待目标 JSONL `turn_aborted` 证据；命令结束后关闭该控制会话。
 - `getThreadRuntime(threadId)`：只读取当前已选线程的官方运行态；不得为了状态轮询切换电脑界面。
@@ -69,6 +70,9 @@ Relay 路由不变量：Token 只用于入口鉴权。鉴权成功后必须解�
 | 非 Windows 平台 | `WINDOWS_ONLY` |
 | 未安装官方 Codex 包或 manifest 无入口 | `CODEX_PACKAGE_NOT_FOUND` |
 | 配置端口被非目标官方进程占用 | `CDP_PORT_OCCUPIED`；不得终止未知进程或自动换端口 |
+| 配置端口有监听但监听 PID 已不存在 | `CDP_PORT_ORPHANED`；报告残留 PID，提示重启 Windows 或手动改端口，不得自动换端口 |
+| 官方客户端未运行且配置端口可绑定 | 直接通过 AUMID 携带 CDP 参数启动，不执行任何关闭逻辑 |
+| 官方客户端正在运行且配置端口为健康 CDP | 发送 `Browser.close` 优雅退出并等待；不得直接强制终止健康 CDP 实例 |
 | 官方进程树无法终止或主进程未退出 | `CODEX_PROCESS_TREE_TERMINATION_FAILED` / `CODEX_STOP_TIMEOUT`；不得继续启动新实例 |
 | 旧实例退出后 CDP 端口仍不可绑定 | `CDP_PORT_RELEASE_TIMEOUT`；不得继续启动新实例或自动换端口 |
 | 官方实例无正确 CDP 参数 | `CDP_NOT_READY`；Agent 保持运行并继续探测，提示用户显式点击“重启 Codex 启用 CDP” |
@@ -88,7 +92,7 @@ Relay 路由不变量：Token 只用于入口鉴权。鉴权成功后必须解�
 
 - 正常：Web 向 `threadId=A` 发送唯一文本，官方 Desktop 自动选中 A 并显示用户消息和回复，JSONL 出现同一回合，Web 自动刷新到完成。
 - 基准：官方实例已由管理器以配置端口启动，Agent 复用进程和持久 CDP，不重启、不创建第二控制服务。
-- 初次接管：先用 Appx 清单路径核对官方主进程，再读取 `Win32_Process` 快照建立完整子树，按深度从后代到主进程逐 PID 强制终止；仅忽略 Node 明确返回 `ESRCH` 的已退出 PID，其他 PID 错误必须中止并报告。随后必须同时确认主进程消失且配置端口能够在 `127.0.0.1` 独占绑定，才允许重新激活。不得使用会被失效 CIM 子 PID 阻断整棵树的 `taskkill /T /F`，也不得使用会被托盘行为拦截的 `CloseMainWindow()` 或对 Packaged Win32 主进程无效的 `IPackageDebugSettings.TerminateAllProcesses()`。
+- 初次接管：先用 Appx 清单路径核对官方主进程。若官方客户端未运行，端口可绑定后直接激活；若配置端口已有健康 CDP，通过标准 `Browser.close` 退出，避免强杀 Electron 后遗留继承的监听句柄；只有官方进程正在运行但 CDP 不可用时，才读取 `Win32_Process` 快照建立完整子树并按深度从后代到主进程逐 PID 终止。进程树终止仅忽略 Node 明确返回 `ESRCH` 的已退出 PID，其他 PID 错误必须中止并报告。任一路径都必须同时确认主进程消失且配置端口能够在 `127.0.0.1` 独占绑定，才允许重新激活。不得使用会被失效 CIM 子 PID 阻断整棵树的 `taskkill /T /F`，也不得使用会被托盘行为拦截的 `CloseMainWindow()` 或对 Packaged Win32 主进程无效的 `IPackageDebugSettings.TerminateAllProcesses()`。
 - 初始化异常：Agent 保持运行并定时重试连接，不因一次失败退出；所有自动重试均不得关闭或重启官方客户端。
 - 短暂异常：CDP WebSocket 收到 `1006` 等断线事件，或任一 CDP 请求超时时，Agent 立即写入不可控状态并使当前连接整体失效，再按固定间隔重连同一端口；重连成功后写回 ready 心跳并通知 relay。`readyState=OPEN` 只代表本地套接字未收到关闭帧，不能作为页面可响应的证据。
 - 空闲探测：运行时处于 `ready` 时每 15 秒执行一次无副作用的 `Runtime.evaluate`。探测失败只重建同一 CDP 连接；发送、停止和点击等有副作用的业务命令失败后不得自动重放，避免重复提交。
@@ -98,7 +102,7 @@ Relay 路由不变量：Token 只用于入口鉴权。鉴权成功后必须解�
 
 ### 6. 必需测试
 
-- `server/test/controlled-codex-process.test.js`：Appx 发现、端口所有权、显式确认后的直接重启、AUMID 启动和 CDP 参数。
+- `server/test/controlled-codex-process.test.js`：Appx 发现、端口所有权、孤儿监听诊断、未运行直接启动、健康 CDP `Browser.close`、进程树终止、AUMID 启动和 CDP 参数。
 - `server/test/codex-cdp-client.test.js`：持久连接、请求 ID、断线、协议错误，以及半开连接请求超时后的整体失效。
 - `server/test/codex-desktop-ui-controller.test.js`：精确 threadId、草稿、发送、停止及不切换式状态读取。
 - `server/test/codex-session-evidence.test.js`：目标消息时间边界和停止证据。
@@ -124,6 +128,13 @@ await appServer.startTurn(threadId, text);
 这会制造两个进程内状态源：手机可能收到回复，但官方 Desktop 不显示；停止和完成状态也会分叉。
 
 ```js
+// 错误：健康 CDP 已经可控时仍直接强制终止整个 Electron 进程树。
+await processStopper(app, processes);
+```
+
+强制终止可能让被继承或复制的 CDP socket 句柄残留，表现为监听 PID 已不存在、端口仍无法绑定。
+
+```js
 // 错误：只看版本号，不验证实际可控结构。
 if (knownVersions.includes(version)) allowControl();
 ```
@@ -137,6 +148,10 @@ if (!result.turnId) throw new Error('目标 JSONL 未确认官方发送');
 // 正确：版本只用于诊断，正式控制由实际页面结构决定。
 const report = await inspectCodexDesktopCompatibility({ debugPort });
 if (!report.compatible) throw new Error('官方页面结构不满足控制契约');
+
+// 正确：进程不存在时直接启动；健康 CDP 先优雅退出。
+if (processes.length === 0) await activateCodexApplication(app, args);
+else if ((await probeCdp(debugPort)).ok) await closeCodexThroughCdp(debugPort);
 ```
 
 控制动作、官方 UI、JSONL 和 Relay 必须形成同一条可验证证据链。

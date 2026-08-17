@@ -79,3 +79,26 @@ npm run build:manager:win
 - 官方 Codex `26.810.7004.0` 会同时暴露精确主页面与 `initialRoute=%2Favatar-overlay` 辅助页面；目标选择现只接受 URL 精确等于 `app://-/index.html` 的唯一主页面。真实双目标 fixture 已加入回归测试，避免辅助页面再次造成 `CDP_TARGET_NOT_FOUND`。
 - 官方 Codex `26.810.7004.0` 在另一台 Windows 电脑完成只读兼容检测：CDP 连接成功，识别 24 条侧栏线程，编辑器与发送/停止按钮均通过。
 - 2026-08-16 起取消官方版本白名单：版本号仅保留在诊断报告中，正式控制只由唯一主页面、线程行、可见编辑器和动作按钮组成的 `codex-desktop-structural-v1` 契约决定。
+
+## 2026-08-17 CDP 端口残留复发分析
+
+### 根因分类
+
+- 分类：隐式假设 + 测试覆盖缺口。
+- 具体原因：显式重启无条件强制终止 Electron 进程树，默认假设 Windows 会同步释放 CDP socket。现场出现 `127.0.0.1:9235` 持续监听、记录 PID `316936` 已不存在、HTTP 连接超时的反例；该形态与继承或复制的 socket 句柄未随原进程退出一致。
+- 之前修复只加强了进程树枚举、退出等待和端口等待，能阻止重叠启动，但没有改变“健康 CDP 也被强杀”的根因，因此最终只是把错误稳定暴露为 `CDP_PORT_RELEASE_TIMEOUT`。
+
+### 预防机制
+
+- 架构：已有健康 CDP 时使用标准 `Browser.close` 优雅退出；只有旧实例没有可用 CDP 时才终止已核对的官方进程树。
+- 运行时：监听 PID 无法查询时返回 `CDP_PORT_ORPHANED`，不再丢弃所有权证据后空等。
+- 测试：覆盖 Codex 未运行直接启动、`Browser.close` 协议、健康 CDP 不进入强杀路径、孤儿监听拒绝启动。
+- 规范：`.trellis/spec/backend/codex-control-plane.md` 已固化上述分支和错误矩阵；仍禁止自动换端口。
+
+### 验证结果
+
+- 定向生命周期测试：17/17 通过。
+- 全量自动化测试：239/239 通过。
+- `npm run check`、`node --check desktop/src/controlled-codex-process.js`、`git diff --check` 通过。
+- 固定目录管理器构建和 `app.asar` 扫描通过，版本 `0.3.17`；打包源码包含 `Browser.close` 和 `CDP_PORT_ORPHANED`。
+- 本机只读复核确认 `9235` 为真实系统残留监听；本轮未自动换端口，也未重启官方 Codex Desktop。

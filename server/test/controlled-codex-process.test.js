@@ -3,6 +3,7 @@ const test = require('node:test');
 const {
   buildActivateCodexApplicationScript,
   buildProcessTreeSnapshot,
+  closeCodexThroughCdp,
   ControlledCodexProcess,
   parsePowerShellJson,
   terminateProcessTree,
@@ -24,11 +25,11 @@ test('PowerShell 单对象和数组输出均规范为单对象', () => {
   assert.equal(parsePowerShellJson(''), null);
 });
 
-test('端口探测脚本不把已退出且无法查询进程的 PID 当作占用者', () => {
+test('端口探测保留无法查询进程的监听 PID 以识别系统残留', () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const source = fs.readFileSync(path.join(__dirname, '../../desktop/src/controlled-codex-process.js'), 'utf8');
-  assert.match(source, /if \(\$null -eq \$proc\) \{ Write-Output ''; exit 0 \}/);
+  assert.match(source, /ProcessFound = \$false/);
 });
 
 test('受控重启从系统快照建立完整进程树并保留深度', () => {
@@ -115,6 +116,123 @@ test('受控启动拒绝非 Codex 进程占用配置端口', async () => {
   );
 });
 
+test('Codex Desktop 未运行且端口空闲时直接启动并启用 CDP', async () => {
+  const calls = [];
+  let launched = false;
+  const process = new ControlledCodexProcess({
+    platform: 'win32',
+    packageResolver: async () => APP,
+    processResolver: async () => launched
+      ? [{ pid: 220, executablePath: APP.executablePath, commandLine: ' --remote-debugging-port=9230' }]
+      : [],
+    portOwnerResolver: async () => null,
+    portAvailabilityProbe: async () => true,
+    processStopper: async () => { calls.push('force-stop'); },
+    gracefulCloser: async () => { calls.push('graceful-close'); },
+    launcher: async (app, args) => {
+      calls.push(['launch', app.appUserModelId, args]);
+      launched = true;
+      return { pid: 220 };
+    },
+    cdpProbe: async () => ({ ok: launched, targetCount: launched ? 1 : 0, message: '' }),
+    sleep: async () => {},
+  });
+
+  const result = await process.restart({ debugPort: 9230, waitTimeoutMs: 100 });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(calls, [[
+    'launch',
+    APP.appUserModelId,
+    [
+      '--remote-debugging-port=9230',
+      '--remote-debugging-address=127.0.0.1',
+      '--remote-allow-origins=http://127.0.0.1:9230',
+    ],
+  ]]);
+});
+
+test('优雅退出通过 CDP Browser.close 关闭整个官方客户端', async () => {
+  const calls = [];
+  await closeCodexThroughCdp(9230, {
+    client: {
+      request: async (method, params) => { calls.push(['request', method, params]); },
+      close: () => { calls.push(['close']); },
+    },
+  });
+
+  assert.deepEqual(calls, [
+    ['request', 'Browser.close', {}],
+    ['close'],
+  ]);
+});
+
+test('Browser.close 导致 CDP 立即断开时仍以进程退出结果为准', async () => {
+  let closed = false;
+  await closeCodexThroughCdp(9230, {
+    client: {
+      request: async () => {
+        throw Object.assign(new Error('connection closed'), { code: 'CDP_DISCONNECTED' });
+      },
+      close: () => { closed = true; },
+    },
+  });
+
+  assert.equal(closed, true);
+});
+
+test('已有健康 CDP 时先优雅关闭 Codex Desktop 再重新启动', async () => {
+  const calls = [];
+  let stopped = false;
+  let launched = false;
+  const process = new ControlledCodexProcess({
+    platform: 'win32',
+    packageResolver: async () => APP,
+    processResolver: async () => {
+      if (launched) return [{ pid: 220, executablePath: APP.executablePath, commandLine: ' --remote-debugging-port=9230' }];
+      return stopped ? [] : [{ pid: 120, executablePath: APP.executablePath, commandLine: ' --remote-debugging-port=9230' }];
+    },
+    portOwnerResolver: async () => ({ pid: 120, processFound: true, executablePath: APP.executablePath }),
+    portAvailabilityProbe: async () => true,
+    gracefulCloser: async port => {
+      calls.push(['graceful-close', port]);
+      stopped = true;
+    },
+    processStopper: async () => { calls.push('force-stop'); },
+    launcher: async () => {
+      calls.push('launch');
+      launched = true;
+      return { pid: 220 };
+    },
+    cdpProbe: async () => ({ ok: true, targetCount: 1, message: '' }),
+    sleep: async () => {},
+  });
+
+  await process.restart({ debugPort: 9230, waitTimeoutMs: 100 });
+
+  assert.deepEqual(calls, [['graceful-close', 9230], 'launch']);
+});
+
+test('监听 PID 已不存在时立即报告系统残留而不尝试启动', async () => {
+  let launchCount = 0;
+  const process = new ControlledCodexProcess({
+    platform: 'win32',
+    packageResolver: async () => APP,
+    processResolver: async () => [],
+    portOwnerResolver: async () => ({ pid: 316936, processFound: false, executablePath: '' }),
+    launcher: async () => {
+      launchCount += 1;
+      return { pid: 220 };
+    },
+  });
+
+  await assert.rejects(
+    () => process.restart({ debugPort: 9235 }),
+    error => error.code === 'CDP_PORT_ORPHANED' && /PID 316936/.test(error.message),
+  );
+  assert.equal(launchCount, 0);
+});
+
 test('用户确认受控重启后不再执行不可靠的草稿自动检查', async () => {
   let draftReadCount = 0;
   let stopped = false;
@@ -138,7 +256,7 @@ test('用户确认受控重启后不再执行不可靠的草稿自动检查', as
       launched = true;
       return { pid: 220 };
     },
-    cdpProbe: async () => ({ ok: true, targetCount: 1, message: '' }),
+    cdpProbe: async () => ({ ok: launched, targetCount: launched ? 1 : 0, message: '' }),
     sleep: async () => {},
   });
 
@@ -157,6 +275,7 @@ test('旧包进程未真正退出时拒绝启动新实例', async () => {
     processResolver: async () => [{ pid: 120, executablePath: APP.executablePath, commandLine: '' }],
     portOwnerResolver: async () => null,
     processStopper: async () => {},
+    cdpProbe: async () => ({ ok: false, targetCount: 0, message: '' }),
     launcher: async () => {
       launchCount += 1;
       return { pid: 220 };
@@ -198,7 +317,7 @@ test('旧进程退出后等待 CDP 端口实际释放再启动新实例', async 
       launched = true;
       return { pid: 220 };
     },
-    cdpProbe: async () => ({ ok: true, targetCount: 1, message: '' }),
+    cdpProbe: async () => ({ ok: launched, targetCount: launched ? 1 : 0, message: '' }),
     sleep: async () => {},
   });
 
@@ -230,7 +349,7 @@ test('受控启动只停止目标包进程并通过 AUMID 传递 CDP 参数', as
       launched = true;
       return { pid: 220 };
     },
-    cdpProbe: async port => ({ ok: port === 9230, targetCount: 1, message: '' }),
+    cdpProbe: async port => ({ ok: launched && port === 9230, targetCount: launched ? 1 : 0, message: '' }),
     sleep: async () => {},
   });
 

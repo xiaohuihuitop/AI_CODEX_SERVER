@@ -96,6 +96,8 @@ function verifyManagerArtifact() {
   if (!/\$activatedProcessId\s*=\s*\[CodexActivationHelper\]::Activate/.test(processSource)) fail('应用激活脚本未使用独立变量保存进程 ID');
   if (!/buildProcessTreeSnapshot/.test(processSource) || !/terminateProcessTree/.test(processSource) || !/SIGKILL/.test(processSource)) fail('未按进程树逐 PID 终止官方 Codex');
   if (/taskkill\.exe|PackageDebugSettings|CloseMainWindow|Stop-Process/.test(processSource)) fail('受控重启仍包含不可靠的进程退出方式');
+  if (!/request\('Browser\.close', \{\}\)/.test(processSource)) fail('健康 CDP 实例缺少 Browser.close 优雅退出');
+  if (!/CDP_PORT_ORPHANED/.test(processSource)) fail('受控重启缺少系统残留监听诊断');
   if (!/waitForPortRelease/.test(processSource) || !/exclusive: true/.test(processSource)) fail('受控重启缺少 CDP 端口释放门禁');
   if (!/remote-debugging-port/.test(processSource)) fail('受控 Codex 启动未配置 CDP 端口');
   if (/readCodexDraft|CODEX_DRAFT_(?:UNKNOWN|EXISTS)/.test(processSource)) fail('受控重启仍包含不可靠的草稿自动检查');

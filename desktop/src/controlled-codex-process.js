@@ -1,6 +1,7 @@
 const { execFile } = require('node:child_process');
 const net = require('node:net');
 const path = require('node:path');
+const { CodexCdpClient } = require('./codex-cdp-client');
 const { selectPrimaryCodexTarget } = require('./codex-desktop-compatibility');
 
 const DEFAULT_DEBUG_PORT = 9229;
@@ -106,12 +107,16 @@ async function resolvePortOwner(port) {
     `$row = @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { $_.LocalPort -eq ${Number(port)} } | Select-Object -First 1)[0]`,
     "if ($null -eq $row) { Write-Output ''; exit 0 }",
     '$proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($row.OwningProcess)" -ErrorAction SilentlyContinue',
-    "if ($null -eq $proc) { Write-Output ''; exit 0 }",
-    '[pscustomobject]@{ ProcessId = $row.OwningProcess; ExecutablePath = $proc.ExecutablePath; CommandLine = $proc.CommandLine } | ConvertTo-Json -Compress',
+    'if ($null -eq $proc) {',
+    '  [pscustomobject]@{ ProcessId = $row.OwningProcess; ProcessFound = $false; ExecutablePath = $null; CommandLine = $null } | ConvertTo-Json -Compress',
+    '  exit 0',
+    '}',
+    '[pscustomobject]@{ ProcessId = $row.OwningProcess; ProcessFound = $true; ExecutablePath = $proc.ExecutablePath; CommandLine = $proc.CommandLine } | ConvertTo-Json -Compress',
   ].join('\n');
   const parsed = parsePowerShellJson(await runPowerShell(script));
   return parsed ? {
     pid: Number(parsed.ProcessId),
+    processFound: parsed.ProcessFound !== false,
     executablePath: String(parsed.ExecutablePath || ''),
     commandLine: String(parsed.CommandLine || ''),
   } : null;
@@ -283,6 +288,24 @@ async function probeCdp(port) {
 }
 
 /**
+ * AI:通过 Chrome DevTools Protocol 请求官方 Codex Desktop 优雅退出。
+ *
+ * @param {number} port Codex Desktop 的 CDP 端口。
+ * @param {{client?: CodexCdpClient}} options 可替换的 CDP 客户端。
+ * @returns {Promise<void>} Browser.close 指令已发送。
+ */
+async function closeCodexThroughCdp(port, options = {}) {
+  const client = options.client || new CodexCdpClient({ debugPort: Number(port), requestTimeoutMs: 5000 });
+  try {
+    await client.request('Browser.close', {});
+  } catch (error) {
+    if (error && error.code !== 'CDP_DISCONNECTED') throw error;
+  } finally {
+    client.close();
+  }
+}
+
+/**
  * AI:负责受控官方 Codex Desktop 的发现、进程树终止和 CDP 启动。
  */
 class ControlledCodexProcess {
@@ -295,6 +318,7 @@ class ControlledCodexProcess {
     this.processResolver = options.processResolver || resolveCodexProcesses;
     this.portOwnerResolver = options.portOwnerResolver || resolvePortOwner;
     this.processStopper = options.processStopper || stopCodexProcesses;
+    this.gracefulCloser = options.gracefulCloser || closeCodexThroughCdp;
     this.portAvailabilityProbe = options.portAvailabilityProbe || probePortAvailable;
     this.launcher = options.launcher || activateCodexApplication;
     this.cdpProbe = options.cdpProbe || probeCdp;
@@ -317,12 +341,17 @@ class ControlledCodexProcess {
     const debugPort = Number(options.debugPort) || DEFAULT_DEBUG_PORT;
     const state = await this.inspect();
     const owner = await this.portOwnerResolver(debugPort);
+    if (owner && owner.processFound === false) {
+      throw processError(`CDP 端口 ${debugPort} 存在系统残留监听：PID ${owner.pid} 已不存在。请重启 Windows 释放该端口，或手动修改 CDP 端口。`, 'CDP_PORT_ORPHANED');
+    }
     const ownerIsCodex = owner && path.normalize(owner.executablePath || '').toLowerCase() === path.normalize(state.app.executablePath).toLowerCase();
     if (owner && !ownerIsCodex) {
       throw processError(`CDP 端口 ${debugPort} 已被其他进程占用：PID ${owner.pid}`, 'CDP_PORT_OCCUPIED');
     }
     if (state.processes.length) {
-      await this.processStopper(state.app, state.processes);
+      const activeCdp = await this.cdpProbe(debugPort);
+      if (activeCdp.ok) await this.gracefulCloser(debugPort);
+      else await this.processStopper(state.app, state.processes);
       await this.waitForExit(state.app, Number(options.exitTimeoutMs) || 10000);
     }
     await this.waitForPortRelease(debugPort, Number(options.portReleaseTimeoutMs) || DEFAULT_PORT_RELEASE_TIMEOUT_MS);
@@ -382,6 +411,7 @@ module.exports = {
   buildProcessTreeSnapshot,
   ControlledCodexProcess,
   activateCodexApplication,
+  closeCodexThroughCdp,
   parsePowerShellJson,
   probePortAvailable,
   probeCdp,
