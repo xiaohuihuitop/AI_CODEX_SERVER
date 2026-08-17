@@ -102,18 +102,39 @@ test('受控进程从 Appx manifest 结果识别当前 ChatGPT 主进程', async
   assert.equal(state.mainProcess.pid, 120);
 });
 
-test('受控启动拒绝非 Codex 进程占用配置端口', async () => {
+test('受控启动遇到非 Codex 进程占用首选端口时改用系统空闲端口', async () => {
+  let launched = false;
+  let launchArgs = [];
   const process = new ControlledCodexProcess({
     platform: 'win32',
     packageResolver: async () => APP,
-    processResolver: async () => [],
-    portOwnerResolver: async () => ({ pid: 999, executablePath: 'C:\\Tools\\other.exe' }),
+    processResolver: async () => launched
+      ? [{ pid: 220, executablePath: APP.executablePath, commandLine: ' --remote-debugging-port=43001' }]
+      : [],
+    portOwnerResolver: async port => port === 9230
+      ? { pid: 999, processFound: true, executablePath: 'C:\\Tools\\other.exe' }
+      : null,
+    portAvailabilityProbe: async port => port === 43001,
+    freePortSelector: async () => 43001,
+    launcher: async (_app, args) => {
+      launchArgs = args;
+      launched = true;
+      return { pid: 220 };
+    },
+    cdpProbe: async port => ({ ok: launched && port === 43001, targetCount: launched ? 1 : 0, message: '' }),
+    sleep: async () => {},
   });
 
-  await assert.rejects(
-    () => process.restart({ debugPort: 9230 }),
-    error => error.code === 'CDP_PORT_OCCUPIED' && /PID 999/.test(error.message),
-  );
+  const result = await process.restart({ debugPort: 9230, waitTimeoutMs: 100 });
+
+  assert.equal(result.requestedDebugPort, 9230);
+  assert.equal(result.debugPort, 43001);
+  assert.equal(result.portChanged, true);
+  assert.deepEqual(launchArgs, [
+    '--remote-debugging-port=43001',
+    '--remote-debugging-address=127.0.0.1',
+    '--remote-allow-origins=http://127.0.0.1:43001',
+  ]);
 });
 
 test('Codex Desktop 未运行且端口空闲时直接启动并启用 CDP', async () => {
@@ -213,24 +234,32 @@ test('已有健康 CDP 时先优雅关闭 Codex Desktop 再重新启动', async 
   assert.deepEqual(calls, [['graceful-close', 9230], 'launch']);
 });
 
-test('监听 PID 已不存在时立即报告系统残留而不尝试启动', async () => {
-  let launchCount = 0;
+test('首选端口存在系统残留监听时改用系统空闲端口', async () => {
+  let launched = false;
   const process = new ControlledCodexProcess({
     platform: 'win32',
     packageResolver: async () => APP,
-    processResolver: async () => [],
-    portOwnerResolver: async () => ({ pid: 316936, processFound: false, executablePath: '' }),
+    processResolver: async () => launched
+      ? [{ pid: 220, executablePath: APP.executablePath, commandLine: ' --remote-debugging-port=43002' }]
+      : [],
+    portOwnerResolver: async port => port === 9235
+      ? { pid: 316936, processFound: false, executablePath: '' }
+      : null,
+    portAvailabilityProbe: async port => port === 43002,
+    freePortSelector: async () => 43002,
     launcher: async () => {
-      launchCount += 1;
+      launched = true;
       return { pid: 220 };
     },
+    cdpProbe: async port => ({ ok: launched && port === 43002, targetCount: launched ? 1 : 0, message: '' }),
+    sleep: async () => {},
   });
 
-  await assert.rejects(
-    () => process.restart({ debugPort: 9235 }),
-    error => error.code === 'CDP_PORT_ORPHANED' && /PID 316936/.test(error.message),
-  );
-  assert.equal(launchCount, 0);
+  const result = await process.restart({ debugPort: 9235, waitTimeoutMs: 100 });
+
+  assert.equal(result.requestedDebugPort, 9235);
+  assert.equal(result.debugPort, 43002);
+  assert.equal(result.portChanged, true);
 });
 
 test('用户确认受控重启后不再执行不可靠的草稿自动检查', async () => {
@@ -323,7 +352,43 @@ test('旧进程退出后等待 CDP 端口实际释放再启动新实例', async 
 
   await process.restart({ debugPort: 9230, exitTimeoutMs: 100, portReleaseTimeoutMs: 100, waitTimeoutMs: 100 });
 
-  assert.deepEqual(phases, ['stop', 'port', 'port', 'port', 'launch']);
+  assert.deepEqual(phases, ['port', 'stop', 'port', 'port', 'launch']);
+});
+
+test('旧进程退出后首选端口仍残留时改用系统空闲端口继续启动', async () => {
+  let stopped = false;
+  let launched = false;
+  let launchArgs = [];
+  const process = new ControlledCodexProcess({
+    platform: 'win32',
+    packageResolver: async () => APP,
+    processResolver: async () => {
+      if (launched) return [{ pid: 220, executablePath: APP.executablePath, commandLine: ' --remote-debugging-port=43003' }];
+      return stopped ? [] : [{ pid: 120, executablePath: APP.executablePath, commandLine: '' }];
+    },
+    portOwnerResolver: async port => port === 9230
+      ? stopped
+        ? { pid: 120, processFound: false, executablePath: '' }
+        : { pid: 120, processFound: true, executablePath: APP.executablePath }
+      : null,
+    processStopper: async () => { stopped = true; },
+    portAvailabilityProbe: async port => port === 43003,
+    freePortSelector: async () => 43003,
+    launcher: async (_app, args) => {
+      launchArgs = args;
+      launched = true;
+      return { pid: 220 };
+    },
+    cdpProbe: async port => ({ ok: launched && port === 43003, targetCount: launched ? 1 : 0, message: '' }),
+    sleep: async () => {},
+  });
+
+  const result = await process.restart({ debugPort: 9230, portReleaseTimeoutMs: 1, waitTimeoutMs: 100 });
+
+  assert.equal(result.debugPort, 43003);
+  assert.equal(result.portChanged, true);
+  assert.equal(result.portChangeReason, 'orphaned');
+  assert.match(launchArgs[0], /43003/);
 });
 
 test('受控启动只停止目标包进程并通过 AUMID 传递 CDP 参数', async () => {

@@ -229,6 +229,32 @@ function probePortAvailable(port) {
 }
 
 /**
+ * AI:由 Windows 为本机回环连接分配一个当前空闲端口。
+ *
+ * @returns {Promise<number>} 系统分配的端口。
+ */
+function findAvailableLoopbackPort() {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.unref();
+    server.once('error', error => {
+      reject(processError(`无法选择空闲 CDP 端口：${error.message}`, 'CDP_PORT_SELECTION_FAILED'));
+    });
+    server.listen({ host: '127.0.0.1', port: 0, exclusive: true }, () => {
+      const address = server.address();
+      const selectedPort = address && typeof address === 'object' ? Number(address.port) : 0;
+      server.close(error => {
+        if (error || !Number.isInteger(selectedPort) || selectedPort < 1024 || selectedPort > 65535) {
+          reject(processError(`无法选择空闲 CDP 端口：${error && error.message || '系统未返回有效端口'}`, 'CDP_PORT_SELECTION_FAILED'));
+          return;
+        }
+        resolve(selectedPort);
+      });
+    });
+  });
+}
+
+/**
  * AI:生成通过 Windows ApplicationActivationManager 激活 Codex Desktop 的 PowerShell 脚本。
  *
  * @param {object} app Codex Desktop 应用包信息。
@@ -320,6 +346,7 @@ class ControlledCodexProcess {
     this.processStopper = options.processStopper || stopCodexProcesses;
     this.gracefulCloser = options.gracefulCloser || closeCodexThroughCdp;
     this.portAvailabilityProbe = options.portAvailabilityProbe || probePortAvailable;
+    this.freePortSelector = options.freePortSelector || findAvailableLoopbackPort;
     this.launcher = options.launcher || activateCodexApplication;
     this.cdpProbe = options.cdpProbe || probeCdp;
     this.sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
@@ -336,25 +363,97 @@ class ControlledCodexProcess {
     return { app, processes, mainProcess: processes[0] || null };
   }
 
+  /**
+   * AI:保留可用首选端口；首选端口被残留监听或其他进程占用时选择系统空闲端口。
+   *
+   * @param {number} requestedDebugPort 用户配置的首选 CDP 端口。
+   * @param {object} state 当前官方 Codex 包和进程状态。
+   * @returns {Promise<{debugPort: number, activeCdp: object, portChanged: boolean, portChangeReason: string, preferredPortOwnerPid: number|null}>} 本次重启使用的端口和旧实例 CDP 状态。
+   */
+  async selectDebugPort(requestedDebugPort, state) {
+    const owner = await this.portOwnerResolver(requestedDebugPort);
+    const ownerIsCodex = owner
+      && owner.processFound !== false
+      && path.normalize(owner.executablePath || '').toLowerCase() === path.normalize(state.app.executablePath).toLowerCase();
+    const activeCdp = state.processes.length
+      ? await this.cdpProbe(requestedDebugPort)
+      : { ok: false, targetCount: 0, message: '' };
+    const preferredAvailable = await this.portAvailabilityProbe(requestedDebugPort);
+    const portCanBelongToCurrentCodex = state.processes.length && (!owner || ownerIsCodex);
+    if (preferredAvailable || portCanBelongToCurrentCodex) {
+      return {
+        debugPort: requestedDebugPort,
+        activeCdp,
+        portChanged: false,
+        portChangeReason: '',
+        preferredPortOwnerPid: owner && owner.pid || null,
+      };
+    }
+
+    const selectedPort = await this.selectFreeDebugPort(requestedDebugPort);
+    return {
+      debugPort: selectedPort,
+      activeCdp,
+      portChanged: true,
+      portChangeReason: owner && owner.processFound === false ? 'orphaned' : owner ? 'occupied' : 'unavailable',
+      preferredPortOwnerPid: owner && owner.pid || null,
+    };
+  }
+
+  /**
+   * AI:选择并复核一个不等于失效首选端口的可绑定回环端口。
+   *
+   * @param {number} excludedPort 本次不可继续使用的端口。
+   * @returns {Promise<number>} 已复核可绑定的端口。
+   */
+  async selectFreeDebugPort(excludedPort) {
+    const selectedPort = Number(await this.freePortSelector());
+    const selectedOwner = Number.isInteger(selectedPort) && selectedPort >= 1024 && selectedPort <= 65535
+      ? await this.portOwnerResolver(selectedPort)
+      : null;
+    const selectedAvailable = !selectedOwner
+      && selectedPort !== excludedPort
+      && await this.portAvailabilityProbe(selectedPort);
+    if (!selectedAvailable) {
+      throw processError('系统未能选择可用的 CDP 端口。', 'CDP_PORT_SELECTION_FAILED');
+    }
+    return selectedPort;
+  }
+
   async restart(options = {}) {
     this.ensureWindows();
-    const debugPort = Number(options.debugPort) || DEFAULT_DEBUG_PORT;
+    const requestedDebugPort = Number(options.debugPort) || DEFAULT_DEBUG_PORT;
     const state = await this.inspect();
-    const owner = await this.portOwnerResolver(debugPort);
-    if (owner && owner.processFound === false) {
-      throw processError(`CDP 端口 ${debugPort} 存在系统残留监听：PID ${owner.pid} 已不存在。请重启 Windows 释放该端口，或手动修改 CDP 端口。`, 'CDP_PORT_ORPHANED');
-    }
-    const ownerIsCodex = owner && path.normalize(owner.executablePath || '').toLowerCase() === path.normalize(state.app.executablePath).toLowerCase();
-    if (owner && !ownerIsCodex) {
-      throw processError(`CDP 端口 ${debugPort} 已被其他进程占用：PID ${owner.pid}`, 'CDP_PORT_OCCUPIED');
-    }
+    const selection = await this.selectDebugPort(requestedDebugPort, state);
+    let debugPort = selection.debugPort;
     if (state.processes.length) {
-      const activeCdp = await this.cdpProbe(debugPort);
-      if (activeCdp.ok) await this.gracefulCloser(debugPort);
+      if (selection.activeCdp.ok) await this.gracefulCloser(requestedDebugPort);
       else await this.processStopper(state.app, state.processes);
       await this.waitForExit(state.app, Number(options.exitTimeoutMs) || 10000);
     }
-    await this.waitForPortRelease(debugPort, Number(options.portReleaseTimeoutMs) || DEFAULT_PORT_RELEASE_TIMEOUT_MS);
+    if (!selection.portChanged && !(await this.portAvailabilityProbe(debugPort))) {
+      const ownerAfterExit = await this.portOwnerResolver(debugPort);
+      const ownerStillBelongsToCodex = ownerAfterExit
+        && ownerAfterExit.processFound !== false
+        && path.normalize(ownerAfterExit.executablePath || '').toLowerCase() === path.normalize(state.app.executablePath).toLowerCase();
+      if (ownerAfterExit && !ownerStillBelongsToCodex) {
+        debugPort = await this.selectFreeDebugPort(debugPort);
+        selection.portChanged = true;
+        selection.portChangeReason = ownerAfterExit.processFound === false ? 'orphaned' : 'occupied';
+        selection.preferredPortOwnerPid = ownerAfterExit.pid || null;
+      }
+    }
+    try {
+      await this.waitForPortRelease(debugPort, Number(options.portReleaseTimeoutMs) || DEFAULT_PORT_RELEASE_TIMEOUT_MS);
+    } catch (error) {
+      if (error && error.code === 'CDP_PORT_RELEASE_TIMEOUT' && !selection.portChanged) {
+        debugPort = await this.selectFreeDebugPort(debugPort);
+        selection.portChanged = true;
+        selection.portChangeReason = 'release-timeout';
+      } else {
+        throw error;
+      }
+    }
     const args = [
       `--remote-debugging-port=${debugPort}`,
       '--remote-debugging-address=127.0.0.1',
@@ -367,6 +466,10 @@ class ControlledCodexProcess {
     return {
       ok: true,
       debugPort,
+      requestedDebugPort,
+      portChanged: selection.portChanged,
+      portChangeReason: selection.portChangeReason,
+      preferredPortOwnerPid: selection.preferredPortOwnerPid,
       app: state.app,
       previousPid: state.mainProcess && state.mainProcess.pid || null,
       launchedPid: Number(launched && launched.pid || 0) || null,
@@ -412,6 +515,7 @@ module.exports = {
   ControlledCodexProcess,
   activateCodexApplication,
   closeCodexThroughCdp,
+  findAvailableLoopbackPort,
   parsePowerShellJson,
   probePortAvailable,
   probeCdp,

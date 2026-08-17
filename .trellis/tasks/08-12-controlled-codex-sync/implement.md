@@ -93,7 +93,7 @@ npm run build:manager:win
 - 架构：已有健康 CDP 时使用标准 `Browser.close` 优雅退出；只有旧实例没有可用 CDP 时才终止已核对的官方进程树。
 - 运行时：监听 PID 无法查询时返回 `CDP_PORT_ORPHANED`，不再丢弃所有权证据后空等。
 - 测试：覆盖 Codex 未运行直接启动、`Browser.close` 协议、健康 CDP 不进入强杀路径、孤儿监听拒绝启动。
-- 规范：`.trellis/spec/backend/codex-control-plane.md` 已固化上述分支和错误矩阵；仍禁止自动换端口。
+- 规范：`.trellis/spec/backend/codex-control-plane.md` 已固化上述分支和错误矩阵；运行时仍禁止换端口，用户确认的显式重启允许迁移到系统空闲回环端口。
 
 ### 验证结果
 
@@ -102,3 +102,10 @@ npm run build:manager:win
 - `npm run check`、`node --check desktop/src/controlled-codex-process.js`、`git diff --check` 通过。
 - 固定目录管理器构建和 `app.asar` 扫描通过，版本 `0.3.17`；打包源码包含 `Browser.close` 和 `CDP_PORT_ORPHANED`。
 - 本机只读复核确认 `9235` 为真实系统残留监听；本轮未自动换端口，也未重启官方 Codex Desktop。
+
+## 2026-08-17 显式重启端口自愈
+
+- 参考 CodexPlusPlus 的启动器职责划分：配置端口作为首选端口；Windows 无法绑定且该端口不是有效 Codex CDP 时，由系统分配空闲回环端口。本项目仅借鉴思路，保留自身的包进程归属、用户确认和 Agent 生命周期契约。
+- 只有“重启 Codex 启用 CDP”允许端口迁移；Agent 日常重连不得换端口或重启官方客户端。
+- 覆盖三条现场路径：启动前其他进程占用、启动前孤儿监听、旧实例退出后端口仍未释放。
+- 新 Codex 的 CDP 目标验证成功后，管理器保存实际端口并用同一配置启动 Agent；失败前不得写入新端口。

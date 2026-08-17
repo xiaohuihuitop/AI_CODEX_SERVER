@@ -53,7 +53,7 @@ WebSocket 所在事件循环。发送和停止的落盘确认只允许从文件�
 - `CODEX_DEVICE_NAME`：设备名称。
 - `CODEX_DEBUG_PORT`：官方客户端本机 CDP 端口，默认 `9230`。
 
-严禁 fallback：CDP、线程定位或 JSONL 确认失败时必须返回明确错误，不得改用独立 App Server、自动换端口、按标题猜线程或伪造完成状态。
+严禁运行时 fallback：CDP、线程定位或 JSONL 确认失败时必须返回明确错误，不得改用独立 App Server、在后台自动换端口、按标题猜线程或伪造完成状态。只有用户确认“重启 Codex 启用 CDP”后，启动事务才允许在首选端口不可用时选择空闲回环端口。
 
 Relay 路由不变量：Token 只用于入口鉴权。鉴权成功后必须解析为稳定 Key ID，Agent、会话缓存、移动连接和控制结果均以 Key ID 为内部主键；不得把可修改的 Token 字符串作为跨层设备身份。
 
@@ -69,12 +69,12 @@ Relay 路由不变量：Token 只用于入口鉴权。鉴权成功后必须解�
 | --- | --- |
 | 非 Windows 平台 | `WINDOWS_ONLY` |
 | 未安装官方 Codex 包或 manifest 无入口 | `CODEX_PACKAGE_NOT_FOUND` |
-| 配置端口被非目标官方进程占用 | `CDP_PORT_OCCUPIED`；不得终止未知进程或自动换端口 |
-| 配置端口有监听但监听 PID 已不存在 | `CDP_PORT_ORPHANED`；报告残留 PID，提示重启 Windows 或手动改端口，不得自动换端口 |
+| 显式重启时首选端口被非目标进程占用 | 不终止未知进程；由系统选择空闲回环端口，启动成功后记录原 PID 并保存实际端口 |
+| 显式重启时首选端口有监听但监听 PID 已不存在 | 不等待或终止孤儿监听；由系统选择空闲回环端口，启动成功后记录残留 PID 并保存实际端口 |
 | 官方客户端未运行且配置端口可绑定 | 直接通过 AUMID 携带 CDP 参数启动，不执行任何关闭逻辑 |
 | 官方客户端正在运行且配置端口为健康 CDP | 发送 `Browser.close` 优雅退出并等待；不得直接强制终止健康 CDP 实例 |
 | 官方进程树无法终止或主进程未退出 | `CODEX_PROCESS_TREE_TERMINATION_FAILED` / `CODEX_STOP_TIMEOUT`；不得继续启动新实例 |
-| 旧实例退出后 CDP 端口仍不可绑定 | `CDP_PORT_RELEASE_TIMEOUT`；不得继续启动新实例或自动换端口 |
+| 显式重启中旧实例退出后首选端口仍不可绑定 | 选择空闲回环端口继续启动；只有空闲端口选择或复核失败时返回 `CDP_PORT_SELECTION_FAILED` |
 | 官方实例无正确 CDP 参数 | `CDP_NOT_READY`；Agent 保持运行并继续探测，提示用户显式点击“重启 Codex 启用 CDP” |
 | 当前官方实例持有可用 CDP，但命令行未显示参数 | 直接复用，不得重启 |
 | 任意官方版本且页面结构契约匹配 | 检测报告返回 `status=compatible`、`compatible=true`；版本号仅供诊断 |

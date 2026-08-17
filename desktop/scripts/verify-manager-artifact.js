@@ -97,13 +97,14 @@ function verifyManagerArtifact() {
   if (!/buildProcessTreeSnapshot/.test(processSource) || !/terminateProcessTree/.test(processSource) || !/SIGKILL/.test(processSource)) fail('未按进程树逐 PID 终止官方 Codex');
   if (/taskkill\.exe|PackageDebugSettings|CloseMainWindow|Stop-Process/.test(processSource)) fail('受控重启仍包含不可靠的进程退出方式');
   if (!/request\('Browser\.close', \{\}\)/.test(processSource)) fail('健康 CDP 实例缺少 Browser.close 优雅退出');
-  if (!/CDP_PORT_ORPHANED/.test(processSource)) fail('受控重启缺少系统残留监听诊断');
+  if (!/findAvailableLoopbackPort/.test(processSource) || !/portChangeReason/.test(processSource)) fail('受控重启缺少空闲端口选择与迁移诊断');
   if (!/waitForPortRelease/.test(processSource) || !/exclusive: true/.test(processSource)) fail('受控重启缺少 CDP 端口释放门禁');
   if (!/remote-debugging-port/.test(processSource)) fail('受控 Codex 启动未配置 CDP 端口');
   if (/readCodexDraft|CODEX_DRAFT_(?:UNKNOWN|EXISTS)/.test(processSource)) fail('受控重启仍包含不可靠的草稿自动检查');
   if (/processManager\.restart\(/.test(runtimeSource)) fail('Agent 运行时仍会隐式重启官方 Codex');
   if (!/manager:restart-codex/.test(electronMain)) fail('管理器缺少独立 Codex 重启操作');
   if (!/丢弃未发送草稿/.test(electronMain)) fail('Codex 重启确认框未明确提示草稿风险');
+  if (!/debugPort: result\.debugPort/.test(electronMain) || !/agentController\.start\(config\)/.test(electronMain)) fail('管理器未保存实际 CDP 端口并用于 Agent');
   if (!/restartCodex/.test(electronPreload)) fail('渲染层未暴露独立 Codex 重启操作');
   if (!/重启 Codex 启用 CDP/.test(electronHtml)) fail('管理器缺少独立 Codex 重启按钮');
   if (!/data-app-action-sidebar-thread-id/.test(controllerSource)) fail('官方界面控制未按 threadId 精确定位');

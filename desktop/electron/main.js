@@ -254,7 +254,7 @@ ipcMain.handle('manager:restart-codex', async () => {
     type: 'warning',
     title: '重启官方 Codex Desktop',
     message: `重启官方 Codex Desktop 以启用 CDP ${normalized.debugPort}？`,
-    detail: '重启会关闭当前官方 Codex Desktop，并丢弃未发送草稿。请确认草稿已经发送或清空。',
+    detail: '重启会关闭当前官方 Codex Desktop，并丢弃未发送草稿。若首选端口不可用，管理器会自动选择空闲端口并保存。请确认草稿已经发送或清空。',
     buttons: ['取消', '重启 Codex'],
     defaultId: 0,
     cancelId: 0,
@@ -273,6 +273,18 @@ ipcMain.handle('manager:restart-codex', async () => {
   let restartError = null;
   try {
     const result = await controlledCodexProcess.restart({ debugPort: normalized.debugPort });
+    config = normalizeManagerConfig(Object.assign({}, normalized, { debugPort: result.debugPort }));
+    saveConfig(CONFIG_PATH, config);
+    if (result.portChanged) {
+      const reasons = {
+        orphaned: '原端口为孤儿监听',
+        occupied: '原端口被其他进程占用',
+        unavailable: '原端口不可绑定',
+        'release-timeout': '旧实例退出后原端口未释放',
+      };
+      const owner = result.preferredPortOwnerPid ? `，原监听 PID ${result.preferredPortOwnerPid}` : '';
+      appendManagerLog(`首选 CDP ${result.requestedDebugPort} 不可用（${reasons[result.portChangeReason]}${owner}），已自动改用 ${result.debugPort} 并保存配置`);
+    }
     appendManagerLog(`官方 Codex Desktop 已重启，CDP ${result.debugPort} 已就绪`);
   } catch (error) {
     restartError = error;
@@ -282,7 +294,7 @@ ipcMain.handle('manager:restart-codex', async () => {
   let agentError = null;
   if (shouldResumeAgent) {
     try {
-      agentController.start(normalized);
+      agentController.start(config);
     } catch (error) {
       agentError = error;
       appendManagerLog(`Agent 恢复失败：${error.message || String(error)}`);

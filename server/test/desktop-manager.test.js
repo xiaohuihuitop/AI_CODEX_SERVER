@@ -129,7 +129,7 @@ test('桌面管理器统一使用固定目录、固定名称并展示版本', ()
 
   assert.equal(pkg.build.directories.output, 'dist');
   assert.equal(pkg.productName, 'Codex Desktop 管理器');
-  assert.equal(pkg.version, '0.3.17');
+  assert.equal(pkg.version, '0.3.18');
   assert.match(main, /const MANAGER_VERSION = app\.getVersion\(\)/);
   assert.match(main, /Codex Desktop 管理器 v\$\{MANAGER_VERSION\} 已启动/);
   assert.match(html, /id="managerVersion"/);
@@ -307,6 +307,13 @@ test('Electron 重启 Codex 操作与启动 Agent 独立并带用户确认', () 
   assert.match(electronMain, /丢弃未发送草稿/);
   assert.doesNotMatch(electronMain, /会先检查未发送草稿/);
   assert.match(electronMain, /controlledCodexProcess\.restart\(\{ debugPort: normalized\.debugPort \}\)/);
+  assert.match(electronMain, /debugPort: result\.debugPort/);
+  assert.match(electronMain, /saveConfig\(CONFIG_PATH, config\)/);
+  assert.match(electronMain, /agentController\.start\(config\)/);
+  assert.ok(
+    electronMain.indexOf('debugPort: result.debugPort') > electronMain.indexOf('controlledCodexProcess.restart'),
+    '必须在受控 Codex 启动成功后才写入实际端口',
+  );
   assert.match(preload, /restartCodex/);
   assert.match(renderer, /restartCodexButton/);
   assert.match(renderer, /window\.codexManager\.restartCodex\(\)/);
