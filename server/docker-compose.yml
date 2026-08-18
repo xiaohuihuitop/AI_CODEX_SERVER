@@ -10,4 +10,8 @@ services:
     ports:
       - "${CODEX_CLOUD_HTTP_PORT:-8008}:8787"
     volumes:
-      - ./data:/data
+      - codex-relay-data:/data
+
+volumes:
+  codex-relay-data:
+    name: codex-relay-data

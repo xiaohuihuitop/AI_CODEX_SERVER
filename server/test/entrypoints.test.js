@@ -194,3 +194,11 @@ test('服务端 Docker 构建只依赖 server 目录', () => {
   assert.doesNotMatch(dockerfile, /desktop|COPY\s+app|COPY\s+\.\.\//);
   assert.match(workflow, /context:\s+\.\/server/);
 });
+
+test('服务端 Key 使用固定 Docker 数据卷跨发布目录持久化', () => {
+  const compose = fs.readFileSync(path.join(serverDir, 'docker-compose.yml'), 'utf8');
+
+  assert.match(compose, /- codex-relay-data:\/data/);
+  assert.match(compose, /volumes:\s+[\s\S]*codex-relay-data:\s+[\s\S]*name: codex-relay-data/);
+  assert.doesNotMatch(compose, /- \.\/data:\/data/);
+});

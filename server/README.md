@@ -99,6 +99,20 @@ docker-compose.yml
 ai-codex-server-build-v1.0.tar
 ```
 
+Key 数据保存在固定 Docker 卷 `codex-relay-data`。该卷不依赖 Compose 项目名或发布目录，
+更新镜像、重建容器或移动 `docker-compose.yml` 都不会创建新的 Key 仓库。不要在更新时执行
+`docker-compose down -v` 或手动删除 `codex-relay-data`。
+
+从旧版 `./data:/data` 配置首次切换到固定卷前，先备份当前容器中的 Key：
+
+```sh
+sudo docker cp <当前容器名>:/data/keys.json ./keys.json
+```
+
+新 Compose 启动并创建 `codex-relay-data` 后，将该文件恢复到新容器的 `/data/keys.json`，
+再重启一次容器。若旧环境变量仍保存相同 Key，空卷首次启动也会自动迁移该 Key；已有
+`keys.json` 时不会覆盖。
+
 导入 Release 里的镜像 tar：
 
 ```sh

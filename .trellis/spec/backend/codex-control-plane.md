@@ -57,6 +57,8 @@ WebSocket 所在事件循环。发送和停止的落盘确认只允许从文件�
 
 Relay 路由不变量：Token 只用于入口鉴权。鉴权成功后必须解析为稳定 Key ID，Agent、会话缓存、移动连接和控制结果均以 Key ID 为内部主键；不得把可修改的 Token 字符串作为跨层设备身份。
 
+Relay Key 持久化不变量：`/data/keys.json` 必须挂载到名称固定为 `codex-relay-data` 的 Docker 数据卷。不得使用相对发布目录的 `./data:/data`，否则更换 Compose 项目名或发布目录会创建新的空 Key 仓库。镜像更新和容器重建不得删除该卷；禁止在常规更新中执行 `docker-compose down -v`。从旧绑定目录首次迁移时，必须先显式备份当前容器的 `/data/keys.json`，新卷创建后恢复文件并重启容器，不得把环境变量迁移当作已有 Key 数据的备份。
+
 兼容性不变量：CDP 连接前只允许一个匹配配置端口、URL 精确等于 `app://-/index.html` 的主页面。带 `initialRoute` 等查询参数的快捷窗口、头像浮层及其他辅助页面不得计入主页面候选；出现多个精确主页面仍必须拒绝。连接后必须验证线程行、可见编辑器和动作按钮；任何一项不满足都返回明确不兼容错误，不猜测备用目标或选择器。官方版本号只记录到诊断报告，不得作为放行或拒绝条件。
 
 当前控制契约：`codex-desktop-structural-v1`。契约只包含唯一主页面 URL 和已验证的语义选择器；官方客户端更新后，只要结构探针通过即可控制。
@@ -219,6 +221,7 @@ advanceControlSyncState(state, evidence, now);
 ### 6. 必需测试
 
 - `server/test/cloud-relay.test.js`：权威清理、迟到增量、Key 隔离、控制结果、重复命令、实时终态、重复同步不升版本，以及原子线程视图不请求 Agent。
+- `server/test/entrypoints.test.js`：部署入口必须将 `/data` 挂载到固定命名卷 `codex-relay-data`，禁止恢复为相对发布目录绑定。
 - `server/test/desktop-agent.test.js`：轻量目录、目标优先同步、两阶段确认、空闲不发送 `session-sync`、独立心跳和同步 dirty latch。
 - `server/test/mobile-app.test.js`：五轮分页、消息去重、自动终态、single-flight、变化范围合并，以及 30 秒健康核对不读取历史。
 - `server/test/codex-desktop-compatibility.test.js`：单一结构契约、唯一主页面、端口匹配，以及真实 `initialRoute=%2Favatar-overlay` 辅助页面与主页面并存时的目标选择。
