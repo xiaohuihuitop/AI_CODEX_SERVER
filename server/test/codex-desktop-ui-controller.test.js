@@ -67,12 +67,35 @@ test('界面控制器按 threadId 精确选择侧栏线程并核对选中结果'
 
 test('界面控制器找不到 threadId 时明确失败且不按标题猜测', async () => {
   const cdp = createCdp({ evaluate: async () => ({ found: false, selected: false }) });
-  const controller = new CodexDesktopUiController({ cdp });
+  const controller = new CodexDesktopUiController({ cdp, sleep: async () => {}, controlWaitAttempts: 2 });
 
   await assert.rejects(
     () => controller.selectThread('missing-thread'),
     error => error.code === 'THREAD_ROW_NOT_FOUND',
   );
+});
+
+test('界面控制器等待异步侧栏出现目标线程并完成选中', async () => {
+  let inspections = 0;
+  let selections = 0;
+  const cdp = createCdp({
+    evaluate: async expression => {
+      if (expression.includes('return inspect()')) {
+        inspections += 1;
+        if (inspections < 3) return { found: false, selected: false };
+        return { found: true, selected: false, rect: { x: 10, y: 20, width: 100, height: 40 } };
+      }
+      selections += 1;
+      return selections < 2
+        ? { found: false, selected: false, threadId: '' }
+        : { found: true, selected: true, threadId: 'local:thread-1' };
+    },
+  });
+  const controller = new CodexDesktopUiController({ cdp, sleep: async () => {}, controlWaitAttempts: 4 });
+
+  assert.deepEqual(await controller.selectThread('thread-1'), { threadId: 'thread-1' });
+  assert.equal(inspections, 3);
+  assert.equal(selections, 2);
 });
 
 test('界面控制器检测到草稿或目标线程运行中时拒绝发送', async () => {
@@ -121,6 +144,29 @@ test('界面控制器精确校验输入并点击发送后以 JSONL 新回合确�
     turnId: 'turn-1',
     observedAt: '2026-08-12T00:00:00.000Z',
   });
+});
+
+test('界面控制器等待异步编辑器与输入回显后再发送', async () => {
+  const cdp = createCdp();
+  const states = [
+    { found: false },
+    { found: true, draft: '', action: 'send', disabled: false, editorRect: { x: 10, y: 20, width: 400, height: 80 } },
+    { found: true, draft: '', action: 'send', disabled: false },
+    { found: true, draft: '手机消息', action: 'send', disabled: false, sendRect: { x: 430, y: 40, width: 30, height: 30 } },
+  ];
+  const controller = new CodexDesktopUiController({
+    cdp,
+    threadSelector: async () => ({ threadId: 'thread-1' }),
+    composerReader: async () => states.shift(),
+    sessionConfirmer: async () => ({ turnId: 'turn-2', observedAt: '2026-08-18T00:00:00.000Z' }),
+    sleep: async () => {},
+    controlWaitAttempts: 4,
+  });
+
+  const result = await controller.sendMessage('thread-1', '手机消息');
+
+  assert.equal(result.turnId, 'turn-2');
+  assert.equal(states.length, 0);
 });
 
 test('界面控制器仅在目标线程显示停止按钮时执行停止', async () => {

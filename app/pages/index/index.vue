@@ -932,6 +932,23 @@ function hasHistoryMessage(rows, role, text, startIndex = 0) {
 }
 
 /**
+ * AI:优先按 Agent 确认的真实回合识别已落盘用户消息，避免分页长度变化导致重复气泡。
+ *
+ * @param {Array<object>} rows 历史消息。
+ * @param {object} pending 本地待确认消息。
+ * @returns {boolean} 已出现返回 true。
+ */
+function hasPendingHistoryMessage(rows, pending) {
+  const turnId = String(pending && pending.turnId || '').trim();
+  if (turnId) {
+    return (rows || []).some(row => row
+      && row.role === 'user'
+      && String(row.turnId || '').trim() === turnId);
+  }
+  return hasHistoryMessage(rows, 'user', pending && pending.text, pending && pending.baseMessageCount);
+}
+
+/**
  * AI:判断待确认消息之后是否已经有电脑端回复，避免继续显示等待占位。
  *
  * @param {Array<object>} rows 历史消息。
@@ -939,6 +956,12 @@ function hasHistoryMessage(rows, role, text, startIndex = 0) {
  * @returns {boolean} 已有新回复返回 true。
  */
 function hasAssistantAfterPendingBase(rows, pending) {
+  const turnId = String(pending && pending.turnId || '').trim();
+  if (turnId) {
+    return (rows || []).some(row => row
+      && row.role === 'assistant'
+      && String(row.turnId || '').trim() === turnId);
+  }
   const start = Math.max(0, Number(pending && pending.baseMessageCount) || 0);
   for (let index = start; index < (rows || []).length; index += 1) {
     const row = rows[index];
@@ -978,7 +1001,7 @@ function mergePendingLocalMessages(threadId, historyRows) {
       nextPending.push(pending);
       continue;
     }
-    if (hasHistoryMessage(rows, 'user', pending.text, pending.baseMessageCount)) continue;
+    if (hasPendingHistoryMessage(rows, pending)) continue;
     nextPending.push(pending);
     const localRows = [];
     localRows.push({ role: 'user', text: pending.text, pending: true, id: pending.userId });
@@ -1323,9 +1346,14 @@ function reconcileRealtimeThreadState(status) {
     && completedAt >= observedAt;
   const directTerminalStatusIsAuthoritative = status.cached === false && authoritativeStatus !== 'running';
   const realtimeStateConfirmed = turnConfirmed && authoritativeStatus === realtime.status;
+  const terminalTurnConfirmed = authoritativeStatus !== 'running'
+    && Boolean(realtime.turnId)
+    && turns.some(turn => turn && turn.turnId === realtime.turnId
+      && ['complete', 'error', 'failed', 'interrupted', 'cancelled', 'canceled'].indexOf(String(turn.status || '').toLowerCase()) !== -1);
   if (!directTerminalStatusIsAuthoritative
     && !historyHasFinalReply
     && !realtimeStateConfirmed
+    && !terminalTurnConfirmed
     && !terminalSnapshotIsNewer) return;
   const next = Object.assign({}, realtimeThreadStates.value);
   delete next[threadId];

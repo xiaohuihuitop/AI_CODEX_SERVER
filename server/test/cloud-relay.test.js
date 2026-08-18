@@ -46,6 +46,21 @@ test('云端手机网页端重复合并时不把本地临时气泡误判为电�
   assert.match(html, /id\.indexOf\('local-user-'\) !== 0/);
   assert.match(html, /id\.indexOf\('local-assistant-'\) !== 0/);
   assert.match(html, /const baseMessageCount = confirmedHistoryRows\(renderedHistoryRows\)\.length;/);
+  assert.match(html, /function hasPendingHistoryMessage\(rows, pending\)/);
+  assert.match(mergeFunction, /if \(hasPendingHistoryMessage\(rows, pending\)\) continue;/);
+});
+
+test('云端手机网页端按真实 turnId 消除分页变化后的待确认气泡', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+  const source = html.match(/function hasPendingHistoryMessage\(rows, pending\) \{[\s\S]*?\n    \}/)?.[0] || '';
+  const hasPending = new Function(`${source}\nreturn hasPendingHistoryMessage;`)();
+  const rows = [
+    { role: 'user', text: '同一消息', turnId: 'turn-new' },
+    { role: 'assistant', text: '回复', turnId: 'turn-new' },
+  ];
+
+  assert.equal(hasPending(rows, { text: '同一消息', turnId: 'turn-new', baseMessageCount: 120 }), true);
+  assert.equal(hasPending(rows, { text: '同一消息', turnId: 'turn-other', baseMessageCount: 120 }), false);
 });
 
 test('云端手机网页端以 Agent 直接终态清除迟到的实时运行覆盖', () => {
@@ -72,6 +87,31 @@ test('云端手机网页端以 Agent 直接终态清除迟到的实时运行覆�
     cached: false,
     completedAt: '2026-08-11T04:14:33.181Z',
     turns: [{ turnId: 'turn-terminal', status: 'complete' }],
+  });
+  assert.equal(realtimeThreadStates.has('threadA'), false);
+});
+
+test('云端手机网页端以同一回合中断状态清除运行覆盖', () => {
+  const html = fs.readFileSync(path.join(publicDir, 'index.html'), 'utf8');
+  const source = html.match(/function reconcileRealtimeThreadState\(status\) \{([\s\S]*?)\n    \}/)?.[0] || '';
+  const realtimeThreadStates = new Map([['threadA', {
+    threadId: 'threadA',
+    turnId: 'turn-stopped',
+    status: 'running',
+    active: true,
+    observedAt: '2026-08-18T00:00:00.000Z',
+  }]]);
+  const reconcile = new Function(
+    'realtimeThreadStates',
+    'renderedHistoryRows',
+    `${source}\nreturn reconcileRealtimeThreadState;`,
+  )(realtimeThreadStates, []);
+
+  reconcile({
+    threadId: 'threadA',
+    active: false,
+    status: 'complete',
+    turns: [{ turnId: 'turn-stopped', status: 'interrupted' }],
   });
   assert.equal(realtimeThreadStates.has('threadA'), false);
 });
@@ -1269,6 +1309,39 @@ test('云端缓存接收较短的新快照时保留已缓存的更早历史', ()
     '消息 1', '消息 2', '消息 3', '消息 4', '消息 5', '消息 6', '消息 7', '消息 8', '消息 9',
   ]);
   assert.equal(cache.status('merge-snapshot-token', 'thread-snapshot').status, 'running');
+});
+
+test('云端缓存接收快照后的 JSONL 增量时保留快照历史', () => {
+  const cache = createCloudSessionCache();
+  cache.applySync('snapshot-delta-token', {
+    openThreadIds: ['thread-snapshot-delta'],
+    sessions: [{
+      threadId: 'thread-snapshot-delta',
+      snapshot: {
+        messages: [
+          { role: 'user', text: '旧问题', turnId: 'turn-old' },
+          { role: 'assistant', text: '旧回复', turnId: 'turn-old' },
+        ],
+        status: { active: false, status: 'complete', preview: '旧回复', final: '旧回复', steps: [], turns: [] },
+      },
+    }],
+  });
+  cache.applySync('snapshot-delta-token', {
+    openThreadIds: ['thread-snapshot-delta'],
+    sessions: [{
+      threadId: 'thread-snapshot-delta',
+      reset: false,
+      lines: [
+        JSON.stringify({ timestamp: '2026-08-18T00:00:00.000Z', type: 'event_msg', payload: { type: 'task_started', turn_id: 'turn-new' } }),
+        JSON.stringify({ timestamp: '2026-08-18T00:00:01.000Z', type: 'event_msg', payload: { type: 'user_message', message: '新问题' } }),
+        JSON.stringify({ timestamp: '2026-08-18T00:00:02.000Z', type: 'response_item', payload: { type: 'message', role: 'assistant', phase: 'final_answer', content: [{ text: '新回复' }] } }),
+        JSON.stringify({ timestamp: '2026-08-18T00:00:03.000Z', type: 'event_msg', payload: { type: 'task_complete', turn_id: 'turn-new', last_agent_message: '新回复' } }),
+      ],
+    }],
+  });
+
+  const history = cache.history('snapshot-delta-token', 'thread-snapshot-delta', 20);
+  assert.deepEqual(history.messages.map(item => item.text), ['旧问题', '旧回复', '新问题', '新回复']);
 });
 
 test('云端缓存增量收到 turn_aborted 后刷新普通状态和 since 状态', () => {

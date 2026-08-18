@@ -396,13 +396,15 @@ test('uni-app Android 手机端历史刷新保留未确认本地用户消息', (
   assert.match(index, /function removePendingLocalSend\(pending\)/);
   assert.match(index, /function bindPendingLocalSendTurn\(turnId\)/);
   assert.match(index, /function hasHistoryMessage\(rows, role, text, startIndex = 0\)/);
+  assert.match(index, /function hasPendingHistoryMessage\(rows, pending\)/);
   assert.match(index, /function hasAssistantAfterPendingBase\(rows, pending\)/);
   assert.match(index, /function mergePendingLocalMessages\(threadId, historyRows\)/);
   assert.match(index, /function confirmedHistoryRows\(rows\)/);
   assert.match(mergeFunction, /const rows = confirmedHistoryRows\(historyRows\);/);
   assert.match(index, /id\.indexOf\('local-user-'\) !== 0/);
   assert.match(index, /id\.indexOf\('local-assistant-'\) !== 0/);
-  assert.match(mergeFunction, /if \(hasHistoryMessage\(rows, 'user', pending\.text, pending\.baseMessageCount\)\) continue;/);
+  assert.match(mergeFunction, /if \(hasPendingHistoryMessage\(rows, pending\)\) continue;/);
+  assert.match(index, /String\(row\.turnId \|\| ''\)\.trim\(\) === turnId/);
   assert.match(mergeFunction, /localRows\.push\(\{ role: 'user', text: pending\.text, pending: true, id: pending\.userId \}\);/);
   assert.match(mergeFunction, /const insertAt = Math\.min\(rows\.length, Math\.max\(0, \(Number\(pending\.baseMessageCount\) \|\| 0\) \+ insertedCount\)\);/);
   assert.match(mergeFunction, /for \(let localIndex = 0; localIndex < localRows\.length; localIndex \+= 1\)/);
@@ -576,6 +578,30 @@ test('uni-app Android 手机端以 Agent 直接终态清除迟到的实时运行
     cached: false,
     completedAt: '2026-08-11T04:14:33.181Z',
     turns: [{ turnId: 'turn-terminal', status: 'complete' }],
+  });
+  assert.equal(realtimeThreadStates.value.threadA, undefined);
+});
+
+test('uni-app Android 手机端以同一回合中断状态清除运行覆盖', () => {
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+  const source = index.match(/function reconcileRealtimeThreadState\(status\) \{([\s\S]*?)\n\}/)?.[0] || '';
+  const realtimeThreadStates = { value: {
+    threadA: {
+      threadId: 'threadA',
+      turnId: 'turn-stopped',
+      status: 'running',
+      active: true,
+      observedAt: '2026-08-18T00:00:00.000Z',
+    },
+  } };
+  const messages = { value: [] };
+  const reconcile = new Function('realtimeThreadStates', 'messages', `${source}\nreturn reconcileRealtimeThreadState;`)(realtimeThreadStates, messages);
+
+  reconcile({
+    threadId: 'threadA',
+    active: false,
+    status: 'complete',
+    turns: [{ turnId: 'turn-stopped', status: 'interrupted' }],
   });
   assert.equal(realtimeThreadStates.value.threadA, undefined);
 });

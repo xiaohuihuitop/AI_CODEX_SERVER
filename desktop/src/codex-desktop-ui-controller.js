@@ -16,7 +16,7 @@ function center(rect) {
  */
 class CodexDesktopUiController {
   /**
-   * @param {{cdp: object, threadSelector?: Function, composerReader?: Function, sessionConfirmer?: Function, sessionStopConfirmer?: Function, sleep?: Function}} options 控制依赖。
+   * @param {{cdp: object, threadSelector?: Function, composerReader?: Function, sessionConfirmer?: Function, sessionStopConfirmer?: Function, sleep?: Function, controlWaitAttempts?: number, controlWaitIntervalMs?: number}} options 控制依赖。
    */
   constructor(options = {}) {
     if (!options.cdp) throw new Error('CodexDesktopUiController 缺少 CDP 客户端。');
@@ -27,6 +27,25 @@ class CodexDesktopUiController {
     this.sessionConfirmer = options.sessionConfirmer;
     this.sessionStopConfirmer = options.sessionStopConfirmer;
     this.sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    this.controlWaitAttempts = Math.max(1, Number(options.controlWaitAttempts) || 20);
+    this.controlWaitIntervalMs = Math.max(0, Number(options.controlWaitIntervalMs) || 250);
+  }
+
+  /**
+   * AI:等待官方客户端异步渲染达到目标状态，避免用固定延时猜测页面是否就绪。
+   *
+   * @param {Function} reader 状态读取函数。
+   * @param {Function} predicate 就绪条件。
+   * @returns {Promise<*>} 最后一次读取结果。
+   */
+  async waitFor(reader, predicate) {
+    let value;
+    for (let attempt = 0; attempt < this.controlWaitAttempts; attempt += 1) {
+      value = await reader();
+      if (predicate(value)) return value;
+      if (attempt + 1 < this.controlWaitAttempts) await this.sleep(this.controlWaitIntervalMs);
+    }
+    return value;
   }
 
   /**
@@ -92,7 +111,7 @@ class CodexDesktopUiController {
     await this.cdp.connect();
     const localId = `local:${id}`;
     const selectors = this.profile.selectors;
-    const inspected = await this.cdp.evaluate(`(() => {
+    const inspectThread = () => this.cdp.evaluate(`(() => {
       const wanted = ${JSON.stringify(localId)};
       const inspect = () => {
         const row = [...document.querySelectorAll(${JSON.stringify(selectors.threadRow)})]
@@ -108,13 +127,13 @@ class CodexDesktopUiController {
       };
       return inspect();
     })()`);
+    const inspected = await this.waitFor(inspectThread, value => Boolean(value && value.found));
     if (!inspected || !inspected.found) throw controlError(`Codex Desktop 侧栏中不存在目标线程：${id}`, 'THREAD_ROW_NOT_FOUND');
     if (!inspected.selected) {
       await this.cdp.request('Page.bringToFront');
       await this.click(inspected.rect);
-      await this.sleep(500);
     }
-    const selected = await this.cdp.evaluate(`(() => {
+    const readSelected = () => this.cdp.evaluate(`(() => {
       const row = document.querySelector(${JSON.stringify(selectors.selectedThreadRow)});
       return {
         found: !!row,
@@ -122,6 +141,7 @@ class CodexDesktopUiController {
         threadId: row ? row.getAttribute('data-app-action-sidebar-thread-id') : ''
       };
     })()`);
+    const selected = await this.waitFor(readSelected, value => Boolean(value && value.threadId === localId));
     if (!selected || selected.threadId !== localId) {
       throw controlError(`Codex Desktop 未切换到目标线程：${id}`, 'THREAD_SELECTION_FAILED');
     }
@@ -166,7 +186,10 @@ class CodexDesktopUiController {
     const controlStartedAt = new Date().toISOString();
     if (!message) throw controlError('发送内容不能为空。', 'EMPTY_TEXT');
     await this.threadSelector(threadId);
-    const before = await this.composerReader();
+    const before = await this.waitFor(
+      () => this.composerReader(),
+      value => Boolean(value && value.found),
+    );
     if (!before || !before.found) throw controlError('Codex Desktop 编辑器不可用。', 'COMPOSER_NOT_FOUND');
     if (String(before.draft || '').trim()) throw controlError('Codex Desktop 存在本地草稿，已拒绝覆盖。', 'LOCAL_DRAFT_EXISTS');
     if (before.action === 'stop') throw controlError('目标线程正在运行，已拒绝并发发送。', 'THREAD_ALREADY_RUNNING');
@@ -174,8 +197,14 @@ class CodexDesktopUiController {
 
     await this.click(before.editorRect);
     await this.cdp.request('Input.insertText', { text: message });
-    await this.sleep(100);
-    const ready = await this.composerReader();
+    const ready = await this.waitFor(
+      () => this.composerReader(),
+      value => Boolean(value
+        && value.found
+        && value.action === 'send'
+        && !value.disabled
+        && String(value.draft || '').trim() === message),
+    );
     if (!ready || ready.action !== 'send' || ready.disabled || String(ready.draft || '').trim() !== message) {
       throw controlError('Codex Desktop 未形成待发送消息。', 'MESSAGE_INPUT_FAILED');
     }
@@ -196,7 +225,10 @@ class CodexDesktopUiController {
   async stop(threadId) {
     const controlStartedAt = new Date().toISOString();
     await this.threadSelector(threadId);
-    const composer = await this.composerReader();
+    const composer = await this.waitFor(
+      () => this.composerReader(),
+      value => Boolean(value && value.found),
+    );
     if (!composer || !composer.found) throw controlError('Codex Desktop 编辑器不可用。', 'COMPOSER_NOT_FOUND');
     if (composer.action !== 'stop') throw controlError('目标线程当前没有可停止的回复。', 'THREAD_NOT_RUNNING');
     await this.click(composer.sendRect);

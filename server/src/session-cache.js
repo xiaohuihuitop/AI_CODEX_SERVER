@@ -340,7 +340,12 @@ class CloudSessionCache {
       const trimmed = lines.length > this.maxLinesPerSession
         ? lines.slice(lines.length - this.maxLinesPerSession)
         : lines;
-      const parsed = this.parseSession(trimmed, threadId);
+      const incremental = this.parseSession(trimmed, threadId);
+      const parsed = !row.reset && existing.parsed
+        ? Object.assign({}, incremental, {
+          messages: mergeSnapshotMessages(existing.parsed.messages, incremental.messages),
+        })
+        : incremental;
       const statusSinceCache = new Map();
       for (const since of existing.statusSinceCache instanceof Map ? existing.statusSinceCache.keys() : []) {
         statusSinceCache.set(since, this.parseSession(trimmed, threadId, since).status);
