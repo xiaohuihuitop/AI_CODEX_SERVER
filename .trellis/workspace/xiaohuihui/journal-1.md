@@ -247,3 +247,24 @@
 ### Status
 
 [OK] **Completed**
+
+
+## Session 11: 排查 HTTPS 云端连接并纳入协作配置
+
+**Date**: 2026-08-18
+**Task**: 排查 HTTPS 云端连接并纳入协作配置
+**Branch**: `master`
+
+### Summary
+
+确认 HTTPS 与 Token 正常，但群晖反向代理未升级 /agent WebSocket，公网请求返回 404，导致 Agent 离线；纳入 Trellis/Codex 项目级协作配置并完成语法检查。
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `17c7de5` | (see git log) |
+
+### Status
+
+[OK] **Completed**
