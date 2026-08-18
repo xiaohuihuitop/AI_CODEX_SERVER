@@ -206,6 +206,33 @@ function mergeSnapshotMessages(existing, incoming) {
   return previous.concat(additions);
 }
 
+/**
+ * AI:比较两个字符串数组，目录顺序也属于用户可见状态。
+ *
+ * @param {string[]} left 左侧数组。
+ * @param {string[]} right 右侧数组。
+ * @returns {boolean} 内容与顺序完全一致时返回 true。
+ */
+function sameStringArray(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+/**
+ * AI:比较缓存记录的可观察数据，排除仅用于派生查询的状态缓存。
+ *
+ * @param {object|undefined} previous 原缓存记录。
+ * @param {object} next 新缓存记录。
+ * @returns {boolean} 用户可见内容或源数据发生变化时返回 true。
+ */
+function sessionRecordChanged(previous, next) {
+  if (!previous) return true;
+  for (const key of ['name', 'projectName', 'cwd', 'updatedAt', 'sessionFile', 'mtimeMs']) {
+    if (previous[key] !== next[key]) return true;
+  }
+  if (JSON.stringify(previous.lines || []) !== JSON.stringify(next.lines || [])) return true;
+  return JSON.stringify(previous.parsed || null) !== JSON.stringify(next.parsed || null);
+}
+
 class CloudSessionCache {
   /**
    * AI:创建云端会话缓存。
@@ -231,6 +258,7 @@ class CloudSessionCache {
         sessions: new Map(),
         openThreadIds: [],
         updatedAt: '',
+        initialized: false,
       });
     }
     return this.tokens.get(key);
@@ -246,7 +274,6 @@ class CloudSessionCache {
   applySync(token, payload = {}) {
     const bucket = this.bucket(token);
     const updatedAt = new Date().toISOString();
-    bucket.updatedAt = updatedAt;
     const hasAuthoritativeList = Array.isArray(payload.openThreadIds);
     const openThreadIds = hasAuthoritativeList
       ? Array.from(new Set(payload.openThreadIds.map(item => String(item || '').trim()).filter(Boolean)))
@@ -254,6 +281,9 @@ class CloudSessionCache {
     const openThreadSet = new Set(openThreadIds);
     let appliedSessionCount = 0;
     let removedSessionCount = 0;
+    let changed = false;
+    let catalogChanged = false;
+    const changedThreadIds = new Set();
 
     for (const row of payload.sessions || []) {
       const threadId = String(row.threadId || '').trim();
@@ -262,28 +292,22 @@ class CloudSessionCache {
       appliedSessionCount += 1;
       const existing = bucket.sessions.get(threadId) || { lines: [] };
       if (row.metadataOnly) {
-        if (bucket.sessions.has(threadId)) {
-          bucket.sessions.set(threadId, Object.assign({}, existing, {
-            name: row.threadName || row.name || existing.name || threadId,
-            projectName: row.projectName || existing.projectName || '',
-            cwd: row.cwd || existing.cwd || '',
-            updatedAt: row.updatedAt || existing.updatedAt || updatedAt,
-            sessionFile: row.sessionFile || existing.sessionFile || '',
-            mtimeMs: Number(row.mtimeMs || existing.mtimeMs || 0),
-          }));
-        } else {
-          bucket.sessions.set(threadId, {
-            threadId,
-            name: row.threadName || row.name || threadId,
-            projectName: row.projectName || '',
-            cwd: row.cwd || '',
-            updatedAt: row.updatedAt || updatedAt,
-            sessionFile: row.sessionFile || '',
-            mtimeMs: Number(row.mtimeMs || 0),
-            lines: [],
-            parsed: this.parseSession([], threadId),
-            statusSinceCache: new Map(),
-          });
+        const next = {
+          threadId,
+          name: row.threadName || row.name || existing.name || threadId,
+          projectName: row.projectName || existing.projectName || '',
+          cwd: row.cwd || existing.cwd || '',
+          updatedAt: row.updatedAt || existing.updatedAt || updatedAt,
+          sessionFile: row.sessionFile || existing.sessionFile || '',
+          mtimeMs: Number(row.mtimeMs || existing.mtimeMs || 0),
+          lines: existing.lines || [],
+          parsed: existing.parsed || this.parseSession([], threadId),
+          statusSinceCache: existing.statusSinceCache instanceof Map ? existing.statusSinceCache : new Map(),
+        };
+        if (sessionRecordChanged(bucket.sessions.get(threadId), next)) {
+          bucket.sessions.set(threadId, next);
+          changed = true;
+          changedThreadIds.add(threadId);
         }
         continue;
       }
@@ -292,7 +316,7 @@ class CloudSessionCache {
         const parsed = Object.assign({}, snapshot, {
           messages: mergeSnapshotMessages(existing.parsed && existing.parsed.messages, snapshot.messages),
         });
-        bucket.sessions.set(threadId, {
+        const next = {
           threadId,
           name: row.threadName || row.name || existing.name || threadId,
           projectName: row.projectName || existing.projectName || '',
@@ -303,7 +327,12 @@ class CloudSessionCache {
           lines: existing.lines || [],
           parsed,
           statusSinceCache: new Map(),
-        });
+        };
+        if (sessionRecordChanged(bucket.sessions.get(threadId), next)) {
+          bucket.sessions.set(threadId, next);
+          changed = true;
+          changedThreadIds.add(threadId);
+        }
         continue;
       }
       const incoming = normalizeLineList(row.lines);
@@ -316,7 +345,7 @@ class CloudSessionCache {
       for (const since of existing.statusSinceCache instanceof Map ? existing.statusSinceCache.keys() : []) {
         statusSinceCache.set(since, this.parseSession(trimmed, threadId, since).status);
       }
-      bucket.sessions.set(threadId, {
+      const next = {
         threadId,
         name: row.threadName || row.name || existing.name || threadId,
         projectName: row.projectName || existing.projectName || '',
@@ -327,23 +356,37 @@ class CloudSessionCache {
         lines: trimmed,
         parsed,
         statusSinceCache,
-      });
+      };
+      if (sessionRecordChanged(bucket.sessions.get(threadId), next)) {
+        bucket.sessions.set(threadId, next);
+        changed = true;
+        changedThreadIds.add(threadId);
+      }
     }
 
     if (hasAuthoritativeList) {
+      catalogChanged = !bucket.initialized || !sameStringArray(bucket.openThreadIds, openThreadIds);
       // AI:权威目录在本次同步内同时驱动展示与物理清理，局部 sessions 增量无权保留已归档内容。
       for (const threadId of bucket.sessions.keys()) {
         if (!openThreadSet.has(threadId)) {
           bucket.sessions.delete(threadId);
           removedSessionCount += 1;
+          changedThreadIds.add(threadId);
         }
       }
       bucket.openThreadIds = openThreadIds;
+      bucket.initialized = true;
     }
+
+    changed = changed || catalogChanged || removedSessionCount > 0;
+    if (changed) bucket.updatedAt = updatedAt;
 
     return {
       ok: true,
-      updatedAt,
+      changed,
+      catalogChanged,
+      changedThreadIds: Array.from(changedThreadIds),
+      updatedAt: bucket.updatedAt,
       sessionCount: bucket.sessions.size,
       appliedSessionCount,
       removedSessionCount,
@@ -450,6 +493,28 @@ class CloudSessionCache {
       threadId,
       sessionFile: session.sessionFile || '',
       cached: true,
+    });
+  }
+
+  /**
+   * AI:从同一缓存版本一次性读取当前线程的历史与状态。
+   *
+   * @param {string} token 设备 token。
+   * @param {string} threadId 线程 ID。
+   * @param {number|string} limit 最大回合数量。
+   * @param {string} since 状态窗口起点。
+   * @returns {object} 原子线程视图。
+   */
+  threadView(token, threadId, limit = 5, since = '') {
+    const history = this.history(token, threadId, limit, '');
+    const status = this.status(token, threadId, since);
+    return Object.assign({}, history, status, {
+      messages: history.messages,
+      hasMore: history.hasMore,
+      nextBefore: history.nextBefore,
+      invalidCursor: history.invalidCursor,
+      cached: true,
+      updatedAt: this.bucket(token).updatedAt,
     });
   }
 }

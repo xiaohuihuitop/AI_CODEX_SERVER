@@ -166,6 +166,7 @@ else if ((await probeCdp(debugPort)).ok) await closeCodexThroughCdp(debugPort);
 
 ```js
 cache.applySync(token, { openThreadIds, sessions, confirmedControlTurnIds });
+cache.threadView(token, threadId, limit, since);
 inspectControlSyncEvidence(sessions, threadId, turnId);
 advanceControlSyncState(state, evidence, now);
 ```
@@ -180,6 +181,11 @@ advanceControlSyncState(state, evidence, now);
 - 控制结果记录至少包含状态、命令 ID、线程 ID、回合 ID 和错误码；不得包含消息正文。当前实现保留 30 分钟、每台设备最多 500 条，Relay 进程重启后不承诺保留。
 - 手机首次读取最近 5 轮，向上分页继续读取 5 轮，使用稳定 `turn:<turnId>` 游标。
 - Relay 与客户端不得用无关线程的版本增长或固定等待时长推断完成。
+- Agent 心跳与数据同步是两个协议：`session-heartbeat` 只刷新在线新鲜度；`session-sync` 只在 `catalogChanged`、`sessions`、`changedThreadIds` 或 `confirmedControlTurnIds` 至少一项非空时发送。
+- Relay 仅在目录、线程快照或新控制确认真实变化时递增 `syncVersion` 并广播 `session-updated`。重复快照和心跳不得升版本，也不得触发历史刷新。
+- `GET /codex/thread-view?thread=<id>&limit=5&since=<timestamp>` 必须从同一个 Relay 缓存版本返回 `messages`、`status`、`active`、`turns`、`hasMore`、`nextBefore`、`updatedAt` 和 Relay 同步字段；普通当前历史和状态读取不得同步等待 Agent。
+- `session-updated` 必须携带 `catalogChanged` 和 `changedThreadIds`。目录未变化时客户端不得重拉线程列表；当前线程不在变化集合时不得重拉正文。
+- 最近历史与状态必须从有界尾部投影读取。更早分页可以携带明确的 `before` 游标请求 Agent，但不得把该路径用作当前视图的自动 fallback。
 
 ### 4. 校验与错误矩阵
 
@@ -194,6 +200,10 @@ advanceControlSyncState(state, evidence, now);
 | 同一 `clientUserMessageId` 重复发送相同内容 | 返回既有受理或终态，不再次转发 |
 | 同一 `clientUserMessageId` 对应不同内容 | `CLIENT_USER_MESSAGE_ID_CONFLICT` |
 | 实时确认丢失但结果记录存在 | 客户端查询并应用结果，不重发消息 |
+| `session-heartbeat` 到达且缓存已初始化 | 只刷新同步新鲜度；版本和正文保持不变 |
+| 重复 `session-sync` 没有语义变化 | 返回确认但 `changed=false`，不广播 `session-updated` |
+| 当前线程快照尚未同步 | 原子视图明确返回不可用/未就绪状态，不直穿 Agent |
+| `session-updated.changedThreadIds` 不含当前线程 | 只合并轻量目录状态，不请求当前正文 |
 
 ### 5. 正常 / 基准 / 异常案例
 
@@ -202,13 +212,15 @@ advanceControlSyncState(state, evidence, now);
 - 基准：首轮最近 5 轮快照在专用 Worker 解析；建立偏移后仅上传新增 JSONL 行，不得为每次文件
   追加重新解析最近历史。
 - 异常：归档线程的迟到增量到达 Relay；缓存不得重建该线程。
+- 基准：空闲 60 秒内允许心跳，不允许产生 `session-updated`、历史请求或状态请求。
+- 基准：同线程实时事件突发时，客户端最多一个当前视图请求在途；在途期间的事件合并为一次后续刷新。
+- 异常：Relay 已有当前线程快照但 Agent 查询阻塞；原子线程视图仍必须只读缓存并立即返回。
 
 ### 6. 必需测试
 
-- `server/test/cloud-relay.test.js`：权威清理、迟到增量、Key 隔离、在线穿透和实时终态。
-- `server/test/cloud-relay.test.js`：还必须覆盖控制结果查询、重复命令不重发和命令 ID 内容冲突。
-- `server/test/desktop-agent.test.js`：轻量目录、目标优先同步及两阶段确认。
-- `server/test/mobile-app.test.js`：五轮分页、消息去重、自动刷新和终态覆盖。
+- `server/test/cloud-relay.test.js`：权威清理、迟到增量、Key 隔离、控制结果、重复命令、实时终态、重复同步不升版本，以及原子线程视图不请求 Agent。
+- `server/test/desktop-agent.test.js`：轻量目录、目标优先同步、两阶段确认、空闲不发送 `session-sync`、独立心跳和同步 dirty latch。
+- `server/test/mobile-app.test.js`：五轮分页、消息去重、自动终态、single-flight、变化范围合并，以及 30 秒健康核对不读取历史。
 - `server/test/codex-desktop-compatibility.test.js`：单一结构契约、唯一主页面、端口匹配，以及真实 `initialRoute=%2Favatar-overlay` 辅助页面与主页面并存时的目标选择。
 - `server/test/codex-desktop-compatibility-report.test.js`：任意版本通过结构检测后放行、版本诊断字段、CDP 失败阶段和错误码保留。
 - `server/test/desktop-manager.test.js`：兼容性检测 IPC、检测按钮、结果展示和复制入口完整。
@@ -221,6 +233,22 @@ advanceControlSyncState(state, evidence, now);
 
 新回合开始后立即取消目标线程优先同步，或定时强制将“运行中”改成“完成”。
 
+```js
+// 错误：心跳被当成正文变化，所有手机反复重读目录、历史和状态。
+broadcast({ type: 'session-updated' });
+```
+
 #### 正确
 
 持续优先读取同一线程，直到观察到同一回合的真实终态；超时只报告异常，不伪造业务状态。
+
+```js
+// 正确：只广播已经原子应用到缓存的真实变化范围。
+if (result.changed) {
+  broadcast({
+    type: 'session-updated',
+    catalogChanged: result.catalogChanged,
+    changedThreadIds: result.changedThreadIds,
+  });
+}
+```

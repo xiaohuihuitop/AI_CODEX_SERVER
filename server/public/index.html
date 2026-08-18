@@ -321,9 +321,10 @@
     let realtimeSocket = null;
     let realtimeReconnectTimer = null;
     let realtimeRefreshTimer = null;
+    let realtimeRefreshInFlight = false;
     let pendingRealtimeRefreshOptions = null;
     let automaticRefreshTimer = null;
-    const AUTO_REFRESH_INTERVAL_MS = 4000;
+    const AUTO_REFRESH_INTERVAL_MS = 30000;
     let threadListRequest = null;
     let currentThreadStatus = null;
     let pendingWatch = null;
@@ -341,8 +342,6 @@
     let renderedHistorySignature = '';
     let renderedHistoryRows = [];
     let clientMessageSequence = 0;
-    const REALTIME_REFRESH_RETRY_LIMIT = 6;
-    const REALTIME_REFRESH_RETRY_DELAY_MS = 500;
 
     /**
      * AI:为一次用户提交生成跨层复用的幂等标识。
@@ -1110,22 +1109,19 @@
         return;
       }
       const scroll = options.preserveScroll === false ? null : captureScroll();
-      const res = await api(`/codex/history?thread=${encodeURIComponent(requestedThreadId)}&limit=120&token=${encodeURIComponent(token)}`);
+      const params = new URLSearchParams({ token, thread: requestedThreadId, limit: '120' });
+      const res = await api(`/codex/thread-view?${params}`);
       const data = await res.json();
       if (!res.ok || !data.ok) throw new Error(data.message || '读取历史失败');
       if (requestedThreadId !== selectedThreadId || data.threadId !== requestedThreadId) return;
       const rows = mergePendingLocalMessages(requestedThreadId, data.messages || []);
       renderHistoryRows(rows);
       if (data.available) {
-        const snapshot = statusData?.threadId === requestedThreadId
-          ? statusData
-          : await fetchStatus({ threadId: requestedThreadId });
-        if (requestedThreadId !== selectedThreadId || snapshot?.threadId !== requestedThreadId) return;
-        reconcileRealtimeThreadState(snapshot);
-        currentThreadStatus = snapshot;
-        bindPendingAssistantTurn(snapshot);
-        updateThreadStatus(snapshot);
-        renderProcessPanel(snapshot, { preserveScroll: false });
+        reconcileRealtimeThreadState(data);
+        currentThreadStatus = data;
+        bindPendingAssistantTurn(data);
+        updateThreadStatus(data);
+        renderProcessPanel(data, { preserveScroll: false });
       }
       if (options.scrollToBottom) scrollToBottom();
       else restoreScroll(scroll);
@@ -1225,12 +1221,15 @@
      * @returns {object} 合并后的刷新参数。
      */
     function mergeRealtimeRefreshOptions(current, incoming = {}) {
-      const previous = current ? Object.assign({ attempt: 0 }, current) : null;
-      const next = Object.assign({ attempt: 0 }, incoming);
-      if (!previous) return next;
-      if (next.terminal && next.turnId) return next;
-      if (previous.terminal && previous.turnId) return previous;
-      return next;
+      const previous = current || {};
+      const changedThreadIds = new Set([].concat(previous.changedThreadIds || [], incoming.changedThreadIds || []));
+      if (previous.threadId) changedThreadIds.add(previous.threadId);
+      if (incoming.threadId) changedThreadIds.add(incoming.threadId);
+      return {
+        catalogChanged: Boolean(previous.catalogChanged || incoming.catalogChanged),
+        forceCurrent: Boolean(previous.forceCurrent || incoming.forceCurrent),
+        changedThreadIds: Array.from(changedThreadIds).filter(Boolean),
+      };
     }
 
     /**
@@ -1241,29 +1240,24 @@
      */
     function scheduleRealtimeRefresh(options = {}) {
       pendingRealtimeRefreshOptions = mergeRealtimeRefreshOptions(pendingRealtimeRefreshOptions, options);
-      if (realtimeRefreshTimer) return;
-      const refreshOptions = pendingRealtimeRefreshOptions;
-      pendingRealtimeRefreshOptions = null;
+      if (realtimeRefreshTimer || realtimeRefreshInFlight) return;
       realtimeRefreshTimer = setTimeout(async () => {
         realtimeRefreshTimer = null;
+        const refreshOptions = pendingRealtimeRefreshOptions || {};
+        pendingRealtimeRefreshOptions = null;
+        realtimeRefreshInFlight = true;
         try {
-          await loadThreads();
-          if (selectedThreadId) await loadHistory(null, { preserveScroll: true });
+          if (refreshOptions.catalogChanged) await loadThreads();
+          const currentChanged = refreshOptions.forceCurrent
+            || (refreshOptions.changedThreadIds || []).includes(selectedThreadId);
+          if (selectedThreadId && currentChanged) await loadHistory(null, { preserveScroll: true });
         } catch (error) {
           notice(error.message);
         } finally {
-          if (refreshOptions.terminal && refreshOptions.turnId
-            && selectedThreadId === refreshOptions.threadId
-            && !historyHasAssistantTurn(refreshOptions.turnId)
-            && refreshOptions.attempt < REALTIME_REFRESH_RETRY_LIMIT) {
-            pendingRealtimeRefreshOptions = mergeRealtimeRefreshOptions(
-              pendingRealtimeRefreshOptions,
-              Object.assign({}, refreshOptions, { attempt: refreshOptions.attempt + 1 }),
-            );
-          }
+          realtimeRefreshInFlight = false;
           if (pendingRealtimeRefreshOptions) scheduleRealtimeRefresh();
         }
-      }, refreshOptions.attempt ? REALTIME_REFRESH_RETRY_DELAY_MS : 180);
+      }, 180);
     }
 
     /**
@@ -1273,8 +1267,14 @@
      */
     async function refreshCurrentThreadAutomatically() {
       try {
-        await loadThreads();
-        if (selectedThreadId) await loadHistory(null, { preserveScroll: true });
+        const previousVersion = syncState.version;
+        const res = await api(`/codex/health?token=${encodeURIComponent(token)}`);
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.message || '读取连接状态失败');
+        if (!applyRelayState({ ...data, agentOnline: Boolean(data.online) })) return;
+        if (Number(data.syncVersion) > previousVersion) {
+          scheduleRealtimeRefresh({ catalogChanged: true, forceCurrent: true });
+        }
       } catch (error) {
         notice(error.message);
       } finally {
@@ -1325,17 +1325,6 @@
         && !realtimeStateConfirmed
         && !terminalSnapshotIsNewer) return;
       realtimeThreadStates.delete(threadId);
-    }
-
-    /**
-     * AI:检查当前历史是否已包含目标回合的最终回复。
-     *
-     * @param {string} turnId App Server 回合标识。
-     * @returns {boolean} 已包含非空最终回复时返回 true。
-     */
-    function historyHasAssistantTurn(turnId) {
-      const id = String(turnId || '').trim();
-      return Boolean(id && renderedHistoryRows.some(row => row && row.role === 'assistant' && row.turnId === id && row.text));
     }
 
     /**
@@ -1408,19 +1397,20 @@
             const payload = data.event || {};
             scheduleRealtimeRefresh({
               threadId: String(payload.threadId || '').trim(),
-              turnId: String(payload.turnId || '').trim(),
-              terminal: (payload.type === 'turn.completed' || payload.type === 'thread.status.changed')
-                && String(payload.threadId || '').trim() === selectedThreadId,
+              changedThreadIds: [String(payload.threadId || '').trim()],
             });
             return;
           }
           if (data.type === 'event-resync-required') {
             realtimeThreadStates.clear();
             updateThreadStatus(currentThreadStatus);
-            scheduleRealtimeRefresh();
+            scheduleRealtimeRefresh({ catalogChanged: true, forceCurrent: true });
             return;
           }
-          if (data.type === 'session-updated') scheduleRealtimeRefresh();
+          if (data.type === 'session-updated') scheduleRealtimeRefresh({
+            catalogChanged: Boolean(data.catalogChanged),
+            changedThreadIds: data.changedThreadIds || [],
+          });
         } catch {
           notice('服务器实时事件格式不正确');
         }

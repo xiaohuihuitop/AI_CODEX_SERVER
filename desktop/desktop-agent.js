@@ -267,7 +267,7 @@ async function syncProvider() {
       if (reconciled.membershipChanged || reconciled.orderChanged || reconciled.discovered) {
         knownThreadTargets = reconciled.targets;
       }
-      if (reconciled.membershipChanged || reconciled.discovered) {
+      if (reconciled.membershipChanged || reconciled.orderChanged) {
         syncBatchCursor = 0;
         pendingCatalogMetadata = true;
       }
@@ -280,8 +280,9 @@ async function syncProvider() {
   }
   hasPendingControlTarget = Boolean(pendingControlSync && knownThreadTargets.some(target => target.threadId === pendingControlSync.threadId));
   if (hasPendingControlTarget) console.log(`手机控制状态同步：${describeControlThread(pendingControlSync.threadId)}`);
-  const catalogMetadata = pendingCatalogMetadata && !hasPendingControlTarget ? createCatalogMetadata(knownThreadTargets) : [];
-  const batch = catalogMetadata.length ? [] : nextSyncBatch(knownThreadTargets);
+  const catalogChanged = pendingCatalogMetadata && !hasPendingControlTarget;
+  const catalogMetadata = catalogChanged ? createCatalogMetadata(knownThreadTargets) : [];
+  const batch = catalogChanged ? [] : nextSyncBatch(knownThreadTargets);
   const synchronizedControl = pendingControlSync;
   const snapshot = await queryReader.readKnownThreadSync(batch, syncOffsets, {
     initialLineLimit: Number(process.env.CODEX_AGENT_INITIAL_SYNC_LINES || 1000),
@@ -304,8 +305,8 @@ async function syncProvider() {
       console.error(`手机控制同步未确认：${describeControlThread(synchronizedControl.threadId)}，等待 Desktop 写入超时`);
     }
   }
-  if (catalogMetadata.length) pendingCatalogMetadata = false;
-  const sessions = catalogMetadata.length ? catalogMetadata : snapshot.sessions;
+  if (catalogChanged) pendingCatalogMetadata = false;
+  const sessions = catalogChanged ? catalogMetadata : snapshot.sessions;
   if (sessions.length) {
     const snapshotSessions = sessions.filter(session => session.snapshot);
     const metadataCount = sessions.filter(session => session.metadataOnly).length;
@@ -313,7 +314,7 @@ async function syncProvider() {
       const status = session.snapshot.status || {};
       console.log(`对话同步准备：${session.threadName || session.threadId}，${session.snapshot.messages.length} 条消息，状态 ${status.status || 'unknown'}`);
     }
-    if (catalogMetadata.length) console.log(`列表元数据已准备：${catalogMetadata.length} 个 Desktop 对话`);
+    if (catalogChanged) console.log(`列表元数据已准备：${catalogMetadata.length} 个 Desktop 对话`);
     else if (metadataCount) console.log(`对话同步排队：${metadataCount} 个对话等待下一个同步批次`);
   }
   return {
@@ -321,6 +322,8 @@ async function syncProvider() {
     syncedAt: new Date().toISOString(),
     openThreadIds: knownThreadTargets.map(target => target.threadId),
     sessions,
+    catalogChanged,
+    changedThreadIds: sessions.map(session => session.threadId).filter(Boolean),
     confirmedControlTurnIds,
   };
 }
@@ -341,6 +344,7 @@ function createAgentConnection() {
       appServerMessage: controlledStatusMessage,
     }),
     syncIntervalMs: Number(process.env.CODEX_AGENT_SYNC_INTERVAL_MS || 1000),
+    sessionHeartbeatMs: Number(process.env.CODEX_AGENT_SESSION_HEARTBEAT_MS || 5000),
     syncTimeoutMs: Number(process.env.CODEX_AGENT_SYNC_TIMEOUT_MS || 45000),
   });
   return client;

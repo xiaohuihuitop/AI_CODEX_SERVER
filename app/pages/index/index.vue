@@ -142,7 +142,7 @@
 <script setup>
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { onBackPress, onHide, onShow, onUnload } from '@dcloudio/uni-app';
-import { createRealtimeSocket, getControlResult, getHealth, getHistory, getStatus, getThreads, sendMessage, stopCodex } from '../../utils/api';
+import { createRealtimeSocket, getControlResult, getHealth, getHistory, getStatus, getThreadView, getThreads, sendMessage, stopCodex } from '../../utils/api';
 import {
   DEFAULT_CONFIG,
   getActiveDevice,
@@ -189,14 +189,13 @@ const switchingDevice = ref(false);
 const threadPopupOpen = ref(false);
 const devicePopupOpen = ref(false);
 const scrollTarget = ref('');
-const AUTO_REFRESH_INTERVAL_MS = 4000;
-const REALTIME_REFRESH_RETRY_LIMIT = 6;
-const REALTIME_REFRESH_RETRY_DELAY_MS = 500;
+const AUTO_REFRESH_INTERVAL_MS = 30000;
 let threadListRequest = null;
 let switchRequestSeq = 0;
 let realtimeSocket = null;
 let realtimeReconnectTimer = null;
 let realtimeRefreshTimer = null;
+let realtimeRefreshInFlight = false;
 let pendingRealtimeRefreshOptions = null;
 let automaticRefreshTimer = null;
 let commandConfirmTimer = null;
@@ -1375,16 +1374,14 @@ async function loadHistory(statusData = null, options = {}) {
     setNotice('没有可用 Codex 对话');
     return;
   }
-  const data = await getHistory(config.value, requestedThreadId, { limit: 5, registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+  const data = await getThreadView(config.value, requestedThreadId, { limit: 5, registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
   if (!canUpdateTask(token) || selectedThreadId.value !== requestedThreadId) return;
   if (!applyRelayState(data)) return;
   messages.value = mergePendingLocalMessages(requestedThreadId, mergeLoadedHistory(messages.value, data.messages || []));
   historyNextBefore.value = data.nextBefore || '';
   hasOlderHistory.value = Boolean(data.hasMore && historyNextBefore.value);
   if (data.available) {
-    const snapshot = statusData || await getStatus(config.value, { threadId: requestedThreadId }, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
-    if (!canUpdateTask(token) || selectedThreadId.value !== requestedThreadId) return;
-    if (!applyThreadStatus(snapshot)) return;
+    if (!applyThreadStatus(data)) return;
   }
   if (!options.silent) setNotice(data.available ? '已同步电脑端 Codex 对话' : '这个对话暂时没有可加载的本机记录');
   if (options.scrollToBottom) await scrollToBottom();
@@ -1648,30 +1645,24 @@ async function stop() {
 }
 
 /**
- * AI:检查当前历史是否已包含目标回合的最终回复。
- *
- * @param {string} turnId App Server 回合标识。
- * @returns {boolean} 已包含非空最终回复时返回 true。
- */
-function historyHasAssistantTurn(turnId) {
-  const id = String(turnId || '').trim();
-  return Boolean(id && messages.value.some(row => row && row.role === 'assistant' && row.turnId === id && row.text));
-}
-
-/**
- * AI:合并刷新意图，优先保留带回合标识的终态，避免连续事件吞掉最终历史刷新。
+ * AI:合并目录和线程刷新范围，连续事件只触发一次实际读取。
  *
  * @param {object|null} current 已排队的刷新参数。
  * @param {object} incoming 新到达的刷新参数。
  * @returns {object} 合并后的刷新参数。
  */
 function mergeRealtimeRefreshOptions(current, incoming = {}) {
-  const previous = current ? Object.assign({ attempt: 0 }, current) : null;
-  const next = Object.assign({ attempt: 0 }, incoming);
-  if (!previous) return next;
-  if (next.terminal && next.turnId) return next;
-  if (previous.terminal && previous.turnId) return previous;
-  return next;
+  const previous = current || {};
+  const changedThreadIds = [];
+  const candidates = [].concat(previous.changedThreadIds || [], incoming.changedThreadIds || [], previous.threadId || [], incoming.threadId || []);
+  for (const threadId of candidates) {
+    if (threadId && changedThreadIds.indexOf(threadId) === -1) changedThreadIds.push(threadId);
+  }
+  return {
+    catalogChanged: Boolean(previous.catalogChanged || incoming.catalogChanged),
+    forceCurrent: Boolean(previous.forceCurrent || incoming.forceCurrent),
+    changedThreadIds,
+  };
 }
 
 /**
@@ -1683,33 +1674,31 @@ function mergeRealtimeRefreshOptions(current, incoming = {}) {
 function scheduleRealtimeRefresh(options = {}) {
   if (!canUpdatePage()) return;
   pendingRealtimeRefreshOptions = mergeRealtimeRefreshOptions(pendingRealtimeRefreshOptions, options);
-  if (realtimeRefreshTimer) return;
-  const refreshOptions = pendingRealtimeRefreshOptions;
-  pendingRealtimeRefreshOptions = null;
+  if (realtimeRefreshTimer || realtimeRefreshInFlight) return;
   realtimeRefreshTimer = setTimeout(async () => {
     realtimeRefreshTimer = null;
+    const refreshOptions = pendingRealtimeRefreshOptions || {};
+    pendingRealtimeRefreshOptions = null;
     if (switchingThread.value || loading.value) {
+      pendingRealtimeRefreshOptions = mergeRealtimeRefreshOptions(pendingRealtimeRefreshOptions, refreshOptions);
       scheduleRealtimeRefresh(refreshOptions);
       return;
     }
+    realtimeRefreshInFlight = true;
     try {
-      await loadThreads();
-      if (selectedThreadId.value) await loadHistory(null, { scrollToBottom: followBottom.value, silent: true });
+      if (refreshOptions.catalogChanged) await loadThreads();
+      const currentChanged = refreshOptions.forceCurrent
+        || (refreshOptions.changedThreadIds || []).indexOf(selectedThreadId.value) !== -1;
+      if (selectedThreadId.value && currentChanged) {
+        await loadHistory(null, { scrollToBottom: followBottom.value, silent: true });
+      }
     } catch (error) {
       setNotice(error.message);
     } finally {
-      if (refreshOptions.terminal && refreshOptions.turnId
-        && selectedThreadId.value === refreshOptions.threadId
-        && !historyHasAssistantTurn(refreshOptions.turnId)
-        && refreshOptions.attempt < REALTIME_REFRESH_RETRY_LIMIT) {
-        pendingRealtimeRefreshOptions = mergeRealtimeRefreshOptions(
-          pendingRealtimeRefreshOptions,
-          Object.assign({}, refreshOptions, { attempt: refreshOptions.attempt + 1 }),
-        );
-      }
+      realtimeRefreshInFlight = false;
       if (pendingRealtimeRefreshOptions) scheduleRealtimeRefresh();
     }
-  }, refreshOptions.attempt ? REALTIME_REFRESH_RETRY_DELAY_MS : 180);
+  }, 180);
 }
 
 /**
@@ -1721,8 +1710,12 @@ async function refreshCurrentThreadAutomatically() {
   if (!canUpdatePage()) return;
   try {
     if (!switchingThread.value && !loading.value && !sending.value) {
-      await loadThreads();
-      if (selectedThreadId.value) await loadHistory(null, { scrollToBottom: followBottom.value, silent: true });
+      const previousVersion = syncState.value.version;
+      const data = await getHealth(config.value, { registerTask: registerRequestTask, unregisterTask: unregisterRequestTask });
+      if (!applyRelayState(Object.assign({}, data, { agentOnline: Boolean(data.online) }))) return;
+      if (Number(data.syncVersion) > previousVersion) {
+        scheduleRealtimeRefresh({ catalogChanged: true, forceCurrent: true });
+      }
     }
   } catch (error) {
     setNotice(error.message);
@@ -1841,18 +1834,19 @@ function handleRealtimeEvent(event) {
     const payload = event.event || {};
     scheduleRealtimeRefresh({
       threadId: String(payload.threadId || '').trim(),
-      turnId: String(payload.turnId || '').trim(),
-      terminal: (payload.type === 'turn.completed' || payload.type === 'thread.status.changed')
-        && String(payload.threadId || '').trim() === selectedThreadId.value,
+      changedThreadIds: [String(payload.threadId || '').trim()],
     });
     return;
   }
   if (event.type === 'event-resync-required') {
     realtimeThreadStates.value = {};
-    scheduleRealtimeRefresh();
+    scheduleRealtimeRefresh({ catalogChanged: true, forceCurrent: true });
     return;
   }
-  if (event.type === 'session-updated') scheduleRealtimeRefresh();
+  if (event.type === 'session-updated') scheduleRealtimeRefresh({
+    catalogChanged: Boolean(event.catalogChanged),
+    changedThreadIds: event.changedThreadIds || [],
+  });
 }
 
 /**

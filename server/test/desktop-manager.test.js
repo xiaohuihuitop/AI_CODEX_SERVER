@@ -126,10 +126,13 @@ test('桌面管理器统一使用固定目录、固定名称并展示版本', ()
   const renderer = fs.readFileSync(path.join(__dirname, '../../desktop/electron/renderer.js'), 'utf8');
   const html = fs.readFileSync(path.join(__dirname, '../../desktop/electron/renderer.html'), 'utf8');
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../../desktop/package.json'), 'utf8'));
+  const lock = JSON.parse(fs.readFileSync(path.join(__dirname, '../../desktop/package-lock.json'), 'utf8'));
 
   assert.equal(pkg.build.directories.output, 'dist');
   assert.equal(pkg.productName, 'Codex Desktop 管理器');
-  assert.equal(pkg.version, '0.3.18');
+  assert.match(pkg.version, /^\d+\.\d+\.\d+$/);
+  assert.equal(lock.version, pkg.version);
+  assert.equal(lock.packages[''].version, pkg.version);
   assert.match(main, /const MANAGER_VERSION = app\.getVersion\(\)/);
   assert.match(main, /Codex Desktop 管理器 v\$\{MANAGER_VERSION\} 已启动/);
   assert.match(html, /id="managerVersion"/);

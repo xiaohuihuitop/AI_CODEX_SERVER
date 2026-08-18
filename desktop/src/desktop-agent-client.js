@@ -42,6 +42,22 @@ function isRecoverableSocketError(error) {
   return code === 'ECONNRESET' || message === 'socket hang up';
 }
 
+/**
+ * AI:判断同步负载是否包含需要写入 Relay 的实际变化。
+ *
+ * @param {object|null} payload Agent 同步负载。
+ * @returns {boolean} 存在目录、会话或控制证据变化时返回 true。
+ */
+function hasSessionSyncChanges(payload) {
+  if (!payload || typeof payload !== 'object') return false;
+  return Boolean(
+    payload.catalogChanged
+    || (Array.isArray(payload.sessions) && payload.sessions.length)
+    || (Array.isArray(payload.changedThreadIds) && payload.changedThreadIds.length)
+    || (Array.isArray(payload.confirmedControlTurnIds) && payload.confirmedControlTurnIds.length)
+  );
+}
+
 async function handleAgentRequest(api, message) {
   if (!message || typeof message.id !== 'string' || typeof message.action !== 'string') {
     return {
@@ -77,12 +93,15 @@ function createDesktopAgentClient(options) {
   const client = new EventEmitter();
   const syncProvider = typeof options.syncProvider === 'function' ? options.syncProvider : null;
   const eventStateProvider = typeof options.eventStateProvider === 'function' ? options.eventStateProvider : null;
-  const syncIntervalMs = Number.isFinite(Number(options.syncIntervalMs)) ? Math.max(1000, Number(options.syncIntervalMs)) : 1000;
+  const syncIntervalMs = Number.isFinite(Number(options.syncIntervalMs)) ? Math.max(10, Number(options.syncIntervalMs)) : 1000;
+  const sessionHeartbeatMs = Number.isFinite(Number(options.sessionHeartbeatMs)) ? Math.max(10, Number(options.sessionHeartbeatMs)) : 5000;
   const syncTimeoutMs = Number.isFinite(Number(options.syncTimeoutMs)) ? Math.max(1000, Number(options.syncTimeoutMs)) : 15000;
   let socket = null;
   let reconnectTimer = null;
   let syncTimer = null;
+  let heartbeatTimer = null;
   let syncing = false;
+  let syncRequested = false;
   let stopped = false;
   let connectedOnce = false;
 
@@ -111,11 +130,15 @@ function createDesktopAgentClient(options) {
   }
 
   async function syncSessions() {
-    if (!syncProvider || syncing || stopped || !socket || socket.readyState !== socket.OPEN) return;
+    if (!syncProvider || stopped || !socket || socket.readyState !== socket.OPEN) return;
+    if (syncing) {
+      syncRequested = true;
+      return;
+    }
     syncing = true;
     try {
       const payload = await withTimeout(syncProvider(), syncTimeoutMs, 'Agent 会话同步超时。');
-      if (payload && socket && socket.readyState === socket.OPEN) {
+      if (hasSessionSyncChanges(payload) && socket && socket.readyState === socket.OPEN) {
         socket.send(JSON.stringify({ type: 'session-sync', payload }));
         if (Array.isArray(payload.sessions) && payload.sessions.length) client.emit('sync-sent', payload);
       }
@@ -123,18 +146,31 @@ function createDesktopAgentClient(options) {
       if (client.listenerCount('sync-error') > 0) client.emit('sync-error', error);
     } finally {
       syncing = false;
+      if (syncRequested) {
+        syncRequested = false;
+        setImmediate(() => void syncSessions());
+      }
     }
+  }
+
+  function sendSessionHeartbeat() {
+    sendSocketMessage({ type: 'session-heartbeat', sentAt: new Date().toISOString() });
   }
 
   function startSyncTimer() {
     if (!syncProvider || syncTimer) return;
     syncSessions();
     syncTimer = setInterval(syncSessions, syncIntervalMs);
+    sendSessionHeartbeat();
+    heartbeatTimer = setInterval(sendSessionHeartbeat, sessionHeartbeatMs);
   }
 
   function stopSyncTimer() {
     if (syncTimer) clearInterval(syncTimer);
     syncTimer = null;
+    if (heartbeatTimer) clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+    syncRequested = false;
   }
 
   function scheduleReconnect() {
@@ -219,6 +255,7 @@ module.exports = {
   agentUrlFromServerUrl,
   createDesktopAgentClient,
   handleAgentRequest,
+  hasSessionSyncChanges,
   isRecoverableSocketError,
   withTimeout,
 };

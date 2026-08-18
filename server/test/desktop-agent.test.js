@@ -364,7 +364,7 @@ test('desktop-agent 连接后主动上传会话同步快照', async () => {
     syncIntervalMs: 1000,
     syncProvider: async () => {
       syncCount += 1;
-      return { openThreadIds: ['thread-1'], sessions: [] };
+      return { openThreadIds: ['thread-1'], sessions: [], catalogChanged: true };
     },
   });
 
@@ -372,9 +372,53 @@ test('desktop-agent 连接后主动上传会话同步快照', async () => {
   client.close();
 
   assert.equal(syncCount, 1);
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].type, 'session-sync');
-  assert.deepEqual(messages[0].payload.openThreadIds, ['thread-1']);
+  const syncMessages = messages.filter(message => message.type === 'session-sync');
+  assert.equal(syncMessages.length, 1);
+  assert.deepEqual(syncMessages[0].payload.openThreadIds, ['thread-1']);
+});
+
+test('desktop-agent 空闲同步不发送 session-sync 且心跳独立保活', async () => {
+  const messages = [];
+  class FakeSocket extends EventEmitter {
+    constructor() {
+      super();
+      this.OPEN = 1;
+      this.CLOSED = 3;
+      this.readyState = this.OPEN;
+      setImmediate(() => this.emit('open'));
+    }
+
+    send(message) {
+      messages.push(JSON.parse(message));
+    }
+
+    close() {
+      this.readyState = this.CLOSED;
+      this.emit('close', 1000, Buffer.from(''));
+    }
+  }
+
+  const client = createDesktopAgentClient({
+    serverUrl: 'http://example.test',
+    token: 'token',
+    api: { handle: async () => ({ ok: true }) },
+    WebSocket: FakeSocket,
+    syncIntervalMs: 10,
+    sessionHeartbeatMs: 10,
+    syncProvider: async () => ({
+      openThreadIds: ['thread-1'],
+      sessions: [],
+      changedThreadIds: [],
+      catalogChanged: false,
+      confirmedControlTurnIds: [],
+    }),
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 45));
+  client.close();
+
+  assert.equal(messages.some(message => message.type === 'session-sync'), false);
+  assert.equal(messages.filter(message => message.type === 'session-heartbeat').length >= 2, true);
 });
 
 test('desktop-agent 连接后上报事件流状态并实时发送 App Server 事件', async () => {
@@ -505,7 +549,7 @@ test('desktop-agent 同步快照为空时不上传会话同步消息', async () 
   await new Promise(resolve => setTimeout(resolve, 20));
   client.close();
 
-  assert.equal(messages.length, 0);
+  assert.equal(messages.some(message => message.type === 'session-sync'), false);
 });
 
 test('desktop-agent 收到服务器同步确认后发出确认事件', async () => {
@@ -635,7 +679,7 @@ test('desktop-agent 同步任务超时后会释放后续同步', async () => {
     syncProvider: async () => {
       syncCount += 1;
       if (syncCount === 1) return new Promise(() => {});
-      return { openThreadIds: ['thread-1'], sessions: [] };
+      return { openThreadIds: ['thread-1'], sessions: [], catalogChanged: true };
     },
   });
   client.on('sync-error', error => errors.push(error));
@@ -645,8 +689,7 @@ test('desktop-agent 同步任务超时后会释放后续同步', async () => {
 
   assert.equal(errors.length >= 1, true);
   assert.equal(errors[0].code, 'SYNC_TIMEOUT');
-  assert.equal(messages.length >= 1, true);
-  assert.equal(messages[0].type, 'session-sync');
+  assert.equal(messages.some(message => message.type === 'session-sync'), true);
 });
 
 test('withTimeout 超时后返回明确错误码', async () => {

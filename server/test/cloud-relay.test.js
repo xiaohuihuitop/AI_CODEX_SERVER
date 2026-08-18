@@ -153,6 +153,98 @@ test('云端 relay 向同 token 手机推送 Agent 状态和会话更新事件',
   await closeRelayServer(server);
 });
 
+test('云端 relay 对重复空闲同步只确认不升版本也不广播会话变化', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['idle-sync-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+    syncStaleMs: 1000,
+  });
+  const port = await listen(server);
+  const events = [];
+  const mobile = new WebSocket(`ws://127.0.0.1:${port}/mobile?token=idle-sync-token`);
+  mobile.on('message', data => events.push(JSON.parse(data.toString())));
+  await new Promise(resolve => mobile.once('open', resolve));
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=idle-sync-token`);
+  await new Promise(resolve => agent.once('open', resolve));
+
+  try {
+    const payload = {
+      openThreadIds: ['thread-1'],
+      catalogChanged: true,
+      changedThreadIds: ['thread-1'],
+      sessions: [{ threadId: 'thread-1', threadName: '空闲线程', metadataOnly: true }],
+    };
+    agent.send(JSON.stringify({ type: 'session-sync', payload }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    agent.send(JSON.stringify({
+      type: 'session-sync',
+      payload: Object.assign({}, payload, { catalogChanged: false, changedThreadIds: [] }),
+    }));
+    agent.send(JSON.stringify({ type: 'session-heartbeat' }));
+    await new Promise(resolve => setTimeout(resolve, 30));
+
+    const updates = events.filter(event => event.type === 'session-updated');
+    const health = await readJson(await fetch(`http://127.0.0.1:${port}/codex/health?token=idle-sync-token`));
+    assert.equal(updates.length, 1);
+    assert.equal(updates[0].catalogChanged, true);
+    assert.deepEqual(updates[0].changedThreadIds, ['thread-1']);
+    assert.equal(health.syncVersion, 1);
+    assert.equal(health.syncFresh, true);
+  } finally {
+    mobile.close();
+    agent.close();
+    await closeRelayServer(server);
+  }
+});
+
+test('云端 relay 原子线程视图只读取已同步缓存', async () => {
+  const server = createCloudRelayServer({
+    tokens: ['thread-view-token'],
+    publicDir,
+    requestTimeoutMs: 1500,
+  });
+  const port = await listen(server);
+  const agent = new WebSocket(`ws://127.0.0.1:${port}/agent?token=thread-view-token`);
+  await new Promise(resolve => agent.once('open', resolve));
+
+  try {
+    agent.send(JSON.stringify({
+      type: 'session-sync',
+      payload: {
+        openThreadIds: ['thread-1'],
+        catalogChanged: true,
+        changedThreadIds: ['thread-1'],
+        sessions: [{
+          threadId: 'thread-1',
+          threadName: '原子视图线程',
+          projectName: 'demo',
+          snapshot: {
+            messages: [{ role: 'assistant', text: '已缓存回复', turnId: 'turn-1', timestamp: '2026-08-18T00:00:01.000Z' }],
+            status: { active: false, status: 'complete', final: '已缓存回复', steps: [], turns: [{ turnId: 'turn-1', status: 'complete' }] },
+          },
+        }],
+      },
+    }));
+    await new Promise(resolve => setTimeout(resolve, 20));
+
+    const started = Date.now();
+    const response = await fetch(`http://127.0.0.1:${port}/codex/thread-view?token=thread-view-token&thread=thread-1&limit=5`);
+    const body = await readJson(response);
+
+    assert.equal(response.status, 200);
+    assert.equal(Date.now() - started < 200, true);
+    assert.equal(body.cached, true);
+    assert.equal(body.threadId, 'thread-1');
+    assert.equal(body.messages[0].text, '已缓存回复');
+    assert.equal(body.status, 'complete');
+    assert.equal(body.syncVersion, 1);
+  } finally {
+    agent.close();
+    await closeRelayServer(server);
+  }
+});
+
 test('云端 relay 转发 App Server 事件并去重且检测序号空洞', async () => {
   const server = createCloudRelayServer({
     tokens: ['event-token'],
@@ -777,7 +869,7 @@ test('云端 relay 在 Agent 在线时直接读取本机历史页，避免截断
   await closeRelayServer(server);
 });
 
-test('云端 relay 在 Agent 在线时直接读取本机状态，避免快照缓存返回旧完成态', async () => {
+test('云端 relay 在 Agent 在线时仍从同步缓存读取当前状态', async () => {
   const server = createCloudRelayServer({
     tokens: ['status-direct-token'],
     publicDir,
@@ -790,41 +882,34 @@ test('云端 relay 在 Agent 在线时直接读取本机状态，避免快照缓
     type: 'session-sync',
     payload: {
       openThreadIds: ['thread-1'],
-      sessions: [{ threadId: 'thread-1', threadName: '状态线程', metadataOnly: true }],
+      sessions: [{
+        threadId: 'thread-1',
+        threadName: '状态线程',
+        snapshot: {
+          messages: [{ role: 'user', text: '开始处理', turnId: 'turn-2' }],
+          status: {
+            active: true,
+            status: 'running',
+            preview: '正在处理',
+            final: '',
+            steps: [{ kind: 'reasoning', text: '缓存中的处理状态' }],
+            turns: [{ turnId: 'turn-2', status: 'running', steps: [] }],
+          },
+        },
+      }],
     },
   }));
   await new Promise(resolve => setTimeout(resolve, 20));
-  agent.on('message', data => {
-    const message = JSON.parse(data.toString());
-    if (message.action !== 'status') return;
-    assert.deepEqual(message.payload, { threadId: 'thread-1', since: '2026-08-05T00:00:00.000Z' });
-    agent.send(JSON.stringify({
-      id: message.id,
-      ok: true,
-      result: {
-        ok: true,
-        available: true,
-        threadId: 'thread-1',
-        sessionFile: 'thread-1.jsonl',
-        active: true,
-        status: 'running',
-        preview: '正在处理',
-        final: '',
-        steps: [{ kind: 'reasoning', text: '本机正在处理' }],
-        turns: [{ turnId: 'turn-2', status: 'running', steps: [] }],
-      },
-    }));
-  });
 
   const res = await fetch(`http://127.0.0.1:${port}/codex/status?token=status-direct-token&thread=thread-1&since=2026-08-05T00%3A00%3A00.000Z`);
   const body = await readJson(res);
 
   assert.equal(res.status, 200);
-  assert.equal(body.cached, false);
+  assert.equal(body.cached, true);
   assert.equal(body.agentOnline, true);
   assert.equal(body.status, 'running');
   assert.equal(body.active, true);
-  assert.equal(body.steps[0].text, '本机正在处理');
+  assert.equal(body.steps[0].text, '缓存中的处理状态');
 
   agent.close();
   await closeRelayServer(server);
@@ -968,7 +1053,7 @@ test('云端 relay 只用目标回合证据确认手机发送而不接受无关�
     const confirmed = await readJson(await fetch(`http://127.0.0.1:${port}/codex/status?token=control-confirm-token&thread=thread-1`));
 
     assert.equal(sendResult.result.watch.turnId, 'turn-control-1');
-    assert.equal(unrelated.syncVersion > send.acceptedSyncVersion, true);
+    assert.equal(unrelated.syncVersion, send.acceptedSyncVersion);
     assert.equal((unrelated.confirmedControlTurnIds || []).includes('turn-control-1'), false);
     assert.equal((confirmed.confirmedControlTurnIds || []).includes('turn-control-1'), true);
   } finally {

@@ -191,9 +191,9 @@ function applyAppServerEvent(state, token, event = {}) {
   return true;
 }
 
-function markSessionSynced(state, token, staleMs, confirmedControlTurnIds = []) {
+function markSessionSynced(state, token, staleMs, confirmedControlTurnIds = [], advanceVersion = true) {
   const health = syncHealthFor(state, token);
-  health.version += 1;
+  if (advanceVersion) health.version += 1;
   health.lastSyncedAt = new Date().toISOString();
   health.stale = false;
   for (const turnId of Array.from(new Set((confirmedControlTurnIds || []).map(item => String(item || '').trim()).filter(Boolean)))) {
@@ -326,23 +326,45 @@ function attachAgent(state, ws, token, syncStaleMs) {
     }
     if (message.type === 'session-sync') {
       const result = state.cache.applySync(token, message.payload || {});
+      const health = syncHealthFor(state, token);
+      const confirmedControlTurnIds = Array.from(new Set((message.payload && message.payload.confirmedControlTurnIds || [])
+        .map(item => String(item || '').trim())
+        .filter(turnId => turnId && !health.confirmedControlTurns.has(turnId))));
+      const changed = Boolean(result.changed || confirmedControlTurnIds.length);
+      const wasStale = health.stale;
       const syncState = markSessionSynced(
         state,
         token,
         syncStaleMs,
-        message.payload && message.payload.confirmedControlTurnIds,
+        confirmedControlTurnIds,
+        changed,
       );
       ws.send(JSON.stringify({
         type: 'session-sync-ack',
+        changed,
         sessionCount: result.sessionCount,
         appliedSessionCount: result.appliedSessionCount,
         removedSessionCount: result.removedSessionCount,
         updatedAt: result.updatedAt,
       }));
-      broadcastToMobileClients(state, token, Object.assign({
-        type: 'session-updated',
-        updatedAt: result.updatedAt,
-      }, syncState));
+      if (changed) {
+        broadcastToMobileClients(state, token, Object.assign({
+          type: 'session-updated',
+          updatedAt: result.updatedAt,
+          catalogChanged: result.catalogChanged,
+          changedThreadIds: result.changedThreadIds,
+        }, syncState));
+      } else if (wasStale) {
+        broadcastToMobileClients(state, token, Object.assign({ type: 'sync-status' }, syncState));
+      }
+      return;
+    }
+    if (message.type === 'session-heartbeat') {
+      const health = syncHealthFor(state, token);
+      if (!health.lastSyncedAt) return;
+      const wasStale = health.stale;
+      const syncState = markSessionSynced(state, token, syncStaleMs, [], false);
+      if (wasStale) broadcastToMobileClients(state, token, Object.assign({ type: 'sync-status' }, syncState));
       return;
     }
     if (message.type === 'event-stream-state') {
@@ -711,29 +733,31 @@ function createCloudRelayServer(options = {}) {
       if (req.method === 'GET' && req.url.startsWith('/codex/threads')) {
         return sendJson(res, 200, Object.assign(state.cache.threads(deviceId), relayStateForToken(state, deviceId)));
       }
+      if (req.method === 'GET' && req.url.startsWith('/codex/thread-view')) {
+        const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+        const threadId = url.searchParams.get('thread') || '';
+        return sendJson(res, 200, Object.assign(
+          state.cache.threadView(deviceId, threadId, url.searchParams.get('limit') || 5, url.searchParams.get('since') || ''),
+          relayStateForToken(state, deviceId),
+        ));
+      }
       if (req.method === 'GET' && req.url.startsWith('/codex/history')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const threadId = url.searchParams.get('thread') || '';
-        if (state.cache.hasOpenThread(deviceId, threadId) && isAgentOnline(state, deviceId)) {
+        const before = url.searchParams.get('before') || '';
+        if (before && state.cache.hasOpenThread(deviceId, threadId) && isAgentOnline(state, deviceId)) {
           const direct = await forwardToAgent(state, deviceId, 'history', {
             threadId,
             limit: url.searchParams.get('limit') || 120,
-            before: url.searchParams.get('before') || '',
+            before,
           }, requestTimeoutMs);
           return sendJson(res, 200, Object.assign({}, direct, { cached: false }, relayStateForToken(state, deviceId)));
         }
-        return sendJson(res, 200, Object.assign(state.cache.history(deviceId, threadId, url.searchParams.get('limit') || 120, url.searchParams.get('before') || ''), relayStateForToken(state, deviceId)));
+        return sendJson(res, 200, Object.assign(state.cache.history(deviceId, threadId, url.searchParams.get('limit') || 120, before), relayStateForToken(state, deviceId)));
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/status')) {
         const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const threadId = url.searchParams.get('thread') || '';
-        if (state.cache.hasOpenThread(deviceId, threadId) && isAgentOnline(state, deviceId)) {
-          const direct = await forwardToAgent(state, deviceId, 'status', {
-            threadId,
-            since: url.searchParams.get('since') || '',
-          }, requestTimeoutMs);
-          return sendJson(res, 200, Object.assign({}, direct, { cached: false }, relayStateForToken(state, deviceId)));
-        }
         return sendJson(res, 200, Object.assign(state.cache.status(deviceId, threadId, url.searchParams.get('since') || ''), relayStateForToken(state, deviceId)));
       }
       if (req.method === 'GET' && req.url.startsWith('/codex/control-result')) {

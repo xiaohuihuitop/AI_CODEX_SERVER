@@ -407,6 +407,44 @@ function readRecentTurnItems(file, turnLimit) {
 }
 
 /**
+ * AI:从文件尾部读取包含指定回合游标及其更早页面的最小记录范围。
+ *
+ * @param {string} file JSONL 文件路径。
+ * @param {number} turnLimit 需要返回的更早回合数。
+ * @param {string} before 回合游标。
+ * @returns {object[]} 按原始时间顺序排列的 JSONL 记录。
+ */
+function readTurnPageItems(file, turnLimit, before) {
+  const cursor = String(before || '').trim();
+  if (!cursor) return readRecentTurnItems(file, turnLimit);
+  if (!cursor.startsWith('turn:')) return [];
+  const boundaryTurnId = cursor.slice(5);
+  const requiredTurns = Math.max(1, Number(turnLimit) || 1) + 1;
+  let boundaryFound = false;
+  let olderTurnCount = 0;
+  let olderUserMessageCount = 0;
+  const chunks = [];
+  visitJsonlBackwards(file, items => {
+    chunks.unshift(items);
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      const item = items[index];
+      const payload = item.payload || {};
+      if (!boundaryFound) {
+        const turnId = item.type === 'event_msg' && payload.type === 'task_started'
+          ? String(payload.turn_id || payload.turnId || '').trim()
+          : '';
+        if (turnId === boundaryTurnId) boundaryFound = true;
+        continue;
+      }
+      if (item.type === 'event_msg' && payload.type === 'task_started') olderTurnCount += 1;
+      if (item.type === 'event_msg' && payload.type === 'user_message') olderUserMessageCount += 1;
+    }
+    return !boundaryFound || olderTurnCount < requiredTurns || olderUserMessageCount < requiredTurns;
+  });
+  return boundaryFound ? chunks.flat() : [];
+}
+
+/**
  * AI:从会话尾部查找最近事件，到达调用方给出的时间边界后立即停止。
  *
  * @param {string} file JSONL 文件路径。
@@ -500,6 +538,41 @@ class CodexSessionReader {
     this.sessionsDir = options.sessionsDir || path.join(DEFAULT_CODEX_DIR, 'sessions');
     this.sessionIndexFile = options.sessionIndexFile || path.join(DEFAULT_CODEX_DIR, 'session_index.jsonl');
     this.sessionMetaCache = new Map();
+    this.recentProjectionCache = new Map();
+  }
+
+  /**
+   * AI:按文件版本缓存最近回合的紧凑投影，不保留体积较大的原始 JSONL 记录。
+   *
+   * @param {string} file 会话文件路径。
+   * @param {string} threadId 线程 ID。
+   * @param {number} turnLimit 最近回合数量。
+   * @returns {{messages: Array<object>, status: object}} 最近历史与状态。
+   */
+  recentProjection(file, threadId, turnLimit = 10) {
+    const requiredTurns = Math.max(5, Number(turnLimit) || 5);
+    const stat = fs.statSync(file);
+    const cached = this.recentProjectionCache.get(file);
+    if (cached && cached.size === stat.size && cached.mtimeMs === stat.mtimeMs && cached.turnLimit >= requiredTurns) {
+      this.recentProjectionCache.delete(file);
+      this.recentProjectionCache.set(file, cached);
+      return cached.projection;
+    }
+    const items = readRecentTurnItems(file, requiredTurns);
+    const projection = {
+      messages: historyMessagesFromItems(items),
+      status: this.parseStatusItems({ threadId, file, items }),
+    };
+    this.recentProjectionCache.set(file, {
+      size: stat.size,
+      mtimeMs: stat.mtimeMs,
+      turnLimit: requiredTurns,
+      projection,
+    });
+    while (this.recentProjectionCache.size > 4) {
+      this.recentProjectionCache.delete(this.recentProjectionCache.keys().next().value);
+    }
+    return projection;
   }
 
   /**
@@ -610,7 +683,7 @@ class CodexSessionReader {
       if (!id) continue;
 
       const indexed = byId.get(id) || { id, name: '', updatedAt: '' };
-      const meta = readJsonl(file).find(item => item.type === 'session_meta') || {};
+      const meta = readSessionMeta(file);
       const cwd = String((meta.payload && meta.payload.cwd) || '').trim();
       const projectName = projectNameFromCwd(cwd);
       const threadName = threadTitleFromSession(file, indexed.name) || '未命名线程';
@@ -855,12 +928,12 @@ class CodexSessionReader {
    * @returns {{messages: Array<object>, status: object}} 紧凑会话快照。
    */
   createRecentSnapshot(target, messageLimit) {
-    const items = readRecentTurnItems(target.file, Math.max(messageLimit, 10));
-    const page = paginateMessagesByTurn(historyMessagesFromItems(items), messageLimit);
+    const projection = this.recentProjection(target.file, target.threadId, messageLimit);
+    const page = paginateMessagesByTurn(projection.messages, messageLimit);
     return {
       messages: page.messages,
       status: applyDesktopRuntimeStatus(
-        this.parseStatusItems({ threadId: target.threadId, file: target.file, items }),
+        projection.status,
         target.desktopRuntime,
       ),
     };
@@ -1020,7 +1093,10 @@ class CodexSessionReader {
         nextBefore: '',
       };
     }
-    const messages = historyMessagesFromItems(readJsonl(file));
+    const max = Math.max(1, Math.min(Number(limit) || 120, 100));
+    const messages = before
+      ? historyMessagesFromItems(readTurnPageItems(file, max, before))
+      : this.recentProjection(file, threadId, max).messages;
     const page = paginateMessagesByTurn(messages, limit, before);
     return {
       ok: true,
@@ -1086,7 +1162,7 @@ class CodexSessionReader {
     }
 
     const indexed = this.readIndex().get(threadId) || { name: '' };
-    const meta = readJsonl(file).find(item => item.type === 'session_meta') || {};
+    const meta = readSessionMeta(file);
     const cwd = String((meta.payload && meta.payload.cwd) || '').trim();
     return {
       available: true,
@@ -1105,6 +1181,11 @@ class CodexSessionReader {
    * @returns {object} 状态结果。
    */
   parseStatus(options = {}) {
+    const threadId = options.threadId || '';
+    const file = options.file || (threadId
+      ? this.findFileByThreadId(threadId)
+      : this.sessionFiles().sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0]);
+    if (file && !options.since) return this.recentProjection(file, threadId || threadIdFromSessionFile(file), 5).status;
     return this.parseStatusItems(options);
   }
 
@@ -1195,7 +1276,7 @@ class CodexSessionReader {
       turn.interruptionReason = enriched.reason || '用户停止';
     }
     };
-    const items = Array.isArray(options.items) ? options.items : readJsonl(file);
+    const items = Array.isArray(options.items) ? options.items : readRecentTurnItems(file, 10);
     for (const item of items) {
       const payload = item.payload || {};
       const visible = included(item);

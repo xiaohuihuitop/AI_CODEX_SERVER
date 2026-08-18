@@ -478,6 +478,7 @@ test('uni-app Android 手机端运行状态同时要求 Agent 在线和同步新
   const threadDotFunction = index.match(/function threadDotClassFor\(thread\) \{([\s\S]*?)\n\}/)?.[1] || '';
   const startTimersFunction = index.match(/function startTimers\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
   const realtimeRefreshFunction = index.match(/function scheduleRealtimeRefresh\(options = \{\}\) \{([\s\S]*?)\n\}/)?.[1] || '';
+  const automaticRefreshFunction = index.match(/async function refreshCurrentThreadAutomatically\(\) \{([\s\S]*?)\n\}/)?.[1] || '';
 
   assert.match(index, /function applyAgentOnline\(data\)/);
   assert.match(index, /typeof data\.agentOnline !== 'boolean'/);
@@ -497,27 +498,30 @@ test('uni-app Android 手机端运行状态同时要求 Agent 在线和同步新
   assert.match(index, /createRealtimeSocket/);
   assert.match(index, /function scheduleRealtimeRefresh\(options = \{\}\)/);
   assert.match(realtimeRefreshFunction, /if \(switchingThread\.value \|\| loading\.value\) \{[\s\S]*scheduleRealtimeRefresh\(refreshOptions\);[\s\S]*return;/);
-  assert.match(realtimeRefreshFunction, /refreshOptions\.terminal[\s\S]*!historyHasAssistantTurn\(refreshOptions\.turnId\)[\s\S]*REALTIME_REFRESH_RETRY_LIMIT/);
   assert.match(index, /let pendingRealtimeRefreshOptions = null;/);
+  assert.match(index, /let realtimeRefreshInFlight = false;/);
   assert.match(index, /function mergeRealtimeRefreshOptions\(current, incoming = \{\}\)/);
   assert.match(realtimeRefreshFunction, /pendingRealtimeRefreshOptions = mergeRealtimeRefreshOptions\(pendingRealtimeRefreshOptions, options\);/);
-  assert.match(realtimeRefreshFunction, /if \(pendingRealtimeRefreshOptions\) scheduleRealtimeRefresh\(\);/);
+  assert.match(realtimeRefreshFunction, /if \(realtimeRefreshTimer \|\| realtimeRefreshInFlight\) return;/);
   assert.match(index, /function scheduleRealtimeReconnect\(\)/);
   assert.match(index, /function openRealtimeSocket\(\)/);
   assert.match(index, /event\.type === 'session-updated'/);
   assert.match(index, /function applyRealtimeThreadEvent\(event\)/);
   assert.match(index, /event\.type === 'thread-event'/);
-  assert.match(index, /terminal: \(payload\.type === 'turn\.completed' \|\| payload\.type === 'thread\.status\.changed'\)[\s\S]*=== selectedThreadId\.value/);
+  assert.match(index, /changedThreadIds: \[String\(payload\.threadId \|\| ''\)\.trim\(\)\]/);
   assert.match(index, /event\.type === 'event-resync-required'/);
   assert.match(index, /payload\.type === 'turn\.started'/);
   assert.match(index, /payload\.type === 'turn\.completed'/);
   assert.match(index, /function reconcileRealtimeThreadState\(status\)/);
   assert.match(index, /const appServerState = ref\(/);
-  assert.match(index, /const AUTO_REFRESH_INTERVAL_MS = 4000;/);
+  assert.match(index, /const AUTO_REFRESH_INTERVAL_MS = 30000;/);
   assert.match(index, /let automaticRefreshTimer = null;/);
   assert.match(index, /async function refreshCurrentThreadAutomatically\(\)/);
   assert.match(index, /function scheduleAutomaticRefresh\(\)/);
-  assert.match(index, /await loadHistory\(null, \{ scrollToBottom: followBottom\.value, silent: true \}\);/);
+  assert.match(automaticRefreshFunction, /await getHealth\(/);
+  assert.doesNotMatch(automaticRefreshFunction, /await loadThreads\(\)/);
+  assert.doesNotMatch(automaticRefreshFunction, /await loadHistory\(/);
+  assert.match(index, /getThreadView/);
   assert.match(startTimersFunction, /openRealtimeSocket\(\);/);
   assert.match(startTimersFunction, /scheduleAutomaticRefresh\(\);/);
   assert.match(index, /if \(automaticRefreshTimer\) clearTimeout\(automaticRefreshTimer\);/);
@@ -589,16 +593,16 @@ test('uni-app Android 手机端历史已含最终回复时清除运行中覆盖'
   assert.equal(realtimeThreadStates.value.threadA, undefined);
 });
 
-test('uni-app Android 手机端连续实时事件不会覆盖已排队的终态刷新', () => {
+test('uni-app Android 手机端连续实时事件合并目录和线程刷新范围', () => {
   const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
   const source = index.match(/function mergeRealtimeRefreshOptions\(current, incoming = \{\}\) \{([\s\S]*?)\n\}/)?.[0] || '';
   const merge = new Function(`${source}\nreturn mergeRealtimeRefreshOptions;`)();
 
-  const completed = merge({ threadId: 'threadA', turnId: 'turn-1', terminal: true, attempt: 1 }, {});
-  assert.deepEqual(completed, { threadId: 'threadA', turnId: 'turn-1', terminal: true, attempt: 1 });
+  const first = merge({ threadId: 'threadA', catalogChanged: false }, {});
+  assert.deepEqual(first, { catalogChanged: false, forceCurrent: false, changedThreadIds: ['threadA'] });
 
-  const latest = merge(completed, { threadId: 'threadA', turnId: 'turn-2', terminal: true });
-  assert.deepEqual(latest, { threadId: 'threadA', turnId: 'turn-2', terminal: true, attempt: 0 });
+  const merged = merge(first, { changedThreadIds: ['threadB'], catalogChanged: true, forceCurrent: true });
+  assert.deepEqual(merged, { catalogChanged: true, forceCurrent: true, changedThreadIds: ['threadA', 'threadB'] });
 });
 
 test('uni-app Android 手机端切换对话时显示等待 UI 并防止旧请求覆盖', () => {

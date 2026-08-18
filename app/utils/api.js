@@ -160,6 +160,23 @@ export function getHistory(config, threadId, options = {}) {
 }
 
 /**
+ * AI:从 Relay 同一缓存版本读取当前对话的最近历史和运行状态。
+ *
+ * @param {{serverUrl: string, token: string}} config 连接配置。
+ * @param {string} threadId 对话 ID。
+ * @param {object} options 请求选项。
+ * @returns {Promise<object>} 原子线程视图。
+ */
+export function getThreadView(config, threadId, options = {}) {
+  const params = [
+    `thread=${encodeURIComponent(threadId || '')}`,
+    `limit=${encodeURIComponent(options.limit || 5)}`,
+    `since=${encodeURIComponent(options.since || '')}`,
+  ].join('&');
+  return requestJson(config, `/codex/thread-view?${params}`, options);
+}
+
+/**
  * AI:读取指定对话运行状态。
  *
  * @param {{serverUrl: string, token: string}} config 连接配置。
