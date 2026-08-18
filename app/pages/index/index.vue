@@ -196,6 +196,7 @@ let realtimeSocket = null;
 let realtimeReconnectTimer = null;
 let realtimeRefreshTimer = null;
 let realtimeRefreshInFlight = false;
+let realtimeErrorNoticeActive = false;
 let pendingRealtimeRefreshOptions = null;
 let automaticRefreshTimer = null;
 let commandConfirmTimer = null;
@@ -674,6 +675,7 @@ function resetDeviceViewState() {
   runningHistoryRequest = null;
   runningHistorySyncAt = 0;
   runningHistoryThreadId = '';
+  realtimeErrorNoticeActive = false;
   if (commandConfirmTimer) clearTimeout(commandConfirmTimer);
   commandConfirmTimer = null;
 }
@@ -1890,6 +1892,10 @@ function openRealtimeSocket() {
     open() {
       if (!canUpdateTask(token) || realtimeSocket !== socket) return;
       serverState.value = { online: true, offline: false, message: '服务器已连' };
+      if (realtimeErrorNoticeActive && !pendingWatch.value && !sending.value) {
+        setNotice('已同步电脑端 Codex 对话');
+      }
+      realtimeErrorNoticeActive = false;
       void recoverPendingControlResult();
     },
     message(event) {
@@ -1908,7 +1914,9 @@ function openRealtimeSocket() {
       scheduleRealtimeReconnect();
     },
     error(event) {
-      if (canUpdateTask(token) && realtimeSocket === socket) setNotice(event.errMsg || '服务器实时连接失败');
+      if (!canUpdateTask(token) || realtimeSocket !== socket) return;
+      realtimeErrorNoticeActive = true;
+      setNotice(event.errMsg || '服务器实时连接失败');
     },
   });
   realtimeSocket = socket;

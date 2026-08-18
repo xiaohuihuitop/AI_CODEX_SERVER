@@ -796,6 +796,15 @@ test('uni-app Android 实时连接强制使用 SocketTask 回调模式', () => {
   assert.deepEqual(Object.keys(listeners).sort(), ['close', 'error', 'message', 'open']);
 });
 
+test('uni-app Android 实时连接恢复后清除陈旧连接错误提示', () => {
+  const index = fs.readFileSync(path.join(appDir, 'pages', 'index', 'index.vue'), 'utf8');
+  const socketFunction = index.match(/function openRealtimeSocket\(\) \{([\s\S]*?)\n\}/)?.[0] || '';
+
+  assert.match(socketFunction, /open\(\) \{[\s\S]*setNotice\('已同步电脑端 Codex 对话'\)/);
+  assert.match(socketFunction, /realtimeErrorNoticeActive && !pendingWatch\.value && !sending\.value/);
+  assert.match(socketFunction, /error\(event\) \{[\s\S]*realtimeErrorNoticeActive = true;/);
+});
+
 test('uni-app Android 设置页测试连接离开页面时取消请求', () => {
   const settings = fs.readFileSync(path.join(appDir, 'pages', 'settings', 'settings.vue'), 'utf8');
 
